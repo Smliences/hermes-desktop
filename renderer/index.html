@@ -72,7 +72,7 @@
         <input id="session-search" type="text" placeholder="搜索会话名称或内容…" spellcheck="false" />
         <button id="search-clear" hidden>✕</button>
       </div>
-      <div class="sb-group-label">会话 <span class="sb-group-actions"><button id="sb-new-project" class="sb-ga" title="新建项目" aria-label="新建项目"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.6c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.6h4.4c.7 0 1.3.6 1.3 1.3v5.5c0 .7-.6 1.3-1.3 1.3H3.8c-.7 0-1.3-.6-1.3-1.3z"/><path d="M8 7.4v3M6.5 8.9h3"/></svg></button><button id="sb-quick-search" class="sb-ga" title="搜索会话" aria-label="搜索会话"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg></button><button id="sb-storage-btn" class="sb-ga" title="会话空间管理" aria-label="会话空间管理"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5" ry="2.1"/><path d="M3 4v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V4"/><path d="M3 8v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V8"/></svg></button></span></div>
+      <div class="sb-group-label">会话 <span class="sb-group-actions"><button id="sb-new-project" class="sb-ga" title="新建项目" aria-label="新建项目"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.6c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.6h4.4c.7 0 1.3.6 1.3 1.3v5.5c0 .7-.6 1.3-1.3 1.3H3.8c-.7 0-1.3-.6-1.3-1.3z"/><path d="M8 7.4v3M6.5 8.9h3"/></svg></button><button id="sb-open-folder" class="sb-ga" title="打开文件夹为项目" aria-label="打开文件夹为项目"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.6c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.6h4.4c.7 0 1.3.6 1.3 1.3v1.1"/><path d="M3.2 12.5h9.9l1.4-4.2H4.7z"/></svg></button><button id="sb-quick-search" class="sb-ga" title="搜索会话" aria-label="搜索会话"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg></button><button id="sb-storage-btn" class="sb-ga" title="会话空间管理" aria-label="会话空间管理"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5" ry="2.1"/><path d="M3 4v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V4"/><path d="M3 8v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V8"/></svg></button></span></div>
       <ul id="session-list" role="listbox"></ul>
       <!-- 会话空间管理：轻量浮层，只读统计 + 优化建议 -->
       <div id="storage-pop" class="storage-pop" hidden></div>
@@ -560,12 +560,26 @@
                 <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
                 <div class="kb-fnote">列表里没有想要的项目？用「更多操作 → 新建项目…」创建后再绑定。</div>
               </form>
+              <!-- 官方 project-dialog 的三种模式共用这一个弹窗：create / rename / add-folder -->
               <form id="kb-form-project" class="kb-form" autocomplete="off" hidden>
-                <label class="kb-frow"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如：Hermes Agent" /></label>
-                <label class="kb-frow"><span>文件夹（每行一个）</span><textarea id="kb-p-folders" rows="3" placeholder="/Users/you/repos/hermes-agent&#10;可多行，第一个即主仓库；全部留空则只建项目壳"></textarea></label>
-                <label class="kb-frow"><span>slug</span><input id="kb-p-slug" type="text" maxlength="64" placeholder="可留空，默认由名称生成" /></label>
-                <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
-                <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
+                <label class="kb-frow" id="kb-p-name-row"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如 Skunkworks" /></label>
+                <div class="kb-frow" id="kb-p-folders-row">
+                  <span>文件夹 <i>必填</i></span>
+                  <div id="kb-p-folders" class="kb-pfolders" role="list"></div>
+                </div>
+                <button id="kb-p-add" class="kb-btn kb-p-add" type="button">＋ 添加文件夹…</button>
+                <div class="kb-p-addnote kb-fnote" id="kb-p-addnote" hidden>选择要加入该项目的文件夹（可多选，已存在的会自动跳过）。选完即写入项目。</div>
+                <div id="kb-p-create-only" class="kb-p-create-only">
+                  <label class="kb-frow"><span>想法 <i>可选</i></span><textarea id="kb-p-idea" rows="2" maxlength="4000" placeholder="这个项目是关于什么的？（保存到主文件夹的 IDEA.md）"></textarea></label>
+                  <div class="kb-pideas" id="kb-p-ideas">
+                    <button class="kb-pchip" type="button" data-idea="一句话目标：要解决什么问题、给谁用、怎样算做成。">🎯 一句话目标</button>
+                    <button class="kb-pchip" type="button" data-idea="结构：主要模块、技术选型、目录与命名约定。">🧱 结构约定</button>
+                    <button class="kb-pchip" type="button" data-idea="验收：里程碑、测试用例、明确不做什么。">✅ 验收标准</button>
+                  </div>
+                  <label class="kb-frow"><span>slug</span><input id="kb-p-slug" type="text" maxlength="64" placeholder="可留空，默认由名称生成" /></label>
+                  <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
+                  <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）：第一个文件夹为主仓库，创建后设为活动项目并在此目录打开新会话。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
+                </div>
               </form>
             </div>
             <div class="kb-modal-foot">

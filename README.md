@@ -137,6 +137,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 - 新建任务默认落在 `triage` 收集箱、**不会触发调度器派发**；选 `ready` 时界面显式警示可能被 worker 立即认领。表单带幂等键、提交期间禁用按钮，写后立即回读 `/board` 与辅助数据。新建看板不传 `switch`，**绝不改 CLI 的 `current` 指针**；删除任务必须过二次确认卡。
 - **派发控制台**是唯一会唤醒 agent 的路径，三重兜底：`dry_run` 缺省 `true`（只有显式 `false` 才真派发）、单次最多启动 4 个 worker、同一客户端串行执行（并发直接拒绝）。试运行只预览「哪些 ready 任务会被派发 / 为什么跳过」，不启动任何进程；真派发必须过二次确认卡，明确告知会启动 agent、消耗模型额度并可能回收超时 worker。`PATCH /tasks/:id` 只把 `triage / todo / scheduled / blocked / review` 推进到 `ready`，同样要二次确认。派发结果按白名单投影，`spawned` 只留任务 id 与受让人，工作区绝对路径 / worker PID / claim 锁一律不透出；`/workers/active` 同理。写后回读 `/board` 并刷新活跃 worker 列表。
 - CLI 返回的 task 行含 `workspace_path` / `claim_lock` / `worker_pid` 等本机敏感字段，服务层按白名单投影后才交给渲染层，正文与列表长度封顶。
+- **项目（命名工作空间）没有 REST 写端点**：建/改一律走 CLI `hermes project`（`main/services/hermes-project-cli.js`），渲染层只传结构化字段，argv 由主进程白名单拼装、40s 超时。`project:pick-folders` 是原生目录选择器（可多选，只回绝对且真实存在的目录，上限 8）；`project:action` 只放行 rename / add-folder / remove-folder / use / set-primary；`app:copy` 只经主进程剪贴板。侧栏项目树仍只读 `GET /api/profiles/projects/tree`。所有写操作都由用户点击触发，渲染层不得自动调用。
 - 渲染层用 `/board` 的 `latest_event_id`（`task_events` 单调递增游标）每 5s 比对一次，变化才重绘；页面隐藏即停轮询，首屏与抽屉各有独立代次戳，切页后的旧响应不写 DOM。
 - 多 board 用 `?board=<slug>` 逐请求限定，**不改 CLI 的 `current` 指针**。`ready` 之外的任意状态推进、`/tasks/bulk`、`/decompose`、`/specify`、`/estimate`、`/links`、`/reclaim`、`/runs/:id/terminate`、`/orchestration` 配置写入仍然一律不接，避免误触发 LLM 计费或改动 CLI 编排配置。
 - 页面默认是「统计条 + 状态 chip 筛选 + 分组卡片网格」（空状态不占列、不再有竖排 rail），可一键切换经典列视图；抽屉里可看依赖 / 评论 / 运行记录 / 事件，并按 `session_id` 跳回会话。
@@ -193,6 +194,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 | 设置页：MCP 服务器（列表 / 连接测试 / URL 添加 / 移除，仅 https 与本机 http，写后回读 CLI 确认） | ✅ |
 | 设置页：定时任务（任务列表 / 调度器状态 / 运行历史 / 暂停·恢复·立即运行·移除 / 新建恒为暂停） | ✅ |
 | 看板：CLI 原生任务队列（统计条 + 9 状态筛选 + 分组卡片网格 / 经典列视图双布局、卡片详情抽屉、看板/受让人/租户/搜索筛选、`session_id` 跳会话、`latest_event_id` 轮询、空状态引导） | ✅（另支持**新建任务 / 新建看板 / 删除任务 / 提交派发 / 拖拽卡片指派给指定 worker 并可选立即启动 / 试运行预览 / 手动派发一次 / 活跃 worker**；拖列改状态、decompose、批量操作仍留给 CLI / Dashboard） |
+| 项目 / 工作空间（对齐官方 `project-dialog`）：侧栏「新建项目」「打开文件夹为项目」、项目行 ⋯ 菜单（重命名 / 添加文件夹 / 设为活动 / 在访达中显示 / 复制路径） | ✅（一个弹窗三模式 create / rename / add-folder；原生目录选择可多选、首条标「主」、选完按目录名自动命名；名称 + ≥1 文件夹才可提交；创建带 `--use` 设为活动、想法写 `IDEA.md` 且不覆盖、建完回到项目根开新会话；写操作全部经 argv 白名单，失败保留表单可重试） |
 | 小球模式：黄灯 / ⌘M / ⌘⇧M / 命令面板 `/orb` 把窗口收成桌面一颗可拖动的球，**点球弹出迷你聊天窗**（380×520），在球旁边就能接着聊 | ✅（`main/orb.js` 球 + `main/orb-chat.js` 迷你窗，主窗口只 `hide()` 不改几何；小窗与主窗口共用同一个 chat tab；球面体积感 / 单信号状态系统 / 球窗连接闭环 / 无障碍播报；`main/orb-access.js` 全局快捷键 + 球右键菜单里的双模式开关（菜单栏托盘已移除）、连接轨按回合呼吸、开窗即聚焦输入框） |
 
 ### 小球模式（收起成桌面小圆球）＋ 迷你聊天窗

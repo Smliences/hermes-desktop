@@ -639,8 +639,10 @@ t('会话分组入口：SVG 图标 + 可聚焦按钮，不再是 12px unicode �
   assert.ok(/id="sb-new-project"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少新建项目入口');
   assert.ok(appSrc.includes("$('#sb-new-project')"), '新建项目入口未接线');
   assert.ok(/sb-new-project'\)\.onclick[\s\S]{0,120}?kbModalOpen\('project'\)/.test(appSrc), '新建项目入口未落到项目弹窗');
-  // 建完项目必须即时刷新侧栏项目树，否则新项目要重启才可见
-  assert.ok(appSrc.includes("kind === 'project') await refreshSessions(currentSearch())"), '项目创建后未刷新侧栏树');
+  // 项目类写操作（create / rename / add-folder）都必须即时刷新侧栏项目树
+  assert.ok(appSrc.includes("if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch())"),
+    '项目写操作后未刷新侧栏树');
+  assert.ok(/const KB_PROJECT_KINDS = \[[^\]]*'project'/.test(appSrc), '项目弹窗模式表漏了 create');
   // 后端冷启慢于首屏：树失败要保留旧树 + 标记，启动挂自愈重试（否则侧栏项目分组永远为空）
   assert.ok(appSrc.includes('state.projectsTreeOk = true') && appSrc.includes('state.projectsTreeOk = false'), '树请求缺少成功/失败标记');
   assert.ok(appSrc.includes('function ensureSidebarTree('), '缺少项目树启动自愈');
@@ -2776,6 +2778,76 @@ t('看板编排设置：模式是派生值、写入走二次确认、结果如�
   // 卡片必须带 dispatch/decompose：少下发会让「全自动」也显示重启警告
   assert.ok(/dispatch: m\.dispatch, decompose: m\.decompose/.test(modeSrc),
     '档位的 dispatch / decompose 未一起下发，渲染层只能瞎猜');
+});
+
+section('3ag2. 官方创建项目 / 工作空间操作（数据层 + 视图层 + 交互层）');
+t('原生目录选择器与项目写通道：main ↔ preload ↔ renderer ↔ Demo 全对齐', () => {
+  for (const ch of ['project:pick-folders', 'project:action', 'app:copy']) {
+    assert.ok(mainSrc.includes("handle('" + ch + "'"), '主进程缺少 handler ' + ch);
+    assert.ok(preloadSrc.includes("invoke('" + ch + "'"), 'preload 缺少 invoke ' + ch);
+  }
+  const picker = mainSrc.slice(mainSrc.indexOf("handle('project:pick-folders'"),
+    mainSrc.indexOf("handle('project:action'"));
+  assert.ok(picker.includes("'openDirectory'") && picker.includes("'multiSelections'"), '未开多选目录');
+  assert.ok(picker.includes('o.multiple !== false'), '单选模式未收敛');
+  assert.ok(picker.includes('path.isAbsolute') && picker.includes('statSync(p).isDirectory()'), '未校验绝对且真实目录');
+  assert.ok(picker.includes('.slice(0, 8)'), '多选未封顶 8 个');
+  for (const k of ['pickProjectFolders:', 'projectAction:', 'copyText:']) {
+    assert.ok(preloadSrc.includes(k), 'preload 未暴露 ' + k);
+  }
+  const mock = read('renderer/mock-bridge.js');
+  for (const m of ['pickProjectFolders(', 'projectAction(', 'copyText(']) {
+    assert.ok(mock.includes(m), 'Demo 桥缺少 ' + m);
+  }
+  const cliSrc = read('main/services/hermes-project-cli.js');
+  assert.ok(cliSrc.includes('--use') && cliSrc.includes('flag: \'wx\''), '缺 --use 或 IDEA.md 不覆盖');
+});
+t('新建项目弹窗：原生文件夹列表 / 三模式 / 硬性校验 / 自动命名 / 建完进入', () => {
+  assert.ok(/id="kb-p-folders" class="kb-pfolders" role="list"/.test(htmlSrc), '文件夹仍是手输 textarea');
+  assert.ok(!htmlSrc.includes('文件夹（每行一个）'), '还在让用户手打路径');
+  for (const id of ['kb-p-name-row', 'kb-p-folders-row', 'kb-p-add', 'kb-p-addnote',
+    'kb-p-create-only', 'kb-p-idea', 'kb-p-ideas']) {
+    assert.ok(htmlSrc.includes('id="' + id + '"'), 'HTML 缺少 ' + id);
+    assert.ok(appSrc.includes("$('#" + id + "')"), 'app.js 未接线 ' + id);
+  }
+  assert.ok(/KB_PROJECT_KINDS = \[[^\]]*'project'[^\]]*'project-rename'[^\]]*'project-add-folder'/.test(appSrc),
+    '弹窗三模式定义不全');
+  assert.ok(appSrc.includes("if (!KB.projFolders.length) { kbModalErr('请至少添加一个文件夹')"),
+    '官方硬性校验（名称 + ≥1 文件夹）缺失');
+  assert.ok(appSrc.includes('nameEl.value = kbProjectFolderBasename(picked[0])'), '选文件夹未自动命名');
+  assert.ok(appSrc.includes('KB.projFolders = [...new Set(['), '多选未去重累加');
+  assert.ok(appSrc.includes('submit.disabled = !(('), '提交按钮未随校验禁用');
+  assert.ok(appSrc.includes('use: true, // 官方 createProject({ use: true })'), '建完未设为活动项目');
+  assert.ok(appSrc.includes("idea: ($('#kb-p-idea')?.value || '').trim()"), '想法未进 payload');
+  assert.ok(appSrc.includes('closeKanbanPage(); newTabInProject(root)'), '建完未进入项目根会话');
+  assert.ok(appSrc.includes("if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch())"),
+    '项目类写操作后未刷新侧栏树');
+  assert.ok(appSrc.includes("payload = { op: 'rename', id, name: pname }"), 'rename 模式未接维护通道');
+  assert.ok(appSrc.includes('op: \'addFolder\'') && appSrc.includes('kbSubmitAddFolders(picked)'),
+    'add-folder 模式未做到选完即写');
+  for (const cls of ['.kb-pfolders', '.kb-pfold', '.kb-pfold-empty', '.kb-pfold-path',
+    '.kb-pfold-primary', '.kb-pfold-rm', '.kb-p-add', '.kb-pchip', '.kb-pideas',
+    '.kb-p-create-only', '.kb-p-addnote', '.s-pmore']) {
+    assert.ok(cssSrc.includes(cls), '缺少样式规则 ' + cls);
+  }
+});
+t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', () => {
+  assert.ok(/id="sb-open-folder"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少打开文件夹入口');
+  assert.ok(appSrc.includes("$('#sb-open-folder').onclick"), '入口未接线');
+  assert.ok(appSrc.includes('async function openFolderAsProject('), '缺少 openFolderAsProject 实现');
+  assert.ok(appSrc.includes('api.pickProjectFolders({ multiple: false })'), '打开文件夹应单选');
+  assert.ok(appSrc.includes('const existing = (state.projectsTree || []).find('), '未先查既有项目');
+  assert.ok(appSrc.includes('api.kanbanCreateProject({ name, folders: [dir], use: true })'),
+    '未以目录名建项目并设为活动');
+  assert.ok(appSrc.includes('function openProjectMenu(') && appSrc.includes("more.className = 's-pmore'"),
+    '项目行缺少 ⋯ 菜单');
+  for (const act of ['rename', 'add-folder', 'use', 'reveal', 'copy']) {
+    assert.ok(appSrc.includes('data-pact="' + act + '"'), '菜单缺少动作 ' + act);
+  }
+  assert.ok(appSrc.includes("api.projectAction({ op: 'use', id: p.id })"), '设为活动未接写通道');
+  assert.ok(appSrc.includes('api.revealPath(p.path)') && appSrc.includes('api.copyText(p.path)'),
+    '本机路径动作缺失');
+  assert.ok(appSrc.includes('kbProjectDialog(act, p)'), '重命名 / 加文件夹未复用同一弹窗');
 });
 
 console.log('\n' + '─'.repeat(56));

@@ -491,6 +491,18 @@ function renderSessions(q = '') {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); plus.click(); }
       };
     }
+    // 官方 project-menu：项目行 hover 出 ⋯，右键同菜单；复用会话菜单浮层
+    const more = document.createElement('button');
+    more.className = 's-pmore';
+    more.textContent = '⋯';
+    more.title = `项目操作：${p.label || p.id}`;
+    more.setAttribute('aria-label', '项目操作');
+    more.onclick = (e) => { e.stopPropagation(); openProjectMenu(p, more); };
+    more.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); more.click(); }
+    };
+    gl.appendChild(more);
+    gl.oncontextmenu = (e) => { e.preventDefault(); openProjectMenu(p, gl); };
     ul.appendChild(gl);
     for (const ps of (p.previewSessions || []).slice(0, 3)) {
       const li = sessionItemEl(ps, { query });
@@ -541,6 +553,73 @@ function renderSessions(q = '') {
 function closeSessionMenu() {
   const m = $('#session-menu');
   if (m) { m.hidden = true; m.innerHTML = ''; }
+}
+/** 官方 project-menu.tsx：项目行 ⋯ / 右键共用的操作菜单。
+ *  显式项目才有重命名 / 加文件夹 / 设为活动；另外两项是本机路径动作，不写 CLI。 */
+function openProjectMenu(p, anchor) {
+  const m = $('#session-menu'); if (!m) return;
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.right - 156, window.innerWidth - 180)) + 'px';
+  m.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 300)) + 'px';
+  m.innerHTML = `<button data-pact="rename">✎ 重命名项目…</button>
+    <button data-pact="add-folder">⊕ 添加文件夹…</button>
+    <button data-pact="use">◎ 设为活动项目</button>
+    <div class="sess-menu-sep"></div>
+    <button data-pact="reveal">⌸ 在访达中显示</button>
+    <button data-pact="copy">⧉ 复制路径</button>`;
+  m.hidden = false;
+  m.onclick = async (e) => {
+    const b = e.target.closest && e.target.closest('button');
+    if (!b || !b.dataset.pact) return;
+    const act = b.dataset.pact;
+    closeSessionMenu();
+    try {
+      if (act === 'rename' || act === 'add-folder') { kbProjectDialog(act, p); return; }
+      if (act === 'use') {
+        const res = await api.projectAction({ op: 'use', id: p.id });
+        if (!res || !res.ok) { toast('操作失败：' + ((res && res.error) || '未知错误'), 3000); return; }
+        toast('已设为活动项目', 1600);
+        await kbApplyProjectWrite();
+        return;
+      }
+      if (act === 'reveal') {
+        if (!p.path) { toast('该项目没有主文件夹', 2200); return; }
+        await api.revealPath(p.path);
+        return;
+      }
+      if (act === 'copy') {
+        if (!p.path) { toast('该项目没有主文件夹', 2200); return; }
+        const ok = await api.copyText(p.path);
+        toast(ok ? '已复制项目路径' : '复制失败', 1600);
+      }
+    } catch (err) {
+      toast('操作失败：' + ((err && err.message) || '未知错误'), 2800);
+    }
+  };
+}
+/** 官方 ⌘O / "Open folder…"：一个目录就是一个工作空间。
+ *  目录已被某项目覆盖 → 直接进入；否则以目录名建项目（use:true）再进入。
+ *  两条路径都在该目录开新会话，等价于 enterProject + startWorkSession。 */
+async function openFolderAsProject() {
+  if (typeof api.pickProjectFolders !== 'function' || typeof api.kanbanCreateProject !== 'function') {
+    toast('当前环境不支持选择本机文件夹', 2600); return;
+  }
+  let r = null;
+  try { r = await api.pickProjectFolders({ multiple: false }); } catch { r = null; }
+  if (!r || !r.ok || !Array.isArray(r.folders) || !r.folders.length) return;
+  const dir = r.folders[0];
+  if (typeof dir !== 'string' || !dir.startsWith('/')) return;
+  const existing = (state.projectsTree || []).find((p) => p.path &&
+    (dir === p.path || dir.startsWith(p.path.replace(/\/+$/, '') + '/')));
+  const enter = () => { closeKanbanPage(); newTabInProject(dir); };
+  if (existing) { toast(`已进入项目「${existing.label || existing.id}」`, 1800); enter(); return; }
+  const name = kbProjectFolderBasename(dir) || dir;
+  toast(`正在为「${name}」创建项目…`, 1800);
+  const res = await api.kanbanCreateProject({ name, folders: [dir], use: true });
+  if (!res || !res.ok) { toast('创建失败：' + ((res && res.error) || '未知错误'), 3600); return; }
+  await kbApplyProjectWrite();
+  toast(`项目「${name}」已创建并设为活动`, 1800);
+  enter();
 }
 function openSessionMenu(s, anchor) {
   const m = $('#session-menu'); if (!m) return;
@@ -1425,6 +1504,8 @@ $('#btn-skills2').onclick = () => { setSidebar(true); togglePage($('#skills-page
 $('#btn-kanban').onclick = () => { setSidebar(true); showKanban(); };
 // 侧栏「新建项目」入口：弹窗 DOM 在看板页内，先开页再弹，保持既有 Esc/惰性化处理链
 $('#sb-new-project').onclick = () => { setSidebar(true); showKanban(true); kbModalOpen('project'); };
+// 官方「打开文件夹为项目」：选一个目录即建/进工作空间，不必先填表
+$('#sb-open-folder').onclick = () => openFolderAsProject();
 $('#btn-kanban-ir').onclick = () => showKanban();
 $('#btn-settings').onclick = () => toggleSettings(true);
 $('#btn-gw').onclick = showGateway;
@@ -5346,6 +5427,9 @@ const KB = {
   filters: { q: '', assignee: '', tenant: '', archived: false, board: '' },
   // 页头那枚只读模式标记的数据（null = 还没读到 / 读不到，此时不显示）
   mode: null,
+  // 官方 project-dialog 的本地等价状态：一次选择可以带回多个文件夹，第一个为主；
+  // projectDialog 记录 create / rename / add-folder 三种模式共用的目标项目。
+  projFolders: [], projectDialog: null,
 };
 let kbSelectSig = '';
 
@@ -6705,9 +6789,115 @@ function kbSyncStatusNote() {
     ? '就绪状态可能被运行中的调度器立即认领并派发给 agent 执行，请确认后再创建。'
     : '收集箱不会被派发器直接拉起，但 gateway 的自动分解（kanban.auto_decompose，默认开启）会补全 spec、填受让人并推进到 todo→ready，随后仍会被派发。';
 }
+/* 官方 project-dialog.tsx 的本地等价：一个弹窗三种模式（create / rename / add-folder）。
+   文件夹由主进程原生目录选择器给出，第一个为主；选完自动以 basename 命名项目。 */
+const KB_PROJECT_KINDS = ['project', 'project-rename', 'project-add-folder'];
+function kbProjectFolderBasename(dir) {
+  return String(dir || '').replace(/[/\\]+$/, '').split(/[/\\]/).pop() || '';
+}
+/** 重绘文件夹列表：首条标「主」，逐条可移除；路径只走 textContent 落地。 */
+function kbRenderProjectFolders() {
+  const host = $('#kb-p-folders');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!KB.projFolders.length) {
+    const empty = document.createElement('div');
+    empty.className = 'kb-pfold-empty';
+    empty.textContent = '尚未添加文件夹。';
+    host.appendChild(empty);
+    return;
+  }
+  KB.projFolders.forEach((dir, i) => {
+    const row = document.createElement('div');
+    row.className = 'kb-pfold';
+    row.setAttribute('role', 'listitem');
+    row.innerHTML = '<span class="kb-pfold-ico">📁</span><span class="kb-pfold-path"></span>' +
+      (i === 0 ? '<span class="kb-pfold-primary">主</span>' : '') +
+      '<button class="kb-pfold-rm" type="button" title="移除" aria-label="移除">×</button>';
+    const label = row.querySelector('.kb-pfold-path');
+    label.textContent = dir;
+    label.title = dir;
+    row.querySelector('.kb-pfold-rm').onclick = () => {
+      KB.projFolders = KB.projFolders.filter((x) => x !== dir);
+      kbRenderProjectFolders();
+      kbSyncProjectSubmit();
+    };
+    host.appendChild(row);
+  });
+}
+/** 官方提交按钮条件：名称非空 + 至少一个文件夹（没有文件夹的项目无法认领会话）。 */
+function kbSyncProjectSubmit() {
+  if (KB.modal !== 'project' || KB.modalBusy) return;
+  const submit = $('#kb-modal-submit');
+  if (!submit) return;
+  submit.disabled = !((($('#kb-p-name')?.value || '').trim()) && KB.projFolders.length > 0);
+}
+/** 项目写操作后：侧栏树即时收录，看板项目候选下次进页重读。 */
+async function kbApplyProjectWrite() {
+  KB.overview = null; kbSelectSig = '';
+  try { await refreshSessions(currentSearch()); } catch {}
+}
+/** 弹窗里点「添加文件夹…」：create 模式累加去重；add-folder 模式选完即写入。 */
+async function kbPickProjectFolders() {
+  const a = kbApi();
+  if (!a || typeof a.pickProjectFolders !== 'function' || typeof a.projectAction !== 'function') {
+    kbModalErr('此页需要 Hermes 桌面端才能选择文件夹'); return;
+  }
+  const mode = (KB.projectDialog && KB.projectDialog.mode) || 'create';
+  let r = null;
+  try { r = await a.pickProjectFolders({ multiple: mode !== 'add-folder' }); } catch { r = null; }
+  if (!r || !r.ok) { if (r && !r.canceled) kbModalErr(r.error || '选择文件夹失败'); return; }
+  const picked = (Array.isArray(r.folders) ? r.folders : [])
+    .filter((p) => typeof p === 'string' && p.startsWith('/')).slice(0, 8);
+  if (!picked.length) return;
+  if (mode === 'add-folder') { await kbSubmitAddFolders(picked); return; }
+  KB.projFolders = [...new Set([...KB.projFolders, ...picked])].slice(0, 8);
+  const nameEl = $('#kb-p-name');
+  if (nameEl && !nameEl.value.trim()) nameEl.value = kbProjectFolderBasename(picked[0]);
+  kbRenderProjectFolders();
+  kbSyncProjectSubmit();
+}
+/** 官方 add-folder 模式：一次多选里的每个目录各写一次 CLI，失败保留弹窗可重试。 */
+async function kbSubmitAddFolders(folders) {
+  if (KB.modalBusy) return;
+  const a = kbApi();
+  const target = KB.projectDialog || {};
+  if (!a || typeof a.projectAction !== 'function' || !target.projectId) {
+    kbModalErr('缺少目标项目'); return;
+  }
+  KB.modalBusy = true;
+  const submit = $('#kb-modal-submit');
+  if (submit) submit.disabled = true;
+  kbModalErr('');
+  try {
+    for (const folder of folders) {
+      const r = await a.projectAction({ op: 'addFolder', id: target.projectId, folder });
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '添加文件夹失败'); return; }
+    }
+    kbModalClose();
+    toast(`已添加 ${folders.length} 个文件夹`, 1800);
+    await kbApplyProjectWrite();
+  } catch (e) {
+    kbModalErr((e && e.message) || '操作失败');
+  } finally {
+    KB.modalBusy = false;
+    if (submit) submit.disabled = false;
+    kbSyncProjectSubmit();
+  }
+}
+/** 项目行 ⋯ / 侧栏入口统一走这里，避免把弹窗 DOM 搬出看板页。 */
+function kbProjectDialog(mode, project) {
+  if (mode === 'create') { setSidebar(true); showKanban(true); kbModalOpen('project'); return; }
+  const p = project || {};
+  KB.projectDialog = {
+    mode, projectId: String(p.id || ''), projectName: String(p.label || p.id || ''),
+  };
+  setSidebar(true); showKanban(true);
+  kbModalOpen(mode === 'rename' ? 'project-rename' : 'project-add-folder');
+}
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
-  if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind' && kind !== 'project')) return;
+  if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind' && !KB_PROJECT_KINDS.includes(kind))) return;
   KB.modal = kind;
   KB.modalBusy = false;
   KB.modalKey = 'desktop-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -6726,20 +6916,50 @@ function kbModalOpen(kind, presetStatus) {
   if (preset && statusSel) statusSel.value = preset;
   if (boardForm) { boardForm.reset(); boardForm.hidden = kind !== 'board'; }
   if (bindForm) { bindForm.reset(); bindForm.hidden = kind !== 'bind'; }
-  if (projForm) { projForm.reset(); projForm.hidden = kind !== 'project'; }
+  // 官方：每次打开都从空白开始，上一次取消/创建留下的名称与文件夹不能带进来
+  const isProject = KB_PROJECT_KINDS.includes(kind);
+  const mode = kind === 'project-rename' ? 'rename' : (kind === 'project-add-folder' ? 'add-folder' : 'create');
+  if (kind === 'project') KB.projectDialog = { mode: 'create', projectId: '', projectName: '' };
+  if (projForm) { projForm.reset(); projForm.hidden = !isProject; }
+  KB.projFolders = [];
+  kbRenderProjectFolders();
+  const nameRow = $('#kb-p-name-row'), foldersRow = $('#kb-p-folders-row');
+  const addBtn = $('#kb-p-add'), createOnly = $('#kb-p-create-only'), addNote = $('#kb-p-addnote');
+  if (nameRow) nameRow.hidden = mode === 'add-folder';
+  if (foldersRow) foldersRow.hidden = mode !== 'create';
+  if (addBtn) {
+    addBtn.hidden = mode === 'rename';
+    addBtn.textContent = mode === 'add-folder' ? '＋ 选择文件夹…' : '＋ 添加文件夹…';
+  }
+  if (createOnly) createOnly.hidden = mode !== 'create';
+  if (addNote) addNote.hidden = mode !== 'add-folder';
+  if (mode === 'rename') {
+    const nameEl = $('#kb-p-name');
+    if (nameEl) nameEl.value = (KB.projectDialog && KB.projectDialog.projectName) || '';
+  }
   kbSyncStatusNote();
   kbSyncProjectSelects();
   const title = $('#kb-modal-title');
-  const TITLES = { task: '新建任务', bind: '绑定项目', project: '新建项目', board: '新建看板' };
+  const TITLES = { task: '新建任务', bind: '绑定项目', project: '新建项目', board: '新建看板',
+    'project-rename': '重命名项目', 'project-add-folder': '添加文件夹' };
   if (title) title.textContent = TITLES[kind] || '新建';
   kbModalErr('');
   const submit = $('#kb-modal-submit');
-  if (submit) { submit.disabled = false; submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' : (kind === 'project' ? '创建项目' : '创建看板')); }
+  if (submit) {
+    submit.disabled = false;
+    submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' :
+      (kind === 'project' ? '创建项目' : (kind === 'project-rename' ? '保存名称' :
+        (kind === 'project-add-folder' ? '选择文件夹…' : '创建看板'))));
+    // 官方 add-folder 模式没有底部提交按钮：选完目录直接写入
+    submit.hidden = kind === 'project-add-folder';
+  }
+  kbSyncProjectSubmit();
   kbSyncSelects();
   modal.hidden = false; mask.hidden = false;
   kbSetBackgroundInert(true);
-  const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') : (kind === 'project' ? $('#kb-p-name') : $('#kb-b-slug')));
-  try { if (first) first.focus({ preventScroll: true }); } catch {}
+  const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') :
+    (kind === 'project-add-folder' ? $('#kb-p-add') : (isProject ? $('#kb-p-name') : $('#kb-b-slug'))));
+  try { if (first) { first.focus({ preventScroll: true }); if (first.select) first.select(); } } catch {}
 }
 function kbModalClose() {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
@@ -6747,6 +6967,10 @@ function kbModalClose() {
   if (mask) mask.hidden = true;
   KB.modal = '';
   KB.modalBusy = false;
+  KB.projFolders = [];
+  KB.projectDialog = null;
+  const submit = $('#kb-modal-submit');
+  if (submit) submit.hidden = false;
   kbSetBackgroundInert(false);
   kbModalErr('');
   // 先解 inert 再 focus（inert 内元素会静默拒绝聚焦）
@@ -6783,12 +7007,26 @@ function kbModalSubmit() {
     if (!a.kanbanCreateProject) { kbModalErr('此页需要 Hermes 桌面端才能创建项目'); return Promise.resolve(); }
     const pname = ($('#kb-p-name')?.value || '').trim();
     if (!pname) { kbModalErr('请填写项目名称'); return Promise.resolve(); }
+    // 官方：项目按文件夹（cwd 前缀）认领会话，没有文件夹的项目既进不了分组也放不了会话
+    if (!KB.projFolders.length) { kbModalErr('请至少添加一个文件夹'); return Promise.resolve(); }
     payload = {
       name: pname,
-      folders: ($('#kb-p-folders')?.value || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+      folders: KB.projFolders.slice(),
       slug: ($('#kb-p-slug')?.value || '').trim(),
       description: ($('#kb-p-desc')?.value || '').trim(),
+      idea: ($('#kb-p-idea')?.value || '').trim(),
+      use: true, // 官方 createProject({ use: true })
     };
+  } else if (kind === 'project-rename') {
+    if (!a.projectAction) { kbModalErr('此页需要 Hermes 桌面端才能重命名项目'); return Promise.resolve(); }
+    const pname = ($('#kb-p-name')?.value || '').trim();
+    if (!pname) { kbModalErr('请填写项目名称'); return Promise.resolve(); }
+    const id = (KB.projectDialog && KB.projectDialog.projectId) || '';
+    if (!id) { kbModalErr('缺少目标项目'); return Promise.resolve(); }
+    payload = { op: 'rename', id, name: pname };
+  } else if (kind === 'project-add-folder') {
+    kbModalErr('请点击「＋ 选择文件夹…」');
+    return Promise.resolve();
   } else {
     payload = {
       slug: ($('#kb-b-slug')?.value || '').trim(),
@@ -6806,22 +7044,31 @@ function kbModalSubmit() {
       if (kind === 'task') r = await a.kanbanCreateTask(payload);
       else if (kind === 'bind') r = await a.kanbanBindBoard(payload);
       else if (kind === 'project') r = await a.kanbanCreateProject(payload);
+      else if (kind === 'project-rename') r = await a.projectAction(payload);
       else r = await a.kanbanCreateBoard(payload);
       if (KB.modal !== kind) return; // 期间已关弹窗，旧响应不写 DOM
       if (!r || !r.ok) { kbModalErr((r && r.error) || '操作失败'); return; }
       kbModalClose();
       toast(kind === 'bind'
         ? (payload.projectId ? '已绑定项目，生效见该板任务的默认工作区' : '已解除项目绑定')
-        : (kind === 'task' ? '任务已创建' : (kind === 'project' ? '项目已创建' : '看板已创建')), 1800);
+        : (kind === 'task' ? '任务已创建' : (kind === 'project' ? '项目已创建' :
+          (kind === 'project-rename' ? '项目已重命名' : '看板已创建'))), 1800);
       if (r.warning) toast('调度器提示：' + r.warning, 3600);
       if (kind !== 'task') { KB.overview = null; kbSelectSig = ''; }
       await kanbanLoad(true); // 写后回读 CLI 列表
-      if (kind === 'project') await refreshSessions(currentSearch()); // 侧栏项目树即时收录新项目
+      if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch()); // 侧栏项目树即时收录
+      if (kind === 'project') {
+        if (r.ideaWarning) toast(r.ideaWarning, 3600);
+        // 官方 createProject(use:true) + enterProject：建完设为活动项目，并回到项目根开新会话
+        const root = payload.folders[0];
+        if (root) { closeKanbanPage(); newTabInProject(root); }
+      }
     } catch (e) {
       if (KB.modal === kind) kbModalErr((e && e.message) || '操作失败');
     } finally {
       KB.modalBusy = false;
       if (submit) submit.disabled = false;
+      kbSyncProjectSubmit(); // 失败保留表单时按官方条件重新禁用/启用
     }
   })();
 }
@@ -6886,6 +7133,15 @@ function setupKanban() {
   const mcancel = $('#kb-modal-cancel'); if (mcancel) mcancel.onclick = () => kbModalClose();
   const mmask = $('#kb-modal-mask'); if (mmask) mmask.onclick = () => kbModalClose();
   const msubmit = $('#kb-modal-submit'); if (msubmit) msubmit.onclick = () => kbModalSubmit();
+  // 官方 project-dialog：目录选择器、输入即时校验、想法模板 chip
+  const padd = $('#kb-p-add'); if (padd) padd.onclick = () => kbPickProjectFolders();
+  const pname = $('#kb-p-name'); if (pname) pname.addEventListener('input', kbSyncProjectSubmit);
+  const pideas = $('#kb-p-ideas');
+  if (pideas) pideas.addEventListener('click', (e) => {
+    const chip = e.target.closest && e.target.closest('.kb-pchip');
+    const idea = $('#kb-p-idea');
+    if (chip && idea) { idea.value = chip.getAttribute('data-idea') || ''; idea.focus(); }
+  });
   // 表单里按 Esc 只收本弹窗，不冒泡关掉整页；字段用 keydown 守卫，命令面板同理。
   document.querySelectorAll('#kb-form-task input, #kb-form-task hm-select, #kb-form-task textarea, #kb-form-board input, #kb-form-board textarea, #kb-form-bind hm-select, #kb-form-project input, #kb-form-project textarea')
     .forEach((el) => {

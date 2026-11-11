@@ -1005,6 +1005,31 @@ async function run() {
     const bare = createProjectArgv('Solo');
     assert.ok(bare.argv.includes('Solo') && !bare.argv.includes('--slug') && !bare.argv.includes('--description'), '纯名称不应带可选参数');
   });
+  await t('官方创建项目：--use / 项目维护 argv 白名单 / IDEA.md 不覆盖', () => {
+    const p = require('../main/services/hermes-project-cli');
+    const used = p.createProjectArgv('Demo', ['/tmp/a', '/tmp/b'], { use: true });
+    assert.ok(used.argv.includes('--use'), '官方 createProject({use:true}) 未落到 CLI --use');
+    assert.deepStrictEqual(used.folders, ['/tmp/a', '/tmp/b'], '主文件夹顺序丢失');
+    assert.ok(!p.createProjectArgv('Demo', ['/tmp/a']).argv.includes('--use'), '默认不该改活动项目');
+    assert.ok(p.projectActionArgv('rename', { id: 'demo', name: 'New' }).argv.includes('rename'), '重命名 argv 错');
+    const add = p.projectActionArgv('addFolder', { id: 'demo', folder: '/tmp/c' });
+    assert.ok(add.argv.includes('add-folder') && add.argv.includes('/tmp/c'), '加文件夹 argv 错');
+    assert.ok(p.projectActionArgv('use', { id: 'demo' }).argv.includes('use'), '设为活动 argv 错');
+    assert.ok(p.projectActionArgv('nope', { id: 'demo' }).error, '未知动作未拦下');
+    assert.ok(p.projectActionArgv('rename', { id: '../etc', name: 'x' }).error, '路径穿越 id 未拦下');
+    assert.ok(p.projectActionArgv('rename', { id: 'bad name', name: 'x' }).error, '含空格 id 未拦下');
+    assert.ok(p.projectActionArgv('addFolder', { id: 'demo', folder: 'relative' }).error, '相对目录未拦下');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-idea-'));
+    try {
+      assert.strictEqual(p.writeProjectIdea(dir, '  idea  '), '', '想法写入失败');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'IDEA.md'), 'utf8'), 'idea\n', '想法未按 wx 落地');
+      assert.ok(String(p.writeProjectIdea(dir, 'again')).includes('已存在'), '覆盖了既有 IDEA.md');
+      assert.strictEqual(p.writeProjectIdea(dir, ''), '', '空想法不该写文件');
+      assert.ok(String(p.writeProjectIdea(path.join(dir, 'missing'), 'x')).includes('不存在'), '缺目录未给警告');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   await t('侧栏项目树：buildPath 白名单、会话行与树投影（字段封顶）', () => {
     assert.strictEqual(kanban.buildPath('projectsTree'), '/projects/tree?preview_limit=3&session_limit=2000');
     assert.strictEqual(kanban.buildPath('projectsTree', { previewLimit: 5 }),

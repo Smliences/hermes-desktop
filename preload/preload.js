@@ -76,6 +76,10 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanActiveWorkers: (opts) => ipcRenderer.invoke('kanban:workers', opts || {}),
   // 侧栏项目树：会话按项目归组（同一 serve 的 /api/profiles/projects/tree，只读投影）
   projectsTree: (opts) => ipcRenderer.invoke('projects:tree', opts || {}),
+  // 官方新建项目 / 打开文件夹为项目：原生目录选择器 + 既有项目维护（主进程拼 argv）
+  pickProjectFolders: (opts) => ipcRenderer.invoke('project:pick-folders', opts || {}),
+  projectAction: (input) => ipcRenderer.invoke('project:action', input || {}),
+  copyText: (text) => ipcRenderer.invoke('app:copy', String(text || '')),
   // 编排模式：读回生效值；set 改 CLI config.yaml 的 kanban 段（UI 必须二次确认）
   kanbanOrchestration: () => ipcRenderer.invoke('kanban:orchestration'),
   kanbanSetMode: (mode) => ipcRenderer.invoke('kanban:set-mode', String(mode || '')),

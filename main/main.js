@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog, powerMonitor, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, clipboard, powerMonitor, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -676,6 +676,32 @@ function boot() {
   // 建项目没有 REST 端点，唯一官方入口是 CLI 子命令（写 projects.db，用户点击触发）
   handle('kanban:create-project', async (_e, input) => {
     return require('./services/hermes-project-cli').createProject(input || {});
+  });
+  // 官方 project-dialog 的文件夹选择：原生目录选择器（可多选），只回绝对路径且真实存在的目录。
+  // 「打开文件夹为项目」走单选，同一个通道用 multiple:false 收敛。
+  handle('project:pick-folders', async (_e, input) => {
+    const o = input || {};
+    const multiple = o.multiple !== false;
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: multiple ? '添加文件夹' : '选择文件夹',
+      buttonLabel: '添加',
+      properties: multiple ? ['openDirectory', 'multiSelections'] : ['openDirectory'],
+    });
+    if (r.canceled || !Array.isArray(r.filePaths) || !r.filePaths.length) return { ok: false, canceled: true };
+    const folders = r.filePaths.filter((p) => {
+      if (typeof p !== 'string' || !path.isAbsolute(p)) return false;
+      try { return fs.statSync(p).isDirectory(); } catch { return false; }
+    }).slice(0, 8);
+    return folders.length ? { ok: true, folders } : { ok: false, canceled: true };
+  });
+  // 既有项目的重命名 / 加文件夹 / 设为活动：argv 由服务层白名单拼装，用户点击触发
+  handle('project:action', async (_e, input) => {
+    return require('./services/hermes-project-cli').projectAction(input || {});
+  });
+  handle('app:copy', (_e, text) => {
+    const s = String(text || '').slice(0, 512);
+    if (!s) return false;
+    try { clipboard.writeText(s); return true; } catch { return false; }
   });
   handle('kanban:delete-task', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };

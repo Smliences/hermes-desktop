@@ -125,8 +125,16 @@
     async kanbanCreateProject(input = {}) {
       const name = String((input && input.name) || '').trim();
       if (!name) return { ok: false, error: '请填写项目名称' };
-      return { ok: true, text: `[mock] created project ${name}` };
+      return { ok: true, text: `[mock] created project ${name}`, ideaWarning: '' };
     },
+    // Demo 没有原生目录选择器：给一条示例绝对路径，保证弹窗流程可完整走通
+    async pickProjectFolders() {
+      return { ok: true, folders: ['/Users/you/Work/demo'] };
+    },
+    async projectAction(input = {}) {
+      return { ok: true, text: `[mock] project ${String(input.op || '')}` };
+    },
+    async copyText() { return true; },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);
       if (i >= 0) KB_TASKS.splice(i, 1);
