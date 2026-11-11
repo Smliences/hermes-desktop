@@ -5866,17 +5866,18 @@ function kbCardHtml(t, colName, opts) {
   const priHtml = pri >= 1 ? `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发）">P${pri}</span>` : '';
   const ago = kbAgo(t.created_at);
   const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
-  // 来源行：受让人等身份 chip；细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要。
+  // 来源行：细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要；
+  // 受让人不放这里 —— 它挪到发丝脚行，占原来任务 ID 的位置（ID 只留在抽屉里）。
   const chips = [];
   if (o.showStatus && st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
-  if (t.assignee) chips.push(kbAssigneeChip(t.assignee));
   if (t.tenant) chips.push(`<span class="kb-chip" title="租户">${esc(t.tenant)}</span>`);
   const wn = t.warnings && Number(t.warnings.count);
   if (wn) chips.push(`<span class="kb-chip warn" title="有诊断告警">${wn} 项告警</span>`);
 
-  // 发丝线下的弱信息行 + 右端状态点（组色随列/分组容器继承，方案一的状态点）。
+  // 发丝线下的弱信息行：时间胶囊 · 受让人 · 评论数 · 子任务进度 + 右端状态点。
   const foot = [];
-  if (t.id) foot.push(`<code>${esc(t.id)}</code>`);
+  const asg = kbAssigneeChip(t.assignee);
+  if (asg) foot.push(asg);
   const cc = Number(t.comment_count) || 0;
   if (cc) foot.push(`${cc} 评论`);
   const pg = t.progress;
