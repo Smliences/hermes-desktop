@@ -1386,6 +1386,8 @@ const togglePage = (page) => toggleSubpage(page, page.hidden);
 $('#btn-plugins2').onclick = () => { setSidebar(true); togglePage($('#plugins-page')); };
 $('#btn-skills2').onclick = () => { setSidebar(true); togglePage($('#skills-page')); };
 $('#btn-kanban').onclick = () => { setSidebar(true); showKanban(); };
+// 侧栏「新建项目」入口：弹窗 DOM 在看板页内，先开页再弹，保持既有 Esc/惰性化处理链
+$('#sb-new-project').onclick = () => { setSidebar(true); showKanban(true); kbModalOpen('project'); };
 $('#btn-kanban-ir').onclick = () => showKanban();
 $('#btn-settings').onclick = () => toggleSettings(true);
 $('#btn-gw').onclick = showGateway;

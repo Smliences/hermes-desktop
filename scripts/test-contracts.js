@@ -635,6 +635,10 @@ t('会话分组入口：SVG 图标 + 可聚焦按钮，不再是 12px unicode �
   const ga = cssSrc.slice(cssSrc.indexOf('.sb-ga {'), cssSrc.indexOf('.sb-ga {') + 400);
   assert.ok(/width: 20px; height: 20px/.test(ga), '入口点击区仍过小');
   assert.ok(appSrc.includes("$('#sb-quick-search')"), '搜索入口未接线');
+  // 侧栏「新建项目」入口：必须存在且接线到看板弹窗（弹窗在看板页内，须先开页再弹）
+  assert.ok(/id="sb-new-project"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少新建项目入口');
+  assert.ok(appSrc.includes("$('#sb-new-project')"), '新建项目入口未接线');
+  assert.ok(/sb-new-project'\)\.onclick[\s\S]{0,120}?kbModalOpen\('project'\)/.test(appSrc), '新建项目入口未落到项目弹窗');
 });
 
 t('窗口不越出显示器：启动与显示器变化时收拢到 workArea', () => {
