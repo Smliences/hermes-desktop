@@ -2595,9 +2595,18 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--elev); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kb-card.sel { border-color: var(--blue); }
-.kb-card-title { font: 500 13px/1.42 var(--sans); word-break: break-word; }
+/* 优先级 P 编号胶囊：绝对定位右上角，标题/摘要右侧留白防压字 */
+.kb-pri {
+  position: absolute; top: 8px; right: 10px; z-index: 1;
+  padding: 1px 7px; border-radius: var(--r-xs); pointer-events: none;
+  font: 500 9.5px/1.6 var(--sans);
+}
+.kb-pri.hi { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.kb-pri.mid { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+.kb-pri.lo { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.kb-card-title { font: 500 13px/1.42 var(--sans); word-break: break-word; padding-right: 34px; }
 .kb-card-sum {
-  margin-top: 4px; color: var(--text-2); font-size: 11px; line-height: 1.55;
+  margin-top: 4px; color: var(--text-2); font-size: 11px; line-height: 1.55; padding-right: 34px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .kb-card-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
