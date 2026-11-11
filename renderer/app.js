@@ -5849,40 +5849,43 @@ function kbMatch(t) {
 }
 function kbCardHtml(t, colName, opts) {
   const o = opts || {};
-  const chips = [];
   const st = String(colName || t.status || '');
   const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
   const pri = Number(t.priority) || 0;
+  // 顶行 = 优先级胶囊 + 相对时间（Dribbble 高赞稿的「元数据胶囊化」语言）。
+  // priority 是派发排序键（ORDER BY priority DESC，数字越大越先派），0 = 没设，不占位。
+  const priCls = pri >= 3 ? 'hi' : (pri === 2 ? 'mid' : 'lo');
+  const priLabel = pri >= 3 ? '高' : (pri === 2 ? '中' : '低');
+  const priHtml = pri >= 1 ? `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发）">${priLabel}</span>` : '';
+  const ago = kbAgo(t.created_at);
+  const topHtml = (priHtml || ago)
+    ? `<div class="kb-card-top">${priHtml}<span class="kb-card-when">${ago ? esc(ago) : ''}</span></div>`
+    : '';
   // 细粒度状态 chip：只有跨组展示（网格视图 / 搜索结果）才需要它自己说明处在哪一步；
-  // 列视图里列头已经写着分组名，卡上再挂一个「已完成」是纯冗余，还白占一行高度。
+  // 列视图里列头彩条已经写着分组，卡上再挂一个「已完成」是纯冗余。
+  const chips = [];
   if (o.showStatus && st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
-  if (pri) chips.push(`<span class="kb-chip pri" title="优先级 P${pri}">P${pri}</span>`);
   if (t.assignee) chips.push(kbAssigneeChip(t.assignee));
+  if (t.tenant) chips.push(`<span class="kb-chip" title="租户">${esc(t.tenant)}</span>`);
   const wn = t.warnings && Number(t.warnings.count);
   if (wn) chips.push(`<span class="kb-chip warn" title="有诊断告警">${wn} 项告警</span>`);
 
-  // 弱信息合成一行灰字。以前它们是各自的 chip，窄列里会折成两三行小方块，
-  // 一张 130px 高的卡有大半面积在做「1 评论」「1 小时前」这种噪声。
+  // 发丝线下的弱信息行 + 右端状态点（组色随列/分组容器继承，方案一的状态点）。
   const foot = [];
   if (t.id) foot.push(`<code>${esc(t.id)}</code>`);
-  if (t.tenant) foot.push(esc(t.tenant));
   const cc = Number(t.comment_count) || 0;
   if (cc) foot.push(`${cc} 评论`);
   const pg = t.progress;
   if (pg && Number(pg.total)) foot.push(`${Number(pg.done) || 0}/${Number(pg.total)} 子任务`);
-  const ago = kbAgo(t.created_at);
-  if (ago) foot.push(esc(ago));
 
   const sum = String(t.latest_summary || '').trim();
   const dragHint = draggable === '1' ? '拖到上方 worker 上可直接指派' : `${st || '该状态'} 不支持拖拽改派`;
-  const footHtml = foot.length
-    ? `<div class="kb-card-foot">${foot.join('<i aria-hidden="true">·</i>')}</div>`
-    : '';
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
+    ${topHtml}
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
     ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
-    ${footHtml}
+    <div class="kb-card-foot">${foot.join('<i aria-hidden="true">·</i>')}<span class="kb-card-dot" aria-hidden="true"></span></div>
   </button>`;
 }
 
@@ -6036,7 +6039,7 @@ function renderKanbanBody() {
              title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：派发器不会直接拉起，等自动分解补全后才会被派发'}">＋ 添加任务</button>`
         : '';
       return `<div class="kb-col${collapsed}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
-        <div class="kb-col-head"><span class="kb-col-dot"></span><span class="kb-col-name">${esc(g.label)}</span>
+        <div class="kb-col-head"><span class="kb-col-name">${esc(g.label)}</span>
           <span class="kb-col-num">${g.tasks.length}${g.tasks.length !== g.all.length ? '/' + g.all.length : ''}</span></div>
         <div class="kb-col-body">${g.tasks.length
           ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')

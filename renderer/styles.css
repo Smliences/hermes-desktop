@@ -2583,42 +2583,49 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-group-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 10px; }
 
 /* ---- 卡片 ----
-   信息分三层，越往下越弱：标题（正文色）→ 摘要（次级）→ 弱元信息（10px 灰字）。
-   窄列（160px）是常态，所以「1 评论」「1 小时前」这类不承担判断的信息不再
-   各占一个 chip —— 那会让一张卡有一半面积是小方块。 */
+   语言来自 Dribbble 高赞稿（OnPoint / Ildiko Boards）：元数据胶囊化、
+   「图标+数字」、发丝脚行 + 组色状态点。卡片是画布色、列底是填充色，
+   靠色阶差分层而不是靠重边框；静置无阴影，hover 才轻浮起。 */
 .kb-card {
   position: relative; display: block; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
-  padding: 10px 11px 10px 13px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  padding: 9px 11px 9px 13px; border: 1px solid var(--line); border-radius: var(--r-md);
   background: var(--canvas); color: var(--text); font: 400 12px/1.5 var(--sans);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--n-1000) 4%, transparent);
   transition: border-color .15s, transform .15s, box-shadow .15s;
-}
-.kb-card::before {
-  content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
-  border-radius: 2px; background: var(--kb-dot);
 }
 .kb-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--elev); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kb-card.sel { border-color: var(--blue); }
-.kb-card-title { font: 500 12.8px/1.42 var(--sans); word-break: break-word; }
+/* 顶行：优先级胶囊 + 相对时间。胶囊只承担「要不要紧」，弱信息一律让位。 */
+.kb-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; min-height: 16px; }
+.kb-card-top:empty { display: none; }
+.kb-card-when { margin-left: auto; color: var(--caption); font: 400 10px/1.4 var(--sans); }
+.kb-pri {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: var(--r-xs);
+  font: 500 9.5px/1.6 var(--sans);
+}
+.kb-pri.hi { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.kb-pri.mid { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+.kb-pri.lo { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.kb-card-title { font: 500 13px/1.42 var(--sans); word-break: break-word; }
 .kb-card-sum {
   margin-top: 4px; color: var(--text-2); font-size: 11px; line-height: 1.55;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .kb-card-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
-/* 弱元信息行：ID / 租户 / 评论数 / 子任务进度 / 相对时间 */
+/* 发丝脚行：ID / 评论数 / 子任务进度 + 右端组色状态点 */
 .kb-card-foot {
   display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-  margin-top: 7px; color: var(--caption); font: 400 10px/1.45 var(--sans);
+  margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line);
+  color: var(--caption); font: 400 10px/1.45 var(--sans);
 }
 .kb-card-foot code { font: 400 9.5px/1.45 var(--mono); letter-spacing: -.01em; }
 .kb-card-foot i { color: var(--line-2); font-style: normal; }
+.kb-card-dot { margin-left: auto; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--kb-dot, var(--n-400)); }
 .kb-chip {
   display: inline-block; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 1px 5px; border: 1px solid transparent; border-radius: var(--r-xs);
   background: var(--fill-2); color: var(--text-2); font: 400 9.5px/1.55 var(--sans);
 }
-.kb-chip.pri { color: var(--blue); background: var(--blue-soft); }
 .kb-chip.st { color: var(--text-2); background: var(--canvas); border-color: var(--line-2); }
 .kb-chip.warn { color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
 
@@ -2629,8 +2636,14 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-columns { display: flex; gap: 10px; align-items: stretch; height: 100%; min-height: 0; padding-bottom: 2px; }
 .kb-col {
   --kb-dot: var(--n-400);
+  position: relative;
   flex: 1 1 0; min-width: 160px; max-width: 460px; display: flex; flex-direction: column; min-height: 0;
   background: var(--fill-2); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+/* 列头彩条：高赞稿的关键一笔 —— 列的语义色放到整条顶边，比一个圆点醒目得多 */
+.kb-col::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px;
+  border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--kb-dot);
 }
 .kb-col[data-dot="yellow"] { --kb-dot: var(--yellow); }
 .kb-col[data-dot="accent"] { --kb-dot: var(--accent); }
@@ -2641,7 +2654,6 @@ body.kb-dragging * { cursor: grabbing !important; }
   display: flex; align-items: center; gap: 7px; padding: 9px 11px;
   border-bottom: 1px solid var(--line); flex: 0 0 auto;
 }
-.kb-col-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--kb-dot); flex: 0 0 auto; }
 .kb-col-name { color: var(--text); font: 500 12.5px/1.2 var(--sans); }
 .kb-col-num { margin-left: auto; color: var(--caption); font: 400 11px/1 var(--mono); }
 .kb-col-body {
