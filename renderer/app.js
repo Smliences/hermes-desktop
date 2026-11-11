@@ -277,6 +277,7 @@ const state = {
   env: null, config: { model: '', reasoning: 'none', yolo: false },
   sessions: [], sendHistory: [], histIdx: -1,
   projectsTree: [],         // 侧栏项目树投影（/api/profiles/projects/tree，降级为 []）
+  projectsTreeOk: false,    // 树请求是否成功；后端冷启慢于首屏时由 ensureSidebarTree 重试
   attachments: [],           // [{ path, name, kind }] 本回合待附加的本地文件
 };
 const hasNative = typeof hermesAPI !== 'undefined';
@@ -333,6 +334,8 @@ function hlMark(text, q) {
   if (i < 0) return esc(t);
   return esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.length)) + '</mark>' + esc(t.slice(i + q.length));
 }
+/** 侧栏搜索框当前词：会话菜单、看板写后刷新、项目树启动自愈共用（全局，勿塞进某个函数作用域） */
+function currentSearch() { const el = $('#session-search'); return el ? el.value.trim() : ''; }
 /** 会话列表：标题 + 消息全文命中合并（FTS5 由主进程提供，几十毫秒） */
 let sessionsSeq = 0;
 async function refreshSessions(search = '') {
@@ -345,7 +348,6 @@ async function refreshSessions(search = '') {
   try {
     const [allR, treeR] = await Promise.all([api.listSessions({ limit: 200, search: '' }), treeP]);
     const all = arr(allR);
-    const tree = treeR && treeR.ok ? treeR : null;
     let hits = [];
     if (q && typeof api.searchMessages === 'function') {
       try { hits = arr(await api.searchMessages(q)); } catch (e) { console.warn('fts', e); }
@@ -358,10 +360,40 @@ async function refreshSessions(search = '') {
       .map((s) => ({ ...s, snippet: (hitMap.get(s.id) || {}).snippet || '', fulltext: hitMap.has(s.id) }))
       .filter((s) => !q || String(s.title || '').toLowerCase().includes(ql) || String(s.id).toLowerCase().includes(ql) || s.fulltext)
       .slice(0, 80);
-    state.projectsTree = Array.isArray(tree && tree.projects)
-      ? tree.projects.filter((p) => p && p.id && !p.isNoProject) : [];
+    // 后端冷启（CLI 常要 5~12s）会晚于首屏：树请求失败时保留上一次的分组，不把侧栏刷空，
+    // 并用 projectsTreeOk 标记给启动自愈判断是否还要重试。成功才覆盖树。
+    if (treeR && treeR.ok) {
+      state.projectsTree = Array.isArray(treeR.projects)
+        ? treeR.projects.filter((p) => p && p.id && !p.isNoProject) : [];
+      state.projectsTreeOk = true;
+    } else {
+      state.projectsTreeOk = false;
+    }
     renderSessions(q);
-  } catch (e) { console.warn('sessions', e); }
+  } catch (e) { state.projectsTreeOk = false; console.warn('sessions', e); }
+}
+/** 后端冷启（gateway 常需 5~12s）会晚于首屏：树接口失败时按退避重试，直到项目分组落地。
+ *  独立拉树、成功即落地并重绘侧栏，不与会话列表的并发代次（sessionsSeq）互相拖累。 */
+let sidebarTreeRetry = 0;
+function ensureSidebarTree() {
+  if (!hasNative || typeof api.projectsTree !== 'function') return;
+  if (state.projectsTreeOk) { sidebarTreeRetry = 0; return; }
+  if (sidebarTreeRetry >= 10) return;
+  const n = ++sidebarTreeRetry;
+  setTimeout(async () => {
+    if (state.projectsTreeOk) { sidebarTreeRetry = 0; return; }
+    let r = null;
+    try { r = await api.projectsTree({ previewLimit: 3 }); } catch {}
+    if (r && r.ok) {
+      state.projectsTree = Array.isArray(r.projects)
+        ? r.projects.filter((p) => p && p.id && !p.isNoProject) : [];
+      state.projectsTreeOk = true;
+      sidebarTreeRetry = 0;
+      try { renderSessions(currentSearch()); } catch {}
+      return;
+    }
+    ensureSidebarTree();
+  }, Math.min(1000 + n * 800, 3500));
 }
 /** Claude 式时间分组：置顶 / 今天 / 昨天 / 最近 7 天 / 更早 */
 function sessionGroup(s) {
@@ -518,7 +550,6 @@ function openSessionMenu(s, anchor) {
     <div class="sess-menu-sep"></div>
     <button data-act="delete" class="danger">✕ 删除会话</button>`;
   m.hidden = false;
-  const currentSearch = () => ($('#session-search') ? $('#session-search').value.trim() : '');
   m.onclick = async (e) => {
    try {
     const b = e.target.closest('button'); if (!b || !b.dataset.act) return;
@@ -6779,6 +6810,7 @@ function kbModalSubmit() {
       if (r.warning) toast('调度器提示：' + r.warning, 3600);
       if (kind !== 'task') { KB.overview = null; kbSelectSig = ''; }
       await kanbanLoad(true); // 写后回读 CLI 列表
+      if (kind === 'project') await refreshSessions(currentSearch()); // 侧栏项目树即时收录新项目
     } catch (e) {
       if (KB.modal === kind) kbModalErr((e && e.message) || '操作失败');
     } finally {
@@ -6981,6 +7013,7 @@ async function init() {
   try { const env = await api.env(); state.env = env; state.config = { ...state.config, ...env.config }; } catch {}
   // env-chip 已按需求移除（侧栏左下角改为齿轮按钮），仅保留 state.env 数据
   await refreshSessions();
+  ensureSidebarTree(); // 首屏树若撞上后端冷启失败，后台补拉，不阻塞首屏
   newTab();
   updateStatus();
   if (hasNative) {

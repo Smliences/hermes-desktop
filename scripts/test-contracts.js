@@ -639,6 +639,14 @@ t('会话分组入口：SVG 图标 + 可聚焦按钮，不再是 12px unicode �
   assert.ok(/id="sb-new-project"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少新建项目入口');
   assert.ok(appSrc.includes("$('#sb-new-project')"), '新建项目入口未接线');
   assert.ok(/sb-new-project'\)\.onclick[\s\S]{0,120}?kbModalOpen\('project'\)/.test(appSrc), '新建项目入口未落到项目弹窗');
+  // 建完项目必须即时刷新侧栏项目树，否则新项目要重启才可见
+  assert.ok(appSrc.includes("kind === 'project') await refreshSessions(currentSearch())"), '项目创建后未刷新侧栏树');
+  // 后端冷启慢于首屏：树失败要保留旧树 + 标记，启动挂自愈重试（否则侧栏项目分组永远为空）
+  assert.ok(appSrc.includes('state.projectsTreeOk = true') && appSrc.includes('state.projectsTreeOk = false'), '树请求缺少成功/失败标记');
+  assert.ok(appSrc.includes('function ensureSidebarTree('), '缺少项目树启动自愈');
+  assert.ok(/await refreshSessions\(\);[\s\S]{0,120}?ensureSidebarTree\(\);/.test(appSrc), 'init 未挂项目树自愈');
+  // currentSearch 曾被定义在 openSessionMenu 内部，全局调用会 ReferenceError 并被空 catch 吞掉
+  assert.ok(appSrc.includes('function currentSearch(') && !appSrc.includes('const currentSearch ='), 'currentSearch 必须是全局函数');
 });
 
 t('窗口不越出显示器：启动与显示器变化时收拢到 workArea', () => {
