@@ -76,8 +76,9 @@ const jsIds = uniq([
   ...collect(appSrc, /\$\('#([A-Za-z0-9_-]+)'\)/g),
   ...collect(appSrc, /getElementById\('([A-Za-z0-9_-]+)'\)/g),
 ]);
-// 历史遗留：这三处本来就有 null 保护，不算死绑定
-const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title']);
+// 不算死绑定：前三处本来就有 null 保护；后两个是抽屉渲染时才生成的节点
+// （renderKanbanDetail 拼进 #kb-drawer-body，静态 index.html 里查不到）
+const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee', 'kbd-reassign-note']);
 t(`HTML 有 ${htmlIds.length} 个 id，app.js 引用 ${jsIds.length} 个`, () => {
   assert.ok(htmlIds.length >= 100 && jsIds.length >= 80, 'id/引用数量异常，可能解析失败');
 });
@@ -954,7 +955,9 @@ t('默认模型样式只用设计 token，双主题与窄面板自动适配', ()
 
 section('3r. Kanban 看板：受控读写 + 派发、token 不出主进程、代次守卫');
 const kbSrc = read('main/services/hermes-kanban.js');
-const kbAppSrc = appSrc.slice(appSrc.indexOf('const KB_COLUMN_HINT'), appSrc.indexOf('setupSettings();'));
+// 切片锚点用注释标题而不是某个常量名：常量重构改名时不会让整段断言静默失空
+const KB_ANCHOR = 'Kanban 看板（CLI 原生任务队列）';
+const kbAppSrc = appSrc.slice(appSrc.indexOf(KB_ANCHOR), appSrc.indexOf('setupSettings();'));
 const kbCss = cssSrc.slice(cssSrc.indexOf('Kanban 看板（CLI 原生任务队列）'));
 
 t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', () => {
@@ -1091,10 +1094,12 @@ t('异步代次守卫与轮询：切页后旧响应不写 DOM，页面隐藏时�
 });
 t('看板样式只用设计 token，双主题与键盘可达性齐备', () => {
   for (const s of ['.kb-col', '.kb-card', '.kb-drawer', '.kb-group', '.kb-status-chip',
-    '.kb-modal', '.kb-empty-state', '.kb-stats', '.kb-dispatch', '.kb-dp-col', '.kbd-actions']) {
+    '.kb-modal', '.kb-empty-state', '.kb-columns', '.kb-add-col', '.kb-more-menu',
+    '.kb-dispatch', '.kb-dp-col', '.kbd-actions', '.kbd-reassign']) {
     assert.ok(kbCss.includes(s), '缺少核心样式 ' + s);
   }
-  assert.ok(kbCss.includes('var(--') && kbCss.includes('[data-status='), '未使用设计 token / 状态色');
+  // 归组色改成 data-dot 驱动（9 状态 → 5 组后不再按单状态上色）
+  assert.ok(kbCss.includes('var(--') && kbCss.includes('[data-dot='), '未使用设计 token / 归组色');
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(kbCss), '出现硬编码色值，深色主题会失配');
   assert.ok(kbCss.includes(':focus-visible'), '卡片 / 控件缺少键盘焦点');
   assert.ok(kbCss.includes('[hidden] { display: none !important; }'), 'display:flex 会盖过 UA 的 hidden');
@@ -1118,9 +1123,9 @@ t('新建弹窗里的每个类都有样式，不许退回浏览器默认正文',
     '弹窗未在打开时清空表单');
 });
 t('创建 / 派发交互：静态表单、二次确认、写后回读、Esc 最上层', () => {
-  for (const id of ['kb-new-task', 'kb-new-board', 'kb-modal', 'kb-modal-submit',
-    'kb-f-title', 'kb-b-slug', 'kb-view-grid', 'kb-view-cols', 'kb-stats', 'kb-statusbar', 'kb-groups',
-    'kb-dispatch-toggle', 'kb-dispatch-panel', 'kb-dp-preview', 'kb-dp-run', 'kb-dp-max',
+  for (const id of ['kb-new-task', 'kb-more', 'kb-more-menu', 'kb-modal', 'kb-modal-submit',
+    'kb-f-title', 'kb-b-slug', 'kb-board-name', 'kb-head-stat', 'kb-statusbar', 'kb-columns',
+    'kb-dispatch-panel', 'kb-dp-preview', 'kb-dp-run', 'kb-dp-max',
     'kb-dp-result', 'kb-dp-workers', 'kb-dp-confirm', 'kb-dp-workers-refresh']) {
     assert.ok(htmlSrc.includes('id="' + id + '"'), '缺少页面元素 ' + id);
   }
@@ -1132,7 +1137,9 @@ t('创建 / 派发交互：静态表单、二次确认、写后回读、Esc 最�
     '模态未隔离背景交互树');
   assert.ok(kbAppSrc.includes("guardFieldKey(el, () => kbModalClose())"), '表单 Esc 未阻止冒泡');
   assert.ok(appSrc.includes("if (!$('#kb-modal').hidden) kbModalClose();"), '全局 Esc 未优先关弹窗');
-  assert.ok(kbAppSrc.includes("KB.view = 'grid'") && kbAppSrc.includes("KB.view = 'cols'"), '缺少双视图切换');
+  // 视图切换只剩「⋯」菜单一项，写成三元翻转型（菜单项文字随之变）
+  assert.ok(/KB\.view = KB\.view === 'grid' \? 'cols' : 'grid'/.test(kbAppSrc), '缺少双视图切换');
+  assert.ok(kbAppSrc.includes('function kbMoreSync()'), '菜单里的视图项文字未同步');
   assert.ok(kbAppSrc.includes("KB.status = KB.status === v ? '' : v"), '缺少状态筛选');
   // 派发：真派发与提交派发都必须过二次确认卡，且写后回读；试运行是纯读
   assert.ok(kbAppSrc.includes('function kbDispatchConfirm()') && kbAppSrc.includes('onGo: () => kbDispatchRun(false)'),
@@ -1192,12 +1199,15 @@ t('拖拽派发样式：幽灵卡穿透指针、投放目标高亮、双主题�
   for (const s of ['.kb-dock', '.kb-worker', '.kb-drag-ghost', '.kb-dock-confirm', '.kb-card.is-dragging']) {
     assert.ok(kbCss.includes(s), '缺少拖拽样式 ' + s);
   }
-  assert.ok(kbCss.includes('.kb-dock.is-drag'), '拖动中缺少投放区高亮');
+  // 投放区改成「只在拖动时浮现」的浮层：唤醒靠 body.kb-dragging，不再是静态 .is-drag
+  assert.ok(kbCss.includes('body.kb-dragging .kb-dock'), '拖动中缺少投放区浮现');
+  assert.ok(/\.kb-dock \{[^}]*opacity:\s*0/.test(kbCss) && /\.kb-dock \{[^}]*pointer-events:\s*none/.test(kbCss),
+    '投放区平时必须不可见且不吃指针（否则浮层会挡住卡片点击）');
   assert.ok(kbCss.includes('.kb-worker.over'), '缺少悬停投放目标高亮');
   assert.ok(kbCss.includes('.kb-card[data-kb-drag="1"]:hover::after'), '可拖卡片缺少拖拽手柄暗示');
   assert.ok(kbCss.includes('pointer-events: none'), '幽灵卡必须穿透指针，否则 elementFromPoint 命不中 chip');
   assert.ok(kbCss.includes('body.kb-dragging'), '拖动中未禁用文本选中');
-  assert.ok(kbCss.includes('.compact .kb-dock-workers'), '窄主区未适配投放区');
+  assert.ok(kbCss.includes('.compact .kb-dock-label'), '窄主区未适配投放区');
 });
 
 section('3s. 插件 / 技能列表：磁盘缓存 + 后台刷新（打开页面不再等 6–8s 冷启）');
@@ -2274,7 +2284,8 @@ t('投放区几何恒定：label 定宽、状态文字移出 dock、重建保住
   const label = kbCss.slice(kbCss.indexOf('.kb-dock-label {'), kbCss.indexOf('.kb-dock-hint'));
   assert.ok(/flex:\s*0 0 \d+px/.test(label) && /width:\s*\d+px/.test(label),
     'label 不是定宽槽位：拖动提示一长一短就会挤动 chip');
-  assert.ok(kbCss.includes('.kb-dock.is-drag .kb-worker'), '拖动中缺少「能放到哪」的范围提示');
+  // 投放区平时是隐藏浮层，所以 chip 直接就带「可投放」的虚线圈，不再是拖动时才加
+  assert.ok(/\.kb-worker \{[^}]*border-style: dashed/.test(kbCss), '投放 chip 缺少「能放到哪」的范围提示');
   assert.ok(kbAppSrc.includes('const scrollLeft = host.scrollLeft'), '重建 chip 行未保住滚动位置');
   assert.ok(kbAppSrc.includes('host.scrollLeft = scrollLeft'), '重建后未恢复滚动位置');
 });
@@ -2297,7 +2308,7 @@ t('拖拽交互：就近吸附、Esc 可撤、拖动中不重建不轮询、补�
   assert.ok(kbAppSrc.includes("clone.removeAttribute('data-kb-task')"), '幽灵卡仍带任务 id，会抢命中');
   assert.ok(kbAppSrc.includes("clone.setAttribute('tabindex', '-1')"), '幽灵卡仍可被键盘聚焦');
   assert.ok(kbCss.includes('.kb-drag-ghost .kb-ghost-card'), '幽灵卡样式缺失');
-  assert.ok(kbCss.includes('.kb-dock.is-drag .kb-dock-label'), '拖动中槽位没有状态反馈');
+  assert.ok(kbCss.includes('body.kb-dragging .kb-dock-label'), '拖动中槽位没有状态反馈');
 });
 
 section('3ae. 思考程度并进模型菜单：二级下拉、唯一写入口、/effort 仍可达');
@@ -2455,6 +2466,113 @@ t('README 与当前架构保持同步', () => {
   assert.ok(md.includes('hermes serve'), 'README 未描述 serve 主通道');
   assert.ok(md.includes('npm test'), 'README 未写测试入口');
   assert.ok(!/stream-json 命令执行通道（主通道/.test(md), 'README 仍在宣称 stream-json 是主通道');
+});
+
+section('3ag. 看板重设计：9 个 CLI 状态归 5 组，统计与筛选合一');
+const kbGroupBlock = kbAppSrc.slice(kbAppSrc.indexOf('const KB_GROUPS'), kbAppSrc.indexOf('const KB_STATUS_LABEL'));
+t('归组映射：待办 / 就绪 / 进行中 / 受阻 / 已完成，archived 单独成列', () => {
+  assert.ok(kbGroupBlock.includes("statuses: ['triage', 'todo', 'scheduled']"), '待办组必须收 triage / todo / scheduled');
+  assert.ok(kbGroupBlock.includes("statuses: ['ready']"), 'ready 必须单独成列（唯一可被派发的状态）');
+  assert.ok(kbGroupBlock.includes("statuses: ['running', 'review']"), '进行中必须收 running / review');
+  assert.ok(kbGroupBlock.includes("statuses: ['blocked']"), '受阻只收 blocked');
+  assert.ok(kbGroupBlock.includes("statuses: ['done']"), '已完成只收 done');
+  // scheduled 归待办而不是受阻：受阻是等人，scheduled 是等时间，混在一起会虚高「受阻」
+  const blockedDef = kbGroupBlock.slice(kbGroupBlock.indexOf("label: '受阻'"), kbGroupBlock.indexOf("label: '已完成'"));
+  assert.ok(!blockedDef.includes('scheduled'), 'scheduled 不得塞进受阻列');
+  assert.ok(kbAppSrc.includes("const KB_GROUP_ARCHIVED = Object.freeze("), 'archived 必须独立定义');
+  assert.ok(kbAppSrc.includes('KB.filters.archived ? [...KB_GROUPS, KB_GROUP_ARCHIVED] : [...KB_GROUPS]'),
+    '归档列只应由「显示已归档」开关追加');
+});
+
+t('分组 chip 的计数恒为全局条数，不随筛选变小', () => {
+  // 计数用 all（过滤前）：筛完还能看见「别处还有多少」，否则失去全局感
+  assert.ok(kbAppSrc.includes('<span class="kb-sc-num">${g.all.length}</span>'), 'chip 计数未用全局条数');
+  assert.ok(!kbAppSrc.includes('<span class="kb-sc-num">${g.tasks.length}</span>'), 'chip 计数错用了过滤后条数');
+  assert.ok(kbAppSrc.includes("return { key: g.key, label: g.label, hint: g.hint, dot: g.dot, all, tasks: all.filter(kbMatch) };"),
+    '分组必须同时保留 all 与 tasks 两份条数');
+});
+
+t('列尾「＋ 添加任务」只在待办 / 就绪出现（后端只认 triage / ready）', () => {
+  assert.ok(kbAppSrc.includes("const canAdd = g.key === 'todo' || g.key === 'ready';"),
+    '不应在其余列给新建入口：后端 CREATE_STATUSES 只有 triage / ready');
+  assert.ok(kbAppSrc.includes("const addStatus = g.key === 'ready' ? 'ready' : 'triage';"), '预填状态映射不对');
+  assert.ok(kbAppSrc.includes("presetStatus === 'ready' || presetStatus === 'triage'"), '弹窗必须过滤非法起始状态');
+});
+
+t('Demo 模式能打开看板：门禁按 kanbanBoard 是否存在判断，不再要求 hasNative', () => {
+  assert.ok(kbAppSrc.includes("const kbApi = () => (api && typeof api.kanbanBoard === 'function' ? api : null);"),
+    'kbApi 又回到 hasNative 门禁，浏览器预览会打不开看板');
+  const mock = read('renderer/mock-bridge.js');
+  for (const m of ['kanbanBoard(', 'kanbanOverview(', 'kanbanTask(', 'kanbanCreateTask(', 'kanbanReassign(', 'kanbanDispatch(']) {
+    assert.ok(mock.includes(m), 'mock-bridge 缺少看板方法 ' + m);
+  }
+});
+
+t('低频入口全部收进「⋯」：页面上不再有统计卡 / 视图按钮 / 新建看板按钮', () => {
+  for (const id of ['kb-stats', 'kb-view-grid', 'kb-view-cols', 'kb-new-board', 'kb-dispatch-toggle']) {
+    assert.ok(!htmlSrc.includes('id="' + id + '"'), '页面仍保留常驻元素 ' + id);
+  }
+  for (const k of ['board', 'dispatch', 'view']) {
+    assert.ok(htmlSrc.includes('data-kb-more="' + k + '"'), '菜单缺少入口 ' + k);
+  }
+  assert.ok(htmlSrc.includes('id="kb-archived"') && htmlSrc.includes('kb-more-menu'), '归档开关必须收进菜单');
+  assert.ok(appSrc.includes('if (kbMoreMenu && !kbMoreMenu.hidden) { kbMoreToggle(false); return; }'),
+    'Esc 未优先收起「⋯」菜单');
+});
+
+t('抽屉改派只写 assignee，不越权推进状态', () => {
+  assert.ok(kbAppSrc.includes('function kbReassignTask('), '缺少抽屉改派实现');
+  assert.ok(kbAppSrc.includes('a.kanbanReassign(taskId, { assignee: name, board: KB.filters.board || \'\' })'),
+    '改派未走 kanbanReassign');
+  const fn = kbAppSrc.slice(kbAppSrc.indexOf('function kbReassignTask('), kbAppSrc.indexOf('function kbJumpToSession('));
+  assert.ok(!/status:/.test(fn), '抽屉改派不得顺带改状态（推进 ready 走「提交派发」）');
+  assert.ok(kbAppSrc.includes('id="kbd-assignee"'), '抽屉缺少改派下拉');
+  // 抽屉里的状态 chip 必须和卡片一样显示中文归组名，不能一处「收集箱」一处 triage
+  assert.ok(kbAppSrc.includes('esc(KB_STATUS_LABEL[t.status] || t.status)'), '抽屉状态 chip 未走中文标签');
+  assert.ok(!kbAppSrc.includes('meta.push(`<span class="kb-chip">${esc(t.status)}</span>`)'),
+    '抽屉状态 chip 又退回原始 CLI 值');
+  // 事件 payload 是对象，String() 会把它拍成 "[object Object]"，日志整段失去信息
+  assert.ok(kbAppSrc.includes("const text = typeof value === 'string' ? value : JSON.stringify(value);"),
+    'kbdRow 未对对象 payload 做 JSON 序列化');
+});
+
+t('5 列自适应：列宽恒等分，空列不许抢宽度', () => {
+  assert.ok(/\.kb-col \{[^}]*flex: 1 1 0/.test(kbCss), '列必须是可伸缩的（flex 1 1 0）');
+  assert.ok(/\.kb-col \{[^}]*min-width: 160px/.test(kbCss), '列最小宽应为 160px，否则五列在默认窗口就要横向滚动');
+  assert.ok(!/\.kb-col \{[^}]*min-width: 210px/.test(kbCss), '旧的 210px 固定最小宽会让五列必然横向滚动');
+  assert.ok(/\.kb-col-body \{[^}]*overflow-y: auto/.test(kbCss), '列内必须能纵向滚动');
+  // 空列曾写成 flex: 0 0 132px，结果「只有已完成有卡」时那一列吃掉其余四列的宽度
+  const emptyRule = (kbCss.match(/\.kb-col\.is-empty \{[^}]*\}/) || [''])[0];
+  assert.ok(!/flex:|min-width:|width:/.test(emptyRule), '空列不得单独指定宽度，五列必须等分');
+});
+
+t('没有冗余横幅：无任务状态交给列表达，错误才出条', () => {
+  assert.ok(!htmlSrc.includes('id="kb-summary"'), '首屏不该再挂一条摘要横幅');
+  assert.ok(!kbAppSrc.includes('当前没有进行中的任务'), '摘要横幅的文案仍在，说明那段逻辑没删干净');
+  assert.ok(kbAppSrc.includes("if (msg) { msg.hidden = !KB.error; if (KB.error) msg.textContent = KB.error; }"),
+    '错误条必须保留');
+});
+
+t('看板渲染链调用的每个函数都真的有定义', () => {
+  // 血泪教训：renderKanban() 调了一个已被改名删除的函数，ReferenceError 把整条
+  // 渲染链打断在第一步 —— 页面打开是空的，但 catch 里只留一句 unhandled rejection，
+  // 连 KB.error 都是干净的。node --check 只查语法，查不出这种「调用了不存在的名字」。
+  const called = new Set();
+  for (const m of kbAppSrc.matchAll(/(?<![\w$.])((?:kb|Kb|renderKanban)[A-Za-z0-9_]*)\s*\(/g)) called.add(m[1]);
+  assert.ok(called.size > 20, '函数调用扫描失败（正则失效会静默通过）');
+  const missing = [...called].filter((name) => !new RegExp(
+    '(?:function\\s+' + name + '\\s*\\(|(?:const|let|var)\\s+' + name + '\\s*=|class\\s+' + name + '\\b)').test(appSrc));
+  assert.deepStrictEqual(missing, [], '看板段调用了未定义的函数：' + missing.join(', '));
+  assert.ok(kbAppSrc.includes('function renderKanbanHead('), '页头渲染函数缺失');
+  assert.ok(kbAppSrc.includes('function renderKanbanBody(') && kbAppSrc.includes('function renderKanbanStatusbar('),
+    '主体 / 筛选条渲染函数缺失');
+});
+
+t('页头只留看板名与一行概览，分隔符随概览收起', () => {
+  assert.ok(htmlSrc.includes('id="kb-board-name"') && htmlSrc.includes('id="kb-head-stat"'), '页头缺少看板名 / 概览节点');
+  const fn = kbAppSrc.slice(kbAppSrc.indexOf('function renderKanbanHead('), kbAppSrc.indexOf('function kbAge('));
+  assert.ok(fn.includes("sep.hidden = !text"), '概览为空时未收起「·」，页头会挂一个孤零零的分隔符');
+  assert.ok(!fn.includes('innerHTML'), '页头只写文本，不用 innerHTML');
 });
 
 console.log('\n' + '─'.repeat(56));

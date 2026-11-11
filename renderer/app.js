@@ -2594,6 +2594,9 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     // 最上层是拖动：先撤拖动，不顺手关整页、也不中断回合
     if (KbDrag.on || KbDrag.armed) { kbDragReset(); return; }
+    // 其次是看板的「⋯」菜单：它挂在页头，层级高于弹窗，只收它自己
+    const kbMoreMenu = $('#kb-more-menu');
+    if (kbMoreMenu && !kbMoreMenu.hidden) { kbMoreToggle(false); return; }
     // 统一按「最上层优先」收起：全部浮层关完后，若仍在生成则中断本回合
     let handled = false;
     // 查找条在最上层：先关它，不要顺手把下面的页面一起收掉
@@ -4963,11 +4966,34 @@ function applySettings() {
    默认「分组网格」视图，空状态不占列；可切经典列视图。
    所有异步响应都带代次戳（KB.epoch / KB.detailEpoch / KB.dispatch.epoch），
    切页或后端换代后的旧响应一律丢弃，不写 DOM。 */
-const KB_COLUMN_HINT = {
-  triage: '粗略想法停在这里，等待分解', todo: '等待父任务完成', scheduled: '定时或延后处理',
-  ready: '等待调度器认领', running: 'worker 正在执行', blocked: '需要人工介入',
-  review: '等待审查结论', done: '已完成', archived: '已归档',
-};
+/* ---- 状态归组：9 个 CLI 状态 → 5 个中文列 ----
+   归组只影响「看」的粒度，不改任何状态：卡片上的细 chip 仍是 CLI 原值。
+   ① scheduled 归「待办」而不是「受阻」：受阻是等人（需要人动手），scheduled 是
+     等时间（不需要人动手），塞进同一列会把「受阻」计数顶高，把人叫去处理本来
+     不该碰的任务。
+   ② archived 不进 5 列：它由「显示已归档」开关单独控制，打开时追加为最后一列，
+     否则「已完成」的计数会跟着归档一起虚高，两套开关还会互相打架。 */
+const KB_GROUPS = Object.freeze([
+  { key: 'todo', label: '待办', statuses: ['triage', 'todo', 'scheduled'], dot: 'yellow',
+    hint: '还没开始跑：收集箱、等依赖，或已排期在等时间' },
+  { key: 'ready', label: '就绪', statuses: ['ready'], dot: 'accent',
+    hint: '依赖满足且已指派，调度器随时可能认领派发' },
+  { key: 'running', label: '进行中', statuses: ['running', 'review'], dot: 'green',
+    hint: 'worker 正在执行，或已跑完待验收' },
+  { key: 'blocked', label: '受阻', statuses: ['blocked'], dot: 'red',
+    hint: '需要人工介入：等人确认或等外部事件' },
+  { key: 'done', label: '已完成', statuses: ['done'], dot: 'muted',
+    hint: '已完成，不再参与派发' },
+]);
+const KB_GROUP_ARCHIVED = Object.freeze({
+  key: 'archived', label: '已归档', statuses: ['archived'], dot: 'muted',
+  hint: '已归档，只在开启「显示已归档」时出现',
+});
+/** 细粒度状态的中文短名：卡片 chip 用它，title 里保留 CLI 原值。 */
+const KB_STATUS_LABEL = Object.freeze({
+  triage: '收集箱', todo: '待办', scheduled: '已排期', ready: '就绪',
+  running: '运行中', blocked: '受阻', review: '待验收', done: '已完成', archived: '已归档',
+});
 /** 允许拖拽改派的状态。running 要先 reclaim 才能换人，done / archived 再派发没有意义。 */
 const KB_DRAGGABLE = Object.freeze(['triage', 'todo', 'scheduled', 'ready', 'blocked', 'review']);
 /** 指针拖拽的共享状态（一次只有一个拖动中的卡片）。 */
@@ -4980,13 +5006,17 @@ const KB = {
   epoch: 0, detailEpoch: 0, timer: null, busy: false,
   board: null, overview: null, detail: null, detailId: '',
   lastEventId: 0, error: '',
-  view: 'grid', status: '', modal: '', modalKey: '', modalBusy: false,
+  // 默认列视图：5 组固定成列，一屏看清全貌；网格视图留给窄主区（⋯ 菜单里切）
+  view: 'cols', status: '', modal: '', modalKey: '', modalBusy: false,
   dispatch: { open: false, busy: false, epoch: 0 },
   filters: { q: '', assignee: '', tenant: '', archived: false, board: '' },
 };
 let kbSelectSig = '';
 
-const kbApi = () => (hasNative && window.hermesAPI ? window.hermesAPI : null);
+/* 看板 API 的取用口。不再用 hasNative 拦：Demo 模式的 mock-bridge 已经实现了
+   全部看板方法与演示数据，能不能用应该按「这个桥有没有 kanbanBoard」判断，
+   否则浏览器预览一打开就是「Demo 模式没有本地看板数据」。 */
+const kbApi = () => (api && typeof api.kanbanBoard === 'function' ? api : null);
 function kbParams() {
   const f = KB.filters;
   const p = { includeArchived: !!f.archived };
@@ -5052,7 +5082,7 @@ async function kanbanLoad(initial) {
   KB.busy = true;
   kbSetLive('读取中…', '');
   if (!a || !a.kanbanBoard || !a.kanbanOverview) {
-    KB.error = '此页需要在 Hermes 桌面端运行（Demo 模式没有本地看板数据）';
+    KB.error = '看板接口不可用：当前运行环境没有暴露 kanbanBoard（桌面端请确认后端已启动）';
     KB.busy = false;
     if (my === KB.epoch) { renderKanban(); kbSetLive('不可用', 'err'); }
     return;
@@ -5081,6 +5111,21 @@ async function kanbanLoad(initial) {
   }
 }
 
+/* ---- 「⋯」菜单：新建看板 / 手动派发 / 切换视图 / 显示已归档 ----
+   这几个都是低频入口，放常驻按钮会把首屏挤掉；菜单只是一个 absolute 面板，
+   不新增通道、不改任何写路径。 */
+function kbMoreToggle(open) {
+  const btn = $('#kb-more'), menu = $('#kb-more-menu');
+  const on = !!open;
+  if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  if (menu) menu.hidden = !on;
+  if (on) kbMoreSync();
+}
+/** 视图项文字跟着当前视图走（菜单里只有一项，不另做两态按钮）。 */
+function kbMoreSync() {
+  const item = document.querySelector('#kb-more-menu [data-kb-more="view"]');
+  if (item) item.textContent = KB.view === 'grid' ? '切换到列视图' : '切换到网格视图';
+}
 function showKanban(force) {
   const page = $('#kanban-page');
   if (!page) return;
@@ -5102,6 +5147,7 @@ function closeKanbanPage() {
   const page = $('#kanban-page');
   if (!page) return;
   if (KB.modal) kbModalClose();
+  kbMoreToggle(false);
   kbDispatchToggle(false);
   kbDragReset();
   kbDockMsg('', '');
@@ -5266,19 +5312,23 @@ function kbDockHint(text) {
   const el = $('#kb-dock-hint');
   if (el && el.textContent !== text) el.textContent = text;
 }
-/** 投放区状态文字：成功提示 8s 自动退场，错误留 12s 够看清；关页时一并清掉。 */
+/** 投放区状态文字：成功提示 8s 自动退场，错误留 12s 够看清；关页时一并清掉。
+ *  dock 现在是浮层，这一条也跟着浮动 —— 由 #kb-dock-status 的 .on 控制显隐，
+ *  不能靠「有没有文字」：空 span 也会占位，浮层会在底部留一条空白。 */
 let kbDockMsgTimer = null;
 function kbDockMsg(text, cls) {
-  const el = $('#kb-dock-msg');
+  const el = $('#kb-dock-msg'), box = $('#kb-dock-status');
   if (!el) return;
   if (kbDockMsgTimer) { clearTimeout(kbDockMsgTimer); kbDockMsgTimer = null; }
   el.textContent = text || '';
   el.className = 'kb-dock-msg' + (cls ? ' ' + cls : '');
+  if (box) box.classList.toggle('on', !!text);
   if (text) {
     kbDockMsgTimer = setTimeout(() => {
       kbDockMsgTimer = null;
       el.textContent = '';
       el.className = 'kb-dock-msg';
+      if (box) box.classList.remove('on');
     }, cls === 'err' ? 12000 : 8000);
   }
 }
@@ -5533,13 +5583,9 @@ async function kbDispatchTaskNow(taskId, profile) {
   try {
     const r = await a.kanbanDispatchTask(taskId, { board: KB.filters.board || '' });
     if (!r || !r.ok) { kbDockMsg('派发失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
-    if (r.dispatched) {
-      kbDockMsg(`worker 已启动：${taskId} → ${profile}`, 'on');
-      toast(`已为 ${profile} 启动 worker：${taskId}`, 2200);
-    } else {
-      kbDockMsg(r.reason || '调度器本次没有启动 worker', 'err');
-      toast('未启动 worker：' + (r.reason || '调度器未选中这张卡片'), 3600);
-    }
+    // 只在投放区状态条上说，不再叠一条 toast：两者都是底部居中，会互相压住
+    if (r.dispatched) kbDockMsg(`worker 已启动：${taskId} → ${profile}`, 'on');
+    else kbDockMsg(r.reason || '调度器本次没有启动 worker', 'err');
     await kanbanLoad(true); // 写后回读：running 卡片与活跃 worker 都会变
     if (KB.dispatch.open) kbDispatchLoadWorkers();
   } catch (e) {
@@ -5560,6 +5606,8 @@ function kbCardHtml(t, colName) {
   const st = String(colName || t.status || '');
   const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
   const pri = Number(t.priority) || 0;
+  // 细粒度状态 chip：归组后仍要能分辨 triage / scheduled / review，CLI 原值留在 title
+  if (st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
   if (pri) chips.push(`<span class="kb-chip pri">P${pri}</span>`);
   if (t.assignee) chips.push(kbAssigneeChip(t.assignee));
   if (t.tenant) chips.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
@@ -5581,51 +5629,67 @@ function kbCardHtml(t, colName) {
   </button>`;
 }
 
-/** 每个状态的原始卡片数与过滤后卡片数。 */
-function kbColumns() {
-  const cols = KB.board && Array.isArray(KB.board.columns) ? KB.board.columns : [];
-  return cols.map((c) => {
-    const all = Array.isArray(c.tasks) ? c.tasks : [];
-    return { name: String(c.name || ''), all, tasks: all.filter(kbMatch) };
+/** 按归组摊平当前看板：每组带原始条数 all 与过滤后条数 tasks。
+ *  计数（chip 上的数字）恒用 all，不随搜索 / 受让人筛选变化 —— 否则筛完就失去全局感。 */
+function kbGroups() {
+  const by = new Map();
+  const cols = (KB.board && Array.isArray(KB.board.columns)) ? KB.board.columns : [];
+  for (const c of cols) {
+    const name = String((c && c.name) || '');
+    if (!name) continue;
+    const list = Array.isArray(c.tasks) ? c.tasks : [];
+    by.set(name, list.map((t) => (t && typeof t === 'object' && !t.status ? { ...t, status: name } : t)));
+  }
+  const defs = KB.filters.archived ? [...KB_GROUPS, KB_GROUP_ARCHIVED] : [...KB_GROUPS];
+  return defs.map((g) => {
+    const all = g.statuses.reduce((acc, s) => acc.concat(by.get(s) || []), []);
+    return { key: g.key, label: g.label, hint: g.hint, dot: g.dot, all, tasks: all.filter(kbMatch) };
   });
 }
-
-/** 顶部统计条：数字全部走 Number()，服务端文本不进 innerHTML。 */
-function renderKanbanStats() {
-  const host = $('#kb-stats');
-  if (!host) return;
-  const cols = kbColumns();
-  const total = cols.reduce((n, c) => n + c.all.length, 0);
-  const active = cols.filter((c) => c.name !== 'done' && c.name !== 'archived')
-    .reduce((n, c) => n + c.all.length, 0);
-  const done = cols.filter((c) => c.name === 'done').reduce((n, c) => n + c.all.length, 0);
-  const running = cols.filter((c) => c.name === 'running' || c.name === 'ready' || c.name === 'blocked')
-    .reduce((n, c) => n + c.all.length, 0);
+/** 页头只写两样：当前看板名 + 一行概览。原来那排统计卡会把首屏挤掉，
+ *  各组条数已经在筛选 chip 上各出现一次，这里只留「总量 + 进行中」。 */
+function renderKanbanHead() {
+  const nameEl = $('#kb-board-name'), statEl = $('#kb-head-stat'), sep = $('.kb-meta-sep');
   const o = KB.overview || {};
-  const boardCount = Array.isArray(o.boards) ? o.boards.length : 0;
-  const cells = [
-    { label: '全部任务', value: total, note: '当前看板', cls: '' },
-    { label: '进行中', value: active, note: `${running} 张在队列/执行`, cls: active ? 'hot' : '' },
-    { label: '已完成', value: done, note: 'done 状态', cls: done ? 'good' : '' },
-    { label: '看板', value: boardCount, note: o.currentBoard ? `当前 ${String(o.currentBoard).slice(0, 22)}` : 'CLI 多看板', cls: '' },
-  ];
-  host.innerHTML = cells.map((c) => `<div class="kb-stat ${c.cls}"><div class="kb-stat-label">${esc(c.label)}</div>
-    <div class="kb-stat-value">${Number(c.value) || 0}</div><div class="kb-stat-note">${esc(c.note)}</div></div>`).join('');
+  const name = String(o.currentBoard || KB.filters.board || '当前看板');
+  if (nameEl) nameEl.textContent = name;
+  if (!statEl) return;
+  let text = '';
+  if (!KB.board) text = KB.busy ? '读取中…' : '';
+  else {
+    const groups = kbGroups();
+    const total = groups.reduce((n, g) => n + g.all.length, 0);
+    const running = (groups.find((g) => g.key === 'running') || { all: [] }).all.length;
+    text = total ? (running ? `${total} 张任务 · ${running} 张进行中` : `${total} 张任务`) : '暂无任务';
+  }
+  statEl.textContent = text;
+  // 统计为空时连分隔符一起收起，否则页头会挂一个孤零零的「·」
+  if (sep) sep.hidden = !text;
 }
 
-/** 状态 chip：点一次只看该状态，再点回全部；重建后把焦点还给同一个 chip。 */
+/** 秒数 → 人话时长（「最早就绪已等 12 分钟」用）。 */
+function kbAge(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  if (s < 60) return s + ' 秒';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟';
+  if (s < 86400) return Math.floor(s / 3600) + ' 小时';
+  return Math.floor(s / 86400) + ' 天';
+}
+
+/** 分组 chip：点一次只看该组，再点回全部。数字恒为该组的全局条数（不随筛选变），
+ *  这样筛完还能看见「别处还有多少」，不会失去全局感。重建后把焦点还给同一个 chip。 */
 function renderKanbanStatusbar() {
   const host = $('#kb-statusbar');
   if (!host) return;
   const focused = document.activeElement && document.activeElement.getAttribute
     ? document.activeElement.getAttribute('data-kb-status') : null;
-  const cols = kbColumns();
-  const all = cols.reduce((n, c) => n + c.tasks.length, 0);
+  const groups = kbGroups();
+  const all = groups.reduce((n, g) => n + g.all.length, 0);
   let html = `<button class="kb-status-chip${KB.status ? '' : ' on'}" type="button" data-kb-status="" aria-pressed="${KB.status ? 'false' : 'true'}">全部 <span class="kb-sc-num">${all}</span></button>`;
-  html += cols.map((c) => `<button class="kb-status-chip${KB.status === c.name ? ' on' : ''}" type="button"
-      data-kb-status="${esc(c.name)}" data-status="${esc(c.name)}"
-      aria-pressed="${KB.status === c.name ? 'true' : 'false'}" title="${esc(KB_COLUMN_HINT[c.name] || c.name)}">
-      <span class="kb-sc-dot"></span>${esc(c.name)} <span class="kb-sc-num">${c.tasks.length}</span></button>`).join('');
+  html += groups.map((g) => `<button class="kb-status-chip${KB.status === g.key ? ' on' : ''}" type="button"
+      data-kb-status="${esc(g.key)}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}"
+      aria-pressed="${KB.status === g.key ? 'true' : 'false'}" title="${esc(g.hint)}">
+      <span class="kb-sc-dot"></span>${esc(g.label)} <span class="kb-sc-num">${g.all.length}</span></button>`).join('');
   host.innerHTML = html;
   if (focused !== null) {
     const back = host.querySelector(`[data-kb-status="${focused}"]`);
@@ -5633,26 +5697,28 @@ function renderKanbanStatusbar() {
   }
 }
 
-/** 主体渲染：网格视图只画有卡片的分组；列视图画所有列（空列水平收窄）。 */
+/** 主体渲染。默认列视图：固定 5 组，组内纵向滚动；网格视图只画有卡片的分组。
+ *  列尾的「＋ 添加任务」只给待办 / 就绪 —— 后端 CREATE_STATUSES 只认 triage 与 ready，
+ *  在其余列放这个按钮只会建出一张落在收集箱的卡，文案会骗人。 */
 function renderKanbanBody() {
-  const groups = $('#kb-groups'), colsHost = $('#kb-columns');
-  const cols = kbColumns();
-  const wanted = KB.status ? cols.filter((c) => c.name === KB.status) : cols;
+  const groupsHost = $('#kb-groups'), colsHost = $('#kb-columns');
+  const groups = kbGroups();
+  const wanted = KB.status ? groups.filter((g) => g.key === KB.status) : groups;
   let shown = 0, total = 0;
-  cols.forEach((c) => { total += c.all.length; });
-  wanted.forEach((c) => { shown += c.tasks.length; });
+  groups.forEach((g) => { total += g.all.length; });
+  wanted.forEach((g) => { shown += g.tasks.length; });
 
   const isGrid = KB.view === 'grid';
-  if (groups) groups.hidden = !isGrid;
+  if (groupsHost) groupsHost.hidden = !isGrid;
   if (colsHost) colsHost.hidden = isGrid;
 
   if (isGrid) {
-    const visible = wanted.filter((c) => c.tasks.length > 0 || KB.status);
-    const body = visible.map((c) => `<section class="kb-group" data-status="${esc(c.name)}">
-      <div class="kb-group-head"><span class="kb-group-dot"></span><span class="kb-group-name">${esc(c.name)}</span>
-        <span class="kb-group-num">${c.tasks.length}${c.tasks.length !== c.all.length ? ' / ' + c.all.length : ''} 张</span>
+    const visible = wanted.filter((g) => g.tasks.length > 0 || KB.status);
+    const body = visible.map((g) => `<section class="kb-group" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}">
+      <div class="kb-group-head" title="${esc(g.hint)}"><span class="kb-group-dot"></span><span class="kb-group-name">${esc(g.label)}</span>
+        <span class="kb-group-num">${g.tasks.length}${g.tasks.length !== g.all.length ? ' / ' + g.all.length : ''} 张</span>
         <span class="kb-group-rule"></span></div>
-      <div class="kb-group-cards">${c.tasks.length ? c.tasks.map((t) => kbCardHtml(t, c.name)).join('')
+      <div class="kb-group-cards">${g.tasks.length ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')
         : `<div class="kb-col-empty">${KB.filters.q || KB.filters.assignee ? '没有匹配的任务' : '暂无任务'}</div>`}</div>
     </section>`).join('');
     const empty = !total
@@ -5660,55 +5726,54 @@ function renderKanbanBody() {
            <p>任务由 CLI 的 hermes kanban create、agent 的 kanban_* 工具或这里的新建按钮创建；数据落在同一份 kanban.db，终端与 Dashboard 立即可见。</p>
            <button class="kb-btn primary" type="button" data-kb-new="task">＋ 新建第一个任务</button></div>`
       : shown === 0
-        ? `<div class="kb-empty-state"><h2>没有匹配的任务</h2><p>试试清空搜索、切换状态或放宽受让人筛选。</p></div>`
+        ? `<div class="kb-empty-state"><h2>没有匹配的任务</h2><p>试试清空搜索、切换分组或放宽受让人筛选。</p></div>`
         : '';
-    // 常驻的虚线新建卡：任务少时填补留白，也让「创建」始终有个就近入口
     const addCard = (!KB.status && !empty)
       ? `<div class="kb-add-row"><button class="kb-add-card" type="button" data-kb-new="task">＋ 新建任务<span>默认落在收集箱 triage · 不派发</span></button></div>`
       : '';
-    if (groups) groups.innerHTML = body + addCard + empty;
+    if (groupsHost) groupsHost.innerHTML = body + addCard + empty;
     if (colsHost) colsHost.innerHTML = '';
   } else {
-    const body = wanted.map((c) => {
-      const hint = esc(KB_COLUMN_HINT[c.name] || '暂无任务');
-      const collapsed = c.tasks.length === 0 ? ' is-empty' : '';
-      return `<div class="kb-col${collapsed}" data-status="${esc(c.name)}">
-        <div class="kb-col-head" title="${esc(c.name)} · ${c.tasks.length} 张卡片"><span class="kb-col-dot"></span><span class="kb-col-name">${esc(c.name)}</span><span class="kb-col-num">${c.tasks.length}${c.tasks.length !== c.all.length ? '/' + c.all.length : ''}</span></div>
-        <div class="kb-col-body">${c.tasks.length
-          ? c.tasks.map((t) => kbCardHtml(t, c.name)).join('')
-          : `<div class="kb-col-empty" title="${hint}"><b>${c.all.length ? '无匹配' : '暂无任务'}</b><span class="kb-hint-long">${hint}</span></div>`}</div>
+    const empty = !total
+      ? `<div class="kb-empty-state"><h2>这个看板还没有任务</h2>
+           <p>任务由 CLI 的 hermes kanban create、agent 的 kanban_* 工具或这里的新建按钮创建；数据落在同一份 kanban.db，终端与 Dashboard 立即可见。</p>
+           <button class="kb-btn primary" type="button" data-kb-new="task">＋ 新建第一个任务</button></div>`
+      : '';
+    const body = wanted.map((g) => {
+      const collapsed = g.tasks.length === 0 ? ' is-empty' : '';
+      const canAdd = g.key === 'todo' || g.key === 'ready';
+      const addStatus = g.key === 'ready' ? 'ready' : 'triage';
+      const add = canAdd
+        ? `<button class="kb-add-col" type="button" data-kb-new="task" data-kb-new-status="${addStatus}"
+             title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：不会被自动派发'}">＋ 添加任务</button>`
+        : '';
+      return `<div class="kb-col${collapsed}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
+        <div class="kb-col-head"><span class="kb-col-dot"></span><span class="kb-col-name">${esc(g.label)}</span>
+          <span class="kb-col-num">${g.tasks.length}${g.tasks.length !== g.all.length ? '/' + g.all.length : ''}</span></div>
+        <div class="kb-col-body">${g.tasks.length
+          ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')
+          : `<div class="kb-col-empty"><b>${g.all.length ? '无匹配' : '暂无任务'}</b><span class="kb-hint-long">${esc(g.hint)}</span></div>`}${add}</div>
       </div>`;
     }).join('');
-    if (colsHost) colsHost.innerHTML = body;
-    if (groups) groups.innerHTML = '';
+    if (colsHost) colsHost.innerHTML = body + empty;
+    if (groupsHost) groupsHost.innerHTML = '';
   }
+  // 只有筛选生效时才出数字：平时任务数只在分组 chip 上出现一次
   const count = $('#kb-count');
-  if (count) count.textContent = cols.length ? `${shown} / ${total} 张卡片` : '';
-  const g = $('#kb-view-grid'), c = $('#kb-view-cols');
-  if (g) g.classList.toggle('active', isGrid);
-  if (c) c.classList.toggle('active', !isGrid);
+  if (count) count.textContent = (shown !== total && total) ? `筛选出 ${shown} / ${total} 张` : '';
   return { shown, total };
 }
 
 function renderKanban() {
   kbSyncSelects();
-  renderKanbanStats();
+  renderKanbanHead();
   renderKanbanStatusbar();
   renderKanbanDock();
-  const { total } = renderKanbanBody() || { total: 0 };
-  const msg = $('#kb-message'), sum = $('#kb-summary');
+  renderKanbanBody();
+  // 只保留错误条：「没有进行中的任务」这类提示交给列本身表达，
+  // 再挂一条横幅等于把首屏又挤掉一行（五列的计数已经说得很清楚）。
+  const msg = $('#kb-message');
   if (msg) { msg.hidden = !KB.error; if (KB.error) msg.textContent = KB.error; }
-  if (!sum) return;
-  if (KB.error || !KB.board) { sum.hidden = true; return; }
-  const cols = kbColumns();
-  const active = cols.filter((c) => c.name !== 'done' && c.name !== 'archived')
-    .reduce((n, c) => n + c.all.length, 0);
-  if (active === 0 && total > 0) {
-    sum.hidden = false;
-    sum.textContent = '当前没有进行中的任务，卡片都已完成或归档。这里可直接新建任务，再把卡片拖到上方 worker 上指派并派发；换列仍请用 CLI 或 Dashboard。';
-    return;
-  }
-  sum.hidden = true;
 }
 
 /* ---- 任务详情抽屉 ---- */
@@ -5746,14 +5811,18 @@ async function openKanbanTask(id, silent) {
 }
 function kbdRow(label, value, time) {
   if (!value) return '';
-  return `<li class="kbd-row">${time ? `<time>${esc(time)}</time>` : ''}<b>${esc(label)}</b> ${esc(clip(String(value), 800))}</li>`;
+  // 事件 payload 是对象：直接 String() 会拍成 "[object Object]"，日志就没意义了
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return `<li class="kbd-row">${time ? `<time>${esc(time)}</time>` : ''}<b>${esc(label)}</b> ${esc(clip(text, 800))}</li>`;
 }
 function renderKanbanDetail(d) {
   const body = $('#kb-drawer-body');
   if (!body) return;
   const t = d.task || {};
   const meta = [];
-  if (t.status) meta.push(`<span class="kb-chip">${esc(t.status)}</span>`);
+  // 与卡片一致：显示归组后的中文状态，CLI 原值留在 title 里，免得同一个 triage
+  // 在卡片上叫「收集箱」、在抽屉里叫「triage」
+  if (t.status) meta.push(`<span class="kb-chip st" title="CLI 状态：${esc(t.status)}">${esc(KB_STATUS_LABEL[t.status] || t.status)}</span>`);
   if (Number(t.priority)) meta.push(`<span class="kb-chip pri">P${Number(t.priority)}</span>`);
   if (t.assignee) meta.push(kbAssigneeChip(t.assignee));
   if (t.tenant) meta.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
@@ -5781,12 +5850,24 @@ function renderKanbanDetail(d) {
   const dispatchAct = canSubmit
     ? `<div class="kbd-actions" id="kbd-actions"><button class="kb-btn kb-btn-accent" type="button" data-kb-submit="${esc(t.id)}">⚡ 提交派发</button>
         <span>推进到 ready，等待调度器认领</span></div>` : '';
+  // 改派：拖拽的等价入口（拖拽仍在，但抽屉里要有不靠鼠标的路径）。
+  // done / archived 再改派没有意义，直接不显示。
+  const canReassign = canDelete && !['done', 'archived'].includes(String(t.status || ''));
+  const reassignAct = canReassign
+    ? `<div class="kbd-section" id="kbd-reassign"><h3>改派受让人</h3>
+        <div class="kbd-reassign">
+          <hm-select id="kbd-assignee" class="ui-select" aria-label="改派受让人"></hm-select>
+          <button class="kb-btn" type="button" data-kb-reassign="${esc(t.id)}">保存改派</button>
+        </div>
+        <div class="kbd-reassign-note" id="kbd-reassign-note">受让人 = Hermes profile 名，派发时用 <code>hermes -p &lt;名字&gt;</code> 启动 worker；留空表示取消指派。</div>
+      </div>` : '';
 
   body.innerHTML = `
     <div class="kbd-id">${esc(t.id || '')}</div>
     <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
     <div class="kbd-meta">${meta.join('')}</div>
     ${dispatchAct}
+    ${reassignAct}
     ${jump}
     ${t.body ? `<div class="kbd-section"><h3>描述</h3><pre class="kbd-text">${esc(clip(t.body, 12000))}</pre></div>` : ''}
     ${t.result || t.latest_summary ? `<div class="kbd-section"><h3>结果 / 交接</h3><pre class="kbd-text">${esc(clip(t.result || t.latest_summary, 12000))}</pre></div>` : ''}
@@ -5800,6 +5881,49 @@ function renderKanbanDetail(d) {
     <div class="kbd-section"><h3>最近事件</h3>
       ${events ? `<ul class="kbd-list">${events}</ul>` : '<div class="kbd-empty">暂无事件</div>'}</div>
     ${canDelete ? `<div class="kbd-danger" id="kbd-danger"><button class="kb-btn danger" type="button" data-kb-delete="${esc(t.id)}">删除任务</button></div>` : ''}`;
+
+  // 改派下拉的候选：磁盘上真实存在的 profile 优先；当前受让人即使不在清单里也要能显示出来
+  const sel = $('#kbd-assignee');
+  if (sel && canReassign) {
+    const cur = String(t.assignee || '');
+    const names = [...new Set([...(cur ? [cur] : []), ...[...kbProfileSet()].sort()])];
+    const items = names.map((n) => ({
+      value: n,
+      label: kbProfileSet().has(n) || !kbProfileSet().size ? n : `${n}（非 profile）`,
+    }));
+    if (sel.setOptions) sel.setOptions(items, cur ? '取消指派（留空）' : '未指派 · 选择 profile');
+    if (cur) sel.value = cur;
+  }
+}
+/** 抽屉里的「保存改派」：只写 assignee，不推进状态（推进 ready 走「提交派发」）。 */
+async function kbReassignTask(taskId, host) {
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(String(taskId || ''))) return;
+  const sel = $('#kbd-assignee'), note = $('#kbd-reassign-note');
+  const name = sel ? String(sel.value || '').trim() : '';
+  const say = (text, bad) => {
+    if (!note) return;
+    note.textContent = text;
+    note.classList.toggle('warn', !!bad);
+  };
+  if (name && !KB_ASSIGNEE_RE.test(name)) {
+    say('受让人必须是合法的 profile 名（字母或数字开头，可含 . _ -）', true);
+    return;
+  }
+  const a = kbApi();
+  if (!a || !a.kanbanReassign) { say('此页需要桌面端才能改派', true); return; }
+  const btn = host && host.querySelector('[data-kb-reassign]');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await a.kanbanReassign(taskId, { assignee: name, board: KB.filters.board || '' });
+    if (!r || !r.ok) { say('改派失败：' + ((r && r.error) || '未知错误'), true); return; }
+    say(name ? `已改派给 ${name}` : '已取消指派', false);
+    await kanbanLoad(true);          // 写后回读：卡片受让人 chip 跟着变
+    await openKanbanTask(taskId, true); // 抽屉保持打开，内容刷新
+  } catch (e) {
+    say('改派失败：' + ((e && e.message) || '未知错误'), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 function kbJumpToSession(sid) {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(sid || ''))) return;
@@ -5879,13 +6003,18 @@ function kbRenderCapacity() {
   }
 }
 function kbDispatchToggle(show) {
-  const panel = $('#kb-dispatch-panel'), btn = $('#kb-dispatch-toggle');
+  const panel = $('#kb-dispatch-panel');
   const on = !!show;
   KB.dispatch.open = on;
   KB.dispatch.epoch += 1; // 收起时作废所有在途响应
   kbDpClearConfirm();
   if (panel) panel.hidden = !on;
-  if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  // 菜单项是唯一的入口（页头按钮已收进「⋯」），它的文字跟着开合状态走
+  const item = document.querySelector('#kb-more-menu [data-kb-more="dispatch"]');
+  if (item) {
+    item.setAttribute('aria-expanded', on ? 'true' : 'false');
+    item.textContent = on ? '收起派发控制台' : '手动派发控制台';
+  }
   if (on) { kbDpState('控制台已就绪', ''); kbDispatchLoadWorkers(); kbRenderCapacity(); }
   else { kbDpState('', ''); KB.dispatch.busy = false; }
 }
@@ -6054,7 +6183,7 @@ function kbSetBackgroundInert(on) {
   // 弹窗在 #frame 内，不能用 frame.inert，否则会把自己也锁住；
   // 只把看板主体移出交互树，遮罩与弹窗保持可聚焦。
   const sels = ['.kb-head', '.kb-stats', '.kb-dispatch', '.kb-statusbar', '.kb-toolbar', '.kb-dock',
-    '.kb-dock-confirm', '.kb-scroll', '.kb-drawer', '.kb-drawer-mask', '.kb-summary', '.kb-message'];
+    '.kb-dock-confirm', '.kb-scroll', '.kb-drawer', '.kb-drawer-mask', '.kb-message'];
   const wrap = $('#kanban-page .kb-wrap');
   if (!wrap) return;
   sels.forEach((s) => wrap.querySelectorAll(s).forEach((el) => { el.inert = on; }));
@@ -6075,7 +6204,7 @@ function kbSyncStatusNote() {
     ? '就绪状态可能被运行中的调度器立即认领并派发给 agent 执行，请确认后再创建。'
     : '默认进入收集箱，不会被调度器自动派发给 agent。';
 }
-function kbModalOpen(kind) {
+function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
   if (!modal || !mask || (kind !== 'task' && kind !== 'board')) return;
   KB.modal = kind;
@@ -6088,6 +6217,12 @@ function kbModalOpen(kind) {
     taskForm.querySelectorAll('hm-select').forEach((el) => { if (el.reset) el.reset(); });
     taskForm.hidden = kind !== 'task';
   }
+  // 列尾「＋ 添加任务」带过来的起始状态。后端只认 triage / ready，其它值一律忽略，
+  // 免得界面暗示「能直接建到进行中 / 受阻 / 已完成」。
+  const preset = (kind === 'task' && (presetStatus === 'ready' || presetStatus === 'triage'))
+    ? presetStatus : '';
+  const statusSel = $('#kb-f-status');
+  if (preset && statusSel) statusSel.value = preset;
   if (boardForm) { boardForm.reset(); boardForm.hidden = kind !== 'board'; }
   kbSyncStatusNote();
   const title = $('#kb-modal-title');
@@ -6174,9 +6309,33 @@ function setupKanban() {
   const dclose = $('#kb-drawer-close'); if (dclose) dclose.onclick = () => closeKanbanDrawer();
   const mask = $('#kb-drawer-mask'); if (mask) mask.onclick = () => closeKanbanDrawer();
 
-  // 派发控制台：默认 dry-run；真派发走 opConfirm 二次确认
-  const dpToggle = $('#kb-dispatch-toggle');
-  if (dpToggle) dpToggle.onclick = () => kbDispatchToggle(!KB.dispatch.open);
+  // 「⋯」菜单：新建看板 / 手动派发 / 切换视图 / 显示已归档
+  const moreBtn = $('#kb-more'), moreMenu = $('#kb-more-menu');
+  if (moreBtn) moreBtn.onclick = () => kbMoreToggle(moreMenu ? moreMenu.hidden : true);
+  if (moreMenu) {
+    moreMenu.addEventListener('click', (e) => {
+      const item = e.target.closest && e.target.closest('[data-kb-more]');
+      if (!item) return;
+      const what = item.getAttribute('data-kb-more');
+      // 勾选框那一项不关菜单：用户可能想连着看两个结果
+      if (what === 'board') { kbMoreToggle(false); kbModalOpen('board'); return; }
+      if (what === 'dispatch') { kbMoreToggle(false); kbDispatchToggle(!KB.dispatch.open); return; }
+      if (what === 'view') {
+        KB.view = KB.view === 'grid' ? 'cols' : 'grid';
+        kbMoreSync(); renderKanbanBody(); return;
+      }
+    });
+    // 点菜单外面收起（捕获阶段：免得页面里的按钮先响应再收菜单）
+    document.addEventListener('pointerdown', (e) => {
+      if (!moreMenu || moreMenu.hidden) return;
+      if (moreMenu.contains(e.target)) return;
+      if (moreBtn && moreBtn.contains(e.target)) return;
+      kbMoreToggle(false);
+    }, true);
+  }
+
+  // 派发控制台：默认 dry-run；真派发走 opConfirm 二次确认。
+  // 入口只有一个 —— 「⋯」菜单里的「手动派发控制台」，这里不再绑页头按钮。
   const dpClose = $('#kb-dp-close'); if (dpClose) dpClose.onclick = () => kbDispatchToggle(false);
   const dpPreview = $('#kb-dp-preview'); if (dpPreview) dpPreview.onclick = () => kbDispatchRun(true);
   const dpRun = $('#kb-dp-run'); if (dpRun) dpRun.onclick = () => kbDispatchConfirm();
@@ -6189,7 +6348,6 @@ function setupKanban() {
   }
 
   const newTask = $('#kb-new-task'); if (newTask) newTask.onclick = () => kbModalOpen('task');
-  const newBoard = $('#kb-new-board'); if (newBoard) newBoard.onclick = () => kbModalOpen('board');
   const mclose = $('#kb-modal-close'); if (mclose) mclose.onclick = () => kbModalClose();
   const mcancel = $('#kb-modal-cancel'); if (mcancel) mcancel.onclick = () => kbModalClose();
   const mmask = $('#kb-modal-mask'); if (mmask) mmask.onclick = () => kbModalClose();
@@ -6217,8 +6375,7 @@ function setupKanban() {
     form.onsubmit = (e) => { e.preventDefault(); kbModalSubmit(); };
   });
 
-  const viewGrid = $('#kb-view-grid'); if (viewGrid) viewGrid.onclick = () => { KB.view = 'grid'; renderKanbanBody(); };
-  const viewCols = $('#kb-view-cols'); if (viewCols) viewCols.onclick = () => { KB.view = 'cols'; renderKanbanBody(); };
+  // 视图切换与「显示已归档」都在「⋯」菜单里，页面上没有对应的常驻按钮
   const statusbar = $('#kb-statusbar');
   if (statusbar) statusbar.addEventListener('click', (e) => {
     const chip = e.target.closest && e.target.closest('[data-kb-status]');
@@ -6272,7 +6429,7 @@ function setupKanban() {
       // 拖动结束后浏览器补发的 click 要吞掉，否则会顺手打开详情抽屉
       if (KbDrag.suppressClick) { KbDrag.suppressClick = false; return; }
       const n = e.target.closest && e.target.closest('[data-kb-new]');
-      if (n) { kbModalOpen('task'); return; }
+      if (n) { kbModalOpen('task', n.getAttribute('data-kb-new-status') || ''); return; }
       const card = e.target.closest && e.target.closest('[data-kb-task]');
       if (card) openKanbanTask(card.getAttribute('data-kb-task'));
     });
@@ -6303,6 +6460,8 @@ function setupKanban() {
     if (sub) { kbSubmitTask(sub.getAttribute('data-kb-submit'), sub.closest('.kbd-actions') || body); return; }
     const del = e.target.closest && e.target.closest('[data-kb-delete]');
     if (del) { kbDeleteTask(del.getAttribute('data-kb-delete'), del.closest('.kbd-danger')); return; }
+    const re = e.target.closest && e.target.closest('[data-kb-reassign]');
+    if (re) { kbReassignTask(re.getAttribute('data-kb-reassign'), re.closest('.kbd-reassign') || body); return; }
     const t = e.target.closest && e.target.closest('[data-kb-task]');
     if (t) { openKanbanTask(t.getAttribute('data-kb-task')); return; }
     const s = e.target.closest && e.target.closest('[data-kb-session]');

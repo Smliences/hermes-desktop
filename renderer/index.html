@@ -411,20 +411,32 @@
         <div class="kb-wrap">
           <header class="kb-head">
             <div class="kb-head-main">
-              <div class="kb-eyebrow">TASK BOARD · HERMES CLI</div>
               <h1 class="pp-title">看板</h1>
-              <div class="pp-sub">多 Agent 任务队列 · 与终端和 Dashboard 共享同一份数据 · 支持新建、提交派发与手动 tick</div>
+              <!-- 标题右侧只留一行灰字：数据来自同一份 kanban.db，低频说明收进「⋯」 -->
+              <div class="kb-head-meta">
+                <span id="kb-board-name">当前看板</span>
+                <span class="kb-meta-sep" aria-hidden="true">·</span>
+                <span id="kb-head-stat"></span>
+              </div>
             </div>
             <div class="kb-head-actions">
               <button class="kb-btn primary" id="kb-new-task" type="button">＋ 新建任务</button>
-              <button class="kb-btn" id="kb-new-board" type="button">＋ 新建看板</button>
-              <button class="kb-btn kb-btn-accent" id="kb-dispatch-toggle" type="button" aria-expanded="false" aria-controls="kb-dispatch-panel">⚡ 派发</button>
+              <!-- 低频入口收进「⋯」：新建看板 / 手动派发 / 显示已归档 / 切换视图 -->
+              <div class="kb-more-wrap">
+                <button class="pp-icon-btn" id="kb-more" type="button" aria-haspopup="true" aria-expanded="false"
+                  aria-controls="kb-more-menu" title="更多操作" aria-label="更多操作">⋯</button>
+                <div class="kb-more-menu" id="kb-more-menu" role="menu" aria-label="看板更多操作" hidden>
+                  <button class="kb-more-item" type="button" role="menuitem" data-kb-more="board">新建看板…</button>
+                  <button class="kb-more-item" type="button" role="menuitem" data-kb-more="dispatch"
+                    aria-expanded="false" aria-controls="kb-dispatch-panel">手动派发控制台</button>
+                  <button class="kb-more-item" type="button" role="menuitem" data-kb-more="view">切换到网格视图</button>
+                  <label class="kb-more-item is-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
+                </div>
+              </div>
               <button class="pp-icon-btn" id="kb-refresh" title="重新读取看板" aria-label="重新读取看板"><span class="kb-spin" hidden>◠</span><span class="kb-refresh-glyph">↻</span></button>
               <button class="pp-icon-btn pp-close" id="kb-close" title="关闭" aria-label="关闭看板">✕</button>
             </div>
           </header>
-
-          <div class="kb-stats" id="kb-stats"></div>
 
           <!-- 派发控制台：默认收起。试运行是纯读，真派发必须过二次确认卡 -->
           <section class="kb-dispatch" id="kb-dispatch-panel" hidden aria-label="派发控制台">
@@ -461,7 +473,8 @@
             </div>
           </section>
 
-          <div class="kb-statusbar" id="kb-statusbar" role="group" aria-label="按状态筛选"></div>
+          <!-- 分组筛选：统计与筛选合一，chip 上的数字就是该组任务数（恒为全局数，不随筛选变） -->
+          <div class="kb-statusbar" id="kb-statusbar" role="group" aria-label="按分组筛选"></div>
 
           <div class="kb-toolbar">
             <label class="kb-field kb-field-board"><span>看板</span><hm-select id="kb-board" class="ui-select" aria-label="选择看板"><option value="">当前看板</option></hm-select></label>
@@ -471,16 +484,12 @@
             </div>
             <label class="kb-field"><span>受让人</span><hm-select id="kb-assignee" class="ui-select" aria-label="按受让人筛选"><option value="">全部</option></hm-select></label>
             <label class="kb-field"><span>租户</span><hm-select id="kb-tenant" class="ui-select" aria-label="按租户筛选"><option value="">全部</option></hm-select></label>
-            <label class="kb-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
-            <div class="kb-view" role="group" aria-label="切换布局">
-              <button class="kb-view-btn active" id="kb-view-grid" type="button" aria-label="网格视图">网格</button>
-              <button class="kb-view-btn" id="kb-view-cols" type="button" aria-label="列视图">列</button>
-            </div>
             <span class="kb-live" id="kb-live" title="自动刷新状态"><span class="kb-live-dot"></span><span id="kb-live-text">等待数据</span></span>
             <span class="kb-count" id="kb-count"></span>
           </div>
 
-          <!-- worker 投放区：把卡片拖到某个 profile 上 = 改派受让人（+可选立即启动 worker）。
+          <!-- worker 投放区：只在拖动卡片时浮现（position:fixed 浮层，不占首屏）。
+               把卡片拖到某个 profile 上 = 改派受让人（+可选立即启动 worker）。
                受让人就是 Hermes profile 名，派发时调度器用 hermes -p <受让人> 拉起 worker。 -->
           <section class="kb-dock" id="kb-dock" aria-label="拖拽卡片派发给指定 worker">
             <div class="kb-dock-label">
@@ -489,11 +498,10 @@
             </div>
             <div class="kb-dock-workers" id="kb-dock-workers" role="group" aria-label="可派发的 profile"></div>
           </section>
-          <!-- 投放结果单独占一行：留在 dock 里会改宽度 / 撑高，chip 就在指针底下漂移了 -->
-          <div class="kb-dock-status"><span class="kb-dock-msg" id="kb-dock-msg" role="status"></span></div>
+          <!-- 投放结果与二次确认卡也是浮层：留在文档流里会把列高顶掉 -->
+          <div class="kb-dock-status" id="kb-dock-status"><span class="kb-dock-msg" id="kb-dock-msg" role="status"></span></div>
           <div class="kb-dock-confirm" id="kb-dock-confirm"></div>
 
-          <div class="kb-summary" id="kb-summary" hidden></div>
           <div class="kb-message" id="kb-message" hidden></div>
 
           <div class="kb-scroll" id="kb-scroll">
