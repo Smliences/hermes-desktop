@@ -1443,6 +1443,34 @@ t('球页面每个 class 都有样式规则（否则静默退回 14px 深色正�
   assert.deepStrictEqual(missing, [], 'CSS 缺少：' + missing.join(', '));
 });
 
+t('就绪态亮绿环（呼吸），且外投影必须用 drop-shadow', () => {
+  // 1) 就绪要有可见信号：静息态等于「看不出后端连上没连上」
+  assert.ok(orbHtmlSrc.includes('class="orb-ready"'), '球页面缺少就绪环节点');
+  assert.ok(/body\[data-state="idle"\] \.orb-ready \{[^}]*animation: orb-breathe/.test(orbCssSrc),
+    '就绪环没有呼吸动画');
+  assert.ok(/@keyframes orb-breathe/.test(orbCssSrc), '缺少呼吸关键帧');
+  assert.ok(/--orb-ready: #[0-9a-f]{6}/i.test(orbCssSrc), '缺少就绪环颜色 token');
+  // 与忙碌态的橙弧必须形状不同，否则两者会看混
+  const ring = (orbCssSrc.match(/\.orb-ring \{[^}]*\}/) || [''])[0];
+  assert.ok(/inset: -5px/.test(ring), '忙碌弧的半径应与就绪环错开');
+  assert.ok(/inset: -3px/.test((orbCssSrc.match(/\.orb-ready \{[^}]*\}/) || [''])[0]),
+    '就绪环应贴在球面外侧 3px，不要和忙碌弧同半径');
+  // 减少动态效果时呼吸要定格，不能直接消失
+  const rm = orbCssSrc.slice(orbCssSrc.indexOf('prefers-reduced-motion'));
+  assert.ok(/\.orb-ready/.test(rm) && /body\[data-state="idle"\] \.orb-ready \{[^}]*opacity/.test(rm),
+    '减少动态效果下就绪环没有静态兜底');
+
+  // 2) 外投影不能落回 box-shadow：窗口是 68px 方盒，box-shadow 按方盒绘制，
+  //    模糊超出球外 8px 余量就被裁成一块方形暗斑 —— 用户看到的就是「球下面一个方托盘」。
+  const ball = (orbCssSrc.match(/\.orb-ball \{[^}]*\}/) || [''])[0];
+  assert.ok(/filter: drop-shadow\(/.test(ball), '球的外投影必须用 drop-shadow（沿圆形轮廓扩散）');
+  const outerShadows = (ball.match(/box-shadow:([^;]+);/) || [, ''])[1]
+    .split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean)
+    .filter((s) => !s.startsWith('inset'));
+  assert.deepStrictEqual(outerShadows, [], 'box-shadow 里又出现外投影，会裁出方形底：' + outerShadows.join(' | '));
+  assert.ok(!/0 5px 14px rgba\(0, 0, 0, 0\.42\)/.test(orbCssSrc), '旧的方形外投影值仍在');
+});
+
 t('拖动用指针事件自己算坐标（透明窗口上 app-region:drag 会吞掉 click）', () => {
   assert.ok(/pointerdown/.test(orbJsSrc) && /pointermove/.test(orbJsSrc), '未用指针事件');
   assert.ok(!/-webkit-app-region/.test(orbCssSrc), '不要用 app-region: drag');
@@ -2551,6 +2579,42 @@ t('5 列自适应：列宽恒等分，空列不许抢宽度', () => {
   // 空列曾写成 flex: 0 0 132px，结果「只有已完成有卡」时那一列吃掉其余四列的宽度
   const emptyRule = (kbCss.match(/\.kb-col\.is-empty \{[^}]*\}/) || [''])[0];
   assert.ok(!/flex:|min-width:|width:/.test(emptyRule), '空列不得单独指定宽度，五列必须等分');
+});
+
+t('卡片只留有色语义 chip，弱信息合成一行灰字', () => {
+  // 列宽 160px 是常态：状态（列头已写）、评论数、子任务、时间各占一个 chip，
+  // 会折成两三行小方块，一张卡大半面积在做噪声。状态改由列头承担，
+  // 其余弱信息合并进 .kb-card-foot。
+  const card = kbAppSrc.slice(kbAppSrc.indexOf('function kbCardHtml('), kbAppSrc.indexOf('function kbGroups('));
+  assert.ok(card.includes('kb-card-foot'), '卡片缺少弱信息行');
+  assert.ok(!/kb-chip">\$\{[^}]*评论/.test(card), '评论数不该再单独占一个 chip');
+  assert.ok(!/kb-chip">\$\{[^}]*子任务/.test(card), '子任务进度不该再单独占一个 chip');
+  assert.ok(!card.includes('kb-card-id'), 'ID 已并入弱信息行，不该再单占顶部一行');
+  // 列视图列头就是分组名，卡上再挂一次状态是冗余；网格视图跨组，必须保留
+  assert.ok(card.includes('if (o.showStatus && st)'), '状态 chip 未做成按视图开关');
+  const grid = kbAppSrc.slice(kbAppSrc.indexOf('function renderKanbanBody('), kbAppSrc.indexOf('function renderKanban('));
+  assert.ok(grid.includes('kbCardHtml(t, t.status || g.statuses[0], { showStatus: true })'),
+    '网格视图丢了状态 chip，跨组时就分不清在哪一步');
+  const col = grid.slice(grid.indexOf('kb-col-body'));
+  assert.ok(col.includes('kbCardHtml(t, t.status || g.statuses[0])'), '列视图不该再传 showStatus');
+  assert.ok(/\.kb-card-foot \{[^}]*font: 400 10px/.test(kbCss), '弱信息行字号要明显小于标题，否则又变成第二层正文');
+});
+
+t('筛选维度没有可选值时收起整个控件', () => {
+  // 只有「全部 / 当前看板」一项的下拉是死控件：点开什么都没有，
+  // 看着像数据没加载出来，还白占工具栏格子。
+  assert.ok(kbAppSrc.includes('function kbToggleField('), '缺少维度显隐函数');
+  assert.ok(kbAppSrc.includes("kbToggleField('#kb-board', boards.length > 1)"), '看板维度未按数量收起');
+  assert.ok(kbAppSrc.includes("kbToggleField('#kb-assignee', assignees.length > 0)"), '受让人维度未按数量收起');
+  assert.ok(kbAppSrc.includes("kbToggleField('#kb-tenant', tenants.length > 0)"), '租户维度未按数量收起');
+  assert.ok(kbAppSrc.includes("kbToggleField('#kb-f-board', boards.length > 1)"), '弹窗目标看板未按数量收起');
+  // 藏起来之前必须清掉筛选值，否则「看不见的筛选还在生效」
+  assert.ok(kbAppSrc.includes('if (!tenants.length && KB.filters.tenant) KB.filters.tenant = \'\';'),
+    '收起租户筛选前未清空筛选值');
+  // 受让人说明第二行不再抄一遍全部 profile 名，只在填了非法值时出声
+  const hint = kbAppSrc.slice(kbAppSrc.indexOf('function kbSyncAssigneeHint('), kbAppSrc.indexOf('function kbProfileSet('));
+  assert.ok(!hint.includes("profiles.join(' · ')"), '受让人提示又把整串 profile 名抄了一遍');
+  assert.ok(hint.includes('el.hidden = true'), '没有非法值时那行提示应整行收起');
 });
 
 t('没有冗余横幅：无任务状态交给列表达，错误才出条', () => {

@@ -25,6 +25,9 @@
   --orb-warn: #de8a68;
   --orb-off: #c96a5f;
   --orb-active: #d9a066;
+  /* 就绪：球面上肉眼可辨的绿（不是 app 内的 --green，那个在深色球面上太暗） */
+  --orb-ready: #5fb37e;
+  --orb-ready-glow: rgba(95, 179, 126, 0.34);
   --orb-serif: "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
 }
 
@@ -60,13 +63,18 @@ body {
   background:
     radial-gradient(96% 76% at 30% 10%, var(--orb-specular) 0%, transparent 62%),
     radial-gradient(125% 125% at 32% 20%, var(--orb-face-hi) 0%, var(--orb-face-mid) 52%, var(--orb-face-lo) 100%);
+  /* 外投影必须用 filter: drop-shadow，不能用 box-shadow：
+     窗口是 68px 的方形，box-shadow 按**方盒**绘制，模糊半径一旦超出球外的
+     8px 余量就被窗口裁成一条方形暗块 —— 看起来就是「球下面有个方托盘」。
+     drop-shadow 沿元素的圆形轮廓扩散，边缘自然渐隐，裁也裁不出直角。
+     inset 那几层是球体本身的高光/暗边，留在 box-shadow 里（inset 不往外画）。 */
   box-shadow:
     inset 0 1px 0 var(--orb-rim),
     inset 0 -7px 13px rgba(0, 0, 0, 0.38),
-    inset 4px 0 9px rgba(0, 0, 0, 0.14),
-    0 5px 14px rgba(0, 0, 0, 0.42);
+    inset 4px 0 9px rgba(0, 0, 0, 0.14);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.40));
   cursor: grab;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  transition: transform 0.16s ease, filter 0.16s ease;
   will-change: transform;
 }
 
@@ -98,11 +106,7 @@ body {
 
 .orb-ball:hover {
   transform: scale(1.05);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -7px 13px rgba(0, 0, 0, 0.38),
-    inset 4px 0 9px rgba(0, 0, 0, 0.14),
-    0 8px 18px rgba(0, 0, 0, 0.48);
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.46));
 }
 
 .orb-ball:active,
@@ -125,6 +129,40 @@ body {
   pointer-events: none;
   transition: color 0.18s ease;
 }
+
+/* ---------------- 就绪：一圈完整绿环，缓慢呼吸 ----------------
+   设计约定原本写「idle = 静息、不点亮任何信号」，但静息态等于「看不出它到底
+   连上没连上」—— 球在桌面上一动不动，用户没法判断后端是不是活着。所以给
+   就绪态一圈完整的绿环：与 busy 的**局部旋转弧**形状不同（完整一圈、不转），
+   两者不会看混。offline 仍是右下角红点，approval 仍是数字徽标。 */
+.orb-ready {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--orb-ready);
+  opacity: 0;
+  transition: opacity 0.26s ease;
+  pointer-events: none;
+}
+
+body[data-state="idle"] .orb-ready {
+  animation: orb-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes orb-breathe {
+  0%, 100% {
+    opacity: 0.42;
+    box-shadow: 0 0 3px 0 rgba(95, 179, 126, 0.14);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 10px 1px var(--orb-ready-glow);
+  }
+}
+
+/* 迷你窗展开时内圈已经有一道 accent 光环，绿环退后半步，避免两道环抢焦点 */
+body[data-open="true"][data-state="idle"] .orb-ready { animation-duration: 3.6s; }
+body[data-open="true"][data-state="idle"] .orb-ready { border-color: color-mix(in srgb, var(--orb-ready) 62%, transparent); }
 
 /* ---------------- 忙碌：外圈旋转弧（唯一信号，不再叠状态点） ---------------- */
 
@@ -244,6 +282,7 @@ body[data-state="offline"] .orb-dot {
 @media (prefers-reduced-motion: reduce) {
   .orb-ball,
   .orb-ring,
+  .orb-ready,
   .orb-halo,
   .orb-dot,
   .orb-letter,
@@ -253,4 +292,6 @@ body[data-state="offline"] .orb-dot {
   .orb-ball.is-dragging { transform: none; }
   /* 停转后仍保留一整段可读的静态弧，不退回「完全没有 busy 反馈」 */
   body[data-state="busy"] .orb-ring { transform: rotate(-35deg); }
+  /* 呼吸停掉不等于消失：就绪环要定格在一个清晰可见的不透明度上 */
+  body[data-state="idle"] .orb-ready { opacity: .9; box-shadow: 0 0 7px 0 var(--orb-ready-glow); }
 }

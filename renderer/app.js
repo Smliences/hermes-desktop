@@ -5393,6 +5393,16 @@ function kbSyncSelects() {
   const assignees = [...new Set([...(Array.isArray(b?.assignees) ? b.assignees : []),
     ...(Array.isArray(o.assignees) ? o.assignees : [])])].map((x) => ({ value: String(x), label: String(x) }));
   const tenants = (Array.isArray(b?.tenants) ? b.tenants : []).map((x) => ({ value: String(x), label: String(x) }));
+  // 可见性每次都算，不受下面的 sig 缓存影响：
+  //  - 只有一个看板时「筛看板」没有意义（选它和不选一样）
+  //  - 租户 / 受让人一个值都没有时，下拉里只剩占位项
+  kbToggleField('#kb-board', boards.length > 1);
+  kbToggleField('#kb-assignee', assignees.length > 0);
+  kbToggleField('#kb-tenant', tenants.length > 0);
+  // 藏起来之前先把对应的筛选清掉，否则会出现「看不见的筛选还在生效」
+  if (boards.length <= 1 && KB.filters.board) KB.filters.board = '';
+  if (!assignees.length && KB.filters.assignee) KB.filters.assignee = '';
+  if (!tenants.length && KB.filters.tenant) KB.filters.tenant = '';
   const sig = JSON.stringify([boards, assignees, tenants]);
   const ph = o.currentBoard ? `当前看板 (${o.currentBoard})` : '当前看板';
   if (sig !== kbSelectSig) {
@@ -5405,6 +5415,8 @@ function kbSyncSelects() {
   // （当前看板用空值选项表示，别在列表里再重复一份）
   const fb = $('#kb-f-board');
   if (fb) {
+    // 只有一个看板时「目标看板」没得选（选项里也刻意排除了当前看板），收起整行
+    kbToggleField('#kb-f-board', boards.length > 1);
     const keep = fb.value;
     const cur = String(o.currentBoard || '');
     kbFillSelect('#kb-f-board', cur ? boards.filter((x) => x.value !== cur) : boards, keep,
@@ -5418,19 +5430,31 @@ function kbSyncSelects() {
   if (ap) ap.setOptions(profiles.map((n) => ({ value: n, label: n })), '留空则不指派');
   kbSyncAssigneeHint();
 }
-/** 受让人说明的第二行：可用 profile 清单；填了非 profile 的名字就改成红字警告。 */
+/** 受让人说明的第二行：只在填了非 profile 的名字时出声。
+ *  可用清单已经在下拉里，再抄一遍 8 个名字只会把弹窗撑长、把真警告淹没。 */
 function kbSyncAssigneeHint() {
   const el = $('#kb-f-assignee-profiles');
   if (!el) return;
   const profiles = [...kbProfileSet()].sort();
   const typed = ($('#kb-f-assignee')?.value || '').trim();
   if (typed && profiles.length && !profiles.includes(typed)) {
+    el.hidden = false;
     el.textContent = `${typed} 不是磁盘上的 profile，任务会停在 ready 且不会被派发`;
     el.classList.add('warn');
     return;
   }
   el.classList.remove('warn');
-  el.textContent = profiles.length ? `可选：${profiles.join(' · ')}` : '';
+  el.textContent = '';
+  el.hidden = true;
+}
+
+/** 维度没有可选值时，把整个控件收起来。
+ *  一个只剩「全部 / 当前看板」一项的下拉是死控件：点开什么都没有，
+ *  看着像数据没加载出来。宁可不占工具栏那一格。 */
+function kbToggleField(sel, show) {
+  const el = $(sel);
+  const field = el && el.closest ? el.closest('.kb-field, .kb-frow') : null;
+  if (field) field.hidden = !show;
 }
 
 /** 磁盘上真实存在的 profile（来自 /assignees 的 on_disk）。空集 = 拿不到清单，不做判断。 */
@@ -5818,31 +5842,42 @@ function kbMatch(t) {
   return [t.id, t.title, t.latest_summary, t.result, t.assignee, t.tenant]
     .some((v) => String(v || '').toLowerCase().includes(q));
 }
-function kbCardHtml(t, colName) {
+function kbCardHtml(t, colName, opts) {
+  const o = opts || {};
   const chips = [];
   const st = String(colName || t.status || '');
   const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
   const pri = Number(t.priority) || 0;
-  // 细粒度状态 chip：归组后仍要能分辨 triage / scheduled / review，CLI 原值留在 title
-  if (st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
-  if (pri) chips.push(`<span class="kb-chip pri">P${pri}</span>`);
+  // 细粒度状态 chip：只有跨组展示（网格视图 / 搜索结果）才需要它自己说明处在哪一步；
+  // 列视图里列头已经写着分组名，卡上再挂一个「已完成」是纯冗余，还白占一行高度。
+  if (o.showStatus && st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
+  if (pri) chips.push(`<span class="kb-chip pri" title="优先级 P${pri}">P${pri}</span>`);
   if (t.assignee) chips.push(kbAssigneeChip(t.assignee));
-  if (t.tenant) chips.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
-  const cc = Number(t.comment_count) || 0;
-  if (cc) chips.push(`<span class="kb-chip">${cc} 评论</span>`);
-  const pg = t.progress;
-  if (pg && Number(pg.total)) chips.push(`<span class="kb-chip">${Number(pg.done) || 0}/${Number(pg.total)} 子任务</span>`);
   const wn = t.warnings && Number(t.warnings.count);
-  if (wn) chips.push(`<span class="kb-chip warn">${wn} 项告警</span>`);
+  if (wn) chips.push(`<span class="kb-chip warn" title="有诊断告警">${wn} 项告警</span>`);
+
+  // 弱信息合成一行灰字。以前它们是各自的 chip，窄列里会折成两三行小方块，
+  // 一张 130px 高的卡有大半面积在做「1 评论」「1 小时前」这种噪声。
+  const foot = [];
+  if (t.id) foot.push(`<code>${esc(t.id)}</code>`);
+  if (t.tenant) foot.push(esc(t.tenant));
+  const cc = Number(t.comment_count) || 0;
+  if (cc) foot.push(`${cc} 评论`);
+  const pg = t.progress;
+  if (pg && Number(pg.total)) foot.push(`${Number(pg.done) || 0}/${Number(pg.total)} 子任务`);
   const ago = kbAgo(t.created_at);
-  if (ago) chips.push(`<span class="kb-chip">${esc(ago)}</span>`);
+  if (ago) foot.push(esc(ago));
+
   const sum = String(t.latest_summary || '').trim();
   const dragHint = draggable === '1' ? '拖到上方 worker 上可直接指派' : `${st || '该状态'} 不支持拖拽改派`;
+  const footHtml = foot.length
+    ? `<div class="kb-card-foot">${foot.join('<i aria-hidden="true">·</i>')}</div>`
+    : '';
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
-    <span class="kb-card-id">${esc(t.id || '')}</span>
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
     ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
+    ${footHtml}
   </button>`;
 }
 
@@ -5965,7 +6000,7 @@ function renderKanbanBody() {
       <div class="kb-group-head" title="${esc(g.hint)}"><span class="kb-group-dot"></span><span class="kb-group-name">${esc(g.label)}</span>
         <span class="kb-group-num">${g.tasks.length}${g.tasks.length !== g.all.length ? ' / ' + g.all.length : ''} 张</span>
         <span class="kb-group-rule"></span></div>
-      <div class="kb-group-cards">${g.tasks.length ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')
+      <div class="kb-group-cards">${g.tasks.length ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0], { showStatus: true })).join('')
         : `<div class="kb-col-empty">${KB.filters.q || KB.filters.assignee ? '没有匹配的任务' : '暂无任务'}</div>`}</div>
     </section>`).join('');
     const empty = !total
