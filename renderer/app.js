@@ -5851,7 +5851,7 @@ function kbMatch(t) {
   if (f.assignee && String(t.assignee || '') !== f.assignee) return false;
   if (!f.q) return true;
   const q = f.q.toLowerCase();
-  return [t.id, t.title, t.latest_summary, t.result, t.assignee, t.tenant]
+  return [t.id, t.title, t.body, t.latest_summary, t.result, t.assignee, t.tenant]
     .some((v) => String(v || '').toLowerCase().includes(q));
 }
 function kbCardHtml(t, colName, opts) {
@@ -5878,7 +5878,9 @@ function kbCardHtml(t, colName, opts) {
   const pg = t.progress;
   if (pg && Number(pg.total)) foot.push(`${Number(pg.done) || 0}/${Number(pg.total)} 子任务`);
 
-  const sum = String(t.latest_summary || '').trim();
+  // 卡面描述：优先最新执行回报（latest_summary = task_runs.summary），
+  // 没跑过 worker 的任务回退到建任务时写的描述 body —— 否则新卡永远是光杆标题。
+  const sum = String(t.latest_summary || t.body || '').trim();
   const dragHint = draggable === '1' ? '拖到上方 worker 上可直接指派' : `${st || '该状态'} 不支持拖拽改派`;
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
