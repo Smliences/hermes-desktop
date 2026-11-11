@@ -2604,6 +2604,7 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-pri.hi { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .kb-pri.mid { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
 .kb-pri.lo { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.kb-pri.n0 { color: var(--text-2); background: var(--fill-2); }
 .kb-card-title { font: 500 13px/1.42 var(--sans); word-break: break-word; padding-right: 34px; }
 .kb-card-sum {
   margin-top: 4px; color: var(--text-2); font-size: 11px; line-height: 1.55; padding-right: 34px;

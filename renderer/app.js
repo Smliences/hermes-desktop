@@ -5859,11 +5859,11 @@ function kbCardHtml(t, colName, opts) {
   const st = String(colName || t.status || '');
   const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
   // 方案一（OnPoint 极简白卡）：无顶行，标题是第一视觉焦点。优先级用 P 编号
-  // 胶囊绝对定位在右上角（P3 红 / P2 黄 / P1 绿；0 = 未设不占位，避免满屏 P0 噪声）。
+  // 胶囊绝对定位在右上角，恒显示（P3 红 / P2 黄 / P1 绿 / P0 未设灰）。
   // 时间做成弱胶囊收进脚行，与评论数并排，状态点收右下。
   const pri = Number(t.priority) || 0;
-  const priCls = pri >= 3 ? 'hi' : (pri === 2 ? 'mid' : 'lo');
-  const priHtml = pri >= 1 ? `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发）">P${pri}</span>` : '';
+  const priCls = pri >= 3 ? 'hi' : (pri === 2 ? 'mid' : (pri === 1 ? 'lo' : 'n0'));
+  const priHtml = `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发，P0 = 未设）">P${pri}</span>`;
   const ago = kbAgo(t.created_at);
   const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
   // 来源行：细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要；
