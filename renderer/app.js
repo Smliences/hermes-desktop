@@ -336,6 +336,14 @@ function hlMark(text, q) {
 }
 /** 侧栏搜索框当前词：会话菜单、看板写后刷新、项目树启动自愈共用（全局，勿塞进某个函数作用域） */
 function currentSearch() { const el = $('#session-search'); return el ? el.value.trim() : ''; }
+/** 侧栏只认用户显式创建的项目。auto 项目是 CLI 按历史会话 cwd/git 根动态推导的
+ *  （.hermes / bin / memories / .pi 这类），Home 桶也不渲染。
+ *  过滤必须发生在树落地时：认领会话排除集合与项目分组共用同一份数据，
+ *  否则被 auto 项目认领的会话既不在分组里、也不会回到时间分组。 */
+function sidebarProjectNodes(projects) {
+  return (Array.isArray(projects) ? projects : [])
+    .filter((p) => p && p.id && !p.isNoProject && !p.isAuto);
+}
 /** 会话列表：标题 + 消息全文命中合并（FTS5 由主进程提供，几十毫秒） */
 let sessionsSeq = 0;
 async function refreshSessions(search = '') {
@@ -363,8 +371,7 @@ async function refreshSessions(search = '') {
     // 后端冷启（CLI 常要 5~12s）会晚于首屏：树请求失败时保留上一次的分组，不把侧栏刷空，
     // 并用 projectsTreeOk 标记给启动自愈判断是否还要重试。成功才覆盖树。
     if (treeR && treeR.ok) {
-      state.projectsTree = Array.isArray(treeR.projects)
-        ? treeR.projects.filter((p) => p && p.id && !p.isNoProject) : [];
+      state.projectsTree = sidebarProjectNodes(treeR.projects);
       state.projectsTreeOk = true;
     } else {
       state.projectsTreeOk = false;
@@ -385,8 +392,7 @@ function ensureSidebarTree() {
     let r = null;
     try { r = await api.projectsTree({ previewLimit: 3 }); } catch {}
     if (r && r.ok) {
-      state.projectsTree = Array.isArray(r.projects)
-        ? r.projects.filter((p) => p && p.id && !p.isNoProject) : [];
+      state.projectsTree = sidebarProjectNodes(r.projects);
       state.projectsTreeOk = true;
       sidebarTreeRetry = 0;
       try { renderSessions(currentSearch()); } catch {}
@@ -467,10 +473,10 @@ function renderSessions(q = '') {
     const s = state.sessions.find((x) => x.id === id);
     return claimed.has(id) && !(s && (Number(s.pinned) > 0 || s.pinned === true));
   };
-  // 项目分组：显式项目恒显示，auto 项目只在有会话时出现；服务端已按 lastActive 排序
+  // 项目分组：sidebarProjectNodes 已滤掉 auto 项目与 Home 桶，只留显式项目（含 0 会话）；
+  // 服务端已按 lastActive 排序。被这些项目认领的会话才从下方时间分组排除。
   let shownProject = false;
   for (const p of projects) {
-    if (p.isAuto && !p.sessionCount) continue;
     shownProject = true;
     const gl = document.createElement('li');
     gl.className = 's-group s-proj';

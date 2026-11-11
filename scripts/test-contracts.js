@@ -1259,6 +1259,14 @@ t('侧栏项目树：数据只来自 /api/profiles/projects/tree 投影，时间
   // 渲染层：refreshSessions 并行拉树、失败降级为纯时间分组；preview 行与认领 id 排除集合
   assert.ok(appSrc.includes("api.projectsTree({ previewLimit: 3 })"), '渲染层未按 3 条预览拉项目树');
   assert.ok(appSrc.includes('!p.isNoProject'), '未归类桶不得渲染成项目分组');
+  // 侧栏只显示显式项目：auto 项目（CLI 按 cwd/git 根动态推导）必须在树落地时滤掉，
+  // 且两条落地路径（首屏刷新 / 冷启自愈）都走同一过滤器，否则认领集合会把会话吞掉
+  assert.ok(appSrc.includes('function sidebarProjectNodes(') && appSrc.includes('!p.isAuto'),
+    '缺少 auto 项目源头过滤');
+  assert.strictEqual((appSrc.match(/state\.projectsTree = sidebarProjectNodes\(/g) || []).length, 2,
+    '两条树落地路径未共用过滤器');
+  assert.ok(appSrc.includes('const projects = (!searching && Array.isArray(state.projectsTree)) ? state.projectsTree : []'),
+    '渲染与认领集合未共用同一份项目列表');
   assert.ok(appSrc.includes('const claimed = new Set()'), '缺少已归组会话排除集合');
   assert.ok(appSrc.includes('sessionItemEl('), '项目预览行未复用会话行渲染');
   assert.ok(appSrc.includes("textContent = '其他会话'"), '缺少剩余会话分组标题');
