@@ -505,8 +505,11 @@ function createKanbanClient(getBackendInfo) {
     if (!path) return { ok: false, error: '非法的看板写请求' };
     const snap = info();
     if (!validInfo(snap)) return { ok: false, error: '看板服务尚未就绪（桌面端后端未启动）' };
+    // 每个白名单方法都必须显式分发：落到 default 会被当成 DELETE 发出去
+    // （编排开关 PUT /orchestration 曾因此 404，看起来就是「切换没用」）。
     if (method === 'POST') return postJSON(snap, path, body);
     if (method === 'PATCH') return patchJSON(snap, path, body);
+    if (method === 'PUT') return putJSON(snap, path, body);
     return deleteJSON(snap, path);
   }
 

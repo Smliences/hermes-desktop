@@ -84,11 +84,12 @@ function createKanbanMode({ kanban, cfg }) {
     const desc = describeMode(local);
     let rest = null;
     let degraded = false;
+    let restError = '';
     try {
       const r = await kanban.orchestration();
       if (r && r.ok) rest = r;
-      else degraded = true;
-    } catch { degraded = true; }
+      else { degraded = true; restError = (r && r.error) || '未知错误'; }
+    } catch (e) { degraded = true; restError = String((e && e.message) || e); }
     if (rest) {
       // REST 是权威（写入后 CLI 会回读），但 dispatch_in_gateway 只能来自文件。
       desc.autoDecompose = rest.autoDecompose;
@@ -106,6 +107,8 @@ function createKanbanMode({ kanban, cfg }) {
     return {
       ok: true,
       degraded,
+      // degraded 时必须带原因，否则用户看到「暂不可用」却无从下手（本次排障的教训）。
+      restError,
       warn: local.ok ? '' : String(local.error || ''),
       ...desc,
       modes: MODES.map((m) => ({

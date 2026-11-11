@@ -4420,7 +4420,9 @@ async function renderKanbanModePanel(panel, cat) {
     }
     if (state.degraded) {
       const w = document.createElement('div'); w.className = 'kbm-warn';
-      w.textContent = '看板后端暂不可用，上面是 config.yaml 里的值，可能与运行中 gateway 的实际状态不一致。';
+      w.textContent = '看板后端暂不可用'
+        + (state.restError ? `（${state.restError}）` : '')
+        + '：上面是 config.yaml 里的值，可能与运行中 gateway 的实际状态不一致，此时切换也无法写入。';
       stage.appendChild(w);
     }
 

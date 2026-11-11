@@ -1014,6 +1014,12 @@ t('读写边界：读固定 GET，写只有七条白名单，危险端点一律�
     '编排字段必须锁定为 CLI 端点的四个键');
   assert.ok(!/case 'orchestration':[^}]*dispatch_in_gateway/.test(kbSrc),
     'dispatch_in_gateway 不在 CLI 端点的字段里，不得从 REST 写');
+  // write() 分发器必须显式接住每个白名单方法：漏分支会落到 deleteJSON，
+  // PUT /orchestration 曾被当成 DELETE 发出去，404 表现为「切换编排没用」。
+  const writeFn = kbSrc.slice(kbSrc.indexOf('async function write('), kbSrc.indexOf('return {\n    /** 完整看板'));
+  for (const m of ['postJSON', 'patchJSON', 'putJSON', 'deleteJSON']) {
+    assert.ok(writeFn.includes(`return ${m}(snap, path`), `write() 缺少 ${m} 分发分支`);
+  }
 });
 t('派发边界：默认 dry-run、显式才真跑、上限 4、串行、提交状态写死', () => {
   assert.ok(kbSrc.includes("case 'dispatch':") && kbSrc.includes("return '/dispatch?' + q.toString()"),
