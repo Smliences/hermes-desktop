@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanDispatchTask: (taskId, opts) => ipcRenderer.invoke('kanban:dispatch-task', taskId, opts || {}),
   kanbanDispatch: (opts) => ipcRenderer.invoke('kanban:dispatch', opts || {}),
   kanbanActiveWorkers: (opts) => ipcRenderer.invoke('kanban:workers', opts || {}),
+  // 编排模式：读回生效值；set 改 CLI config.yaml 的 kanban 段（UI 必须二次确认）
+  kanbanOrchestration: () => ipcRenderer.invoke('kanban:orchestration'),
+  kanbanSetMode: (mode) => ipcRenderer.invoke('kanban:set-mode', String(mode || '')),
   diagnosticsMemoryFiles: () => ipcRenderer.invoke('diagnostics:memory-files'),
   configOpenFile: (key) => ipcRenderer.invoke('hermes-config:open-file', key),
   reasoningDisplay: () => ipcRenderer.invoke('hermes-config:reasoning-display'),

@@ -987,12 +987,12 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!appSrc.includes('backend.token'), 'renderer 不应直接读后端 token');
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
-t('读写边界：读固定 GET，写只有六条白名单，危险端点一律不暴露', () => {
+t('读写边界：读固定 GET，写只有七条白名单，危险端点一律不暴露', () => {
   assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null)"), '读端点未固定 GET');
-  assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'DELETE'"),
+  assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
-  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch']) {
+  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少写端点 ' + op);
   }
   assert.ok(kbSrc.includes('TASK_ID_RE.test(String(p.taskId'), '任务 id 未过正则');
@@ -1003,10 +1003,17 @@ t('读写边界：读固定 GET，写只有六条白名单，危险端点一律�
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少只读端点 ' + op);
   }
   assert.ok(kbSrc.includes('default: return null'), '白名单之外必须拒绝');
+  // orchestration 是唯一一条带 body 白名单的写端点，body 必须经 cleanOrchestration 投影；
+  // 其余危险端点仍一律不暴露。
   for (const bad of ["'/decompose'", "'/tasks/bulk'", "'/specify'", "'/estimate'", "'/links'",
-    "'/reclaim'", "'/terminate'", "'/orchestration'"]) {
+    "'/reclaim'", "'/terminate'"]) {
     assert.ok(!kbSrc.includes(bad), '不得暴露端点 ' + bad);
   }
+  assert.ok(kbSrc.includes('function cleanOrchestration'), 'orchestration 写 body 未过白名单');
+  assert.ok(/ORCHESTRATION_KEYS = Object\.freeze\(\[\s*'auto_decompose',\s*'auto_promote_children',\s*'orchestrator_profile',\s*'default_assignee'/.test(kbSrc),
+    '编排字段必须锁定为 CLI 端点的四个键');
+  assert.ok(!/case 'orchestration':[^}]*dispatch_in_gateway/.test(kbSrc),
+    'dispatch_in_gateway 不在 CLI 端点的字段里，不得从 REST 写');
 });
 t('派发边界：默认 dry-run、显式才真跑、上限 4、串行、提交状态写死', () => {
   assert.ok(kbSrc.includes("case 'dispatch':") && kbSrc.includes("return '/dispatch?' + q.toString()"),
@@ -2579,11 +2586,58 @@ t('看板渲染链调用的每个函数都真的有定义', () => {
     '主体 / 筛选条渲染函数缺失');
 });
 
-t('页头只留看板名与一行概览，分隔符随概览收起', () => {
+t('页头仍是「看板名 + 一行概览」：模式标记同属这一行，不新增第二行', () => {
   assert.ok(htmlSrc.includes('id="kb-board-name"') && htmlSrc.includes('id="kb-head-stat"'), '页头缺少看板名 / 概览节点');
   const fn = kbAppSrc.slice(kbAppSrc.indexOf('function renderKanbanHead('), kbAppSrc.indexOf('function kbAge('));
   assert.ok(fn.includes("sep.hidden = !text"), '概览为空时未收起「·」，页头会挂一个孤零零的分隔符');
   assert.ok(!fn.includes('innerHTML'), '页头只写文本，不用 innerHTML');
+  // 模式标记必须待在 .kb-head-meta 里，不许另起一行 / 抢到动作区
+  const meta = htmlSrc.slice(htmlSrc.indexOf('class="kb-head-meta"'), htmlSrc.indexOf('class="kb-head-actions"'));
+  assert.ok(meta.includes('id="kb-head-mode"'), '模式标记必须留在概览那一行');
+});
+
+t('页头模式标记只读：点击只跳设置，绝不直接改模式', () => {
+  assert.ok(htmlSrc.includes('id="kb-head-mode"'), '页头缺少模式标记节点');
+  const i = appSrc.indexOf("const modeChip = $('#kb-head-mode')");
+  assert.ok(i > 0, '页头标记未绑定点击');
+  const bind = appSrc.slice(i, i + 260);
+  assert.ok(!bind.includes('kanbanSetMode'), '页头标记不得直接改模式（写入必须走设置页的二次确认）');
+  assert.ok(bind.includes('toggleSettings(true)'), '页头标记应跳到设置');
+  assert.ok(appSrc.includes('function kbLoadMode('), '缺少模式读取');
+  assert.ok(appSrc.includes('kbLoadMode();'), '打开看板时必须刷新模式标记');
+});
+
+t('看板编排设置：模式是派生值、写入走二次确认、结果如实说重启', () => {
+  const modeSrc = read('main/services/hermes-kanban-mode.js');
+  const cfgSrc = read('main/services/hermes-config.js');
+  assert.ok(modeSrc.includes('function modeOf'), '缺少模式推导');
+  assert.ok(!/(MODE_STORE|savedMode|kbModeCache|storedMode)/.test(modeSrc + appSrc),
+    '模式不得单独存储：它必须是 auto_decompose / dispatch_in_gateway 的派生值');
+  assert.ok(cfgSrc.includes("'config', 'set', 'kanban.' + key"),
+    'dispatch_in_gateway 必须经 hermes config set 写入（看板 REST 端点没有这个字段）');
+  for (const label of ['全自动', '半自动', '全手动']) {
+    assert.ok(modeSrc.includes("label: '" + label + "'"), '缺少档位 ' + label);
+  }
+  assert.ok(modeSrc.includes('needsRestart = true'), '改派发器必须标记需要重启');
+
+  assert.ok(appSrc.includes("custom: 'kanban'"), '设置页缺少看板编排分类');
+  const panel = appSrc.slice(appSrc.indexOf('function renderKanbanModePanel('),
+    appSrc.indexOf('async function renderCronPanel('));
+  assert.ok(panel.length > 2000, '看板编排面板不见了');
+  assert.ok(panel.includes('opConfirm(stage, {'), '切换档位未走二次确认卡');
+  assert.ok(panel.includes('kanbanSetMode'), '面板未接写入通道');
+  assert.ok(panel.includes('needsRestart') && panel.includes('hermes gateway restart'),
+    '结果未如实告诉用户要重启 gateway 才生效');
+  assert.ok(panel.includes('textContent'), '面板必须用 textContent 写远端文本');
+  assert.ok(panel.includes('settingsPanelEpoch') || panel.includes('const epoch = settingsPanelEpoch'),
+    '异步面板必须带代次戳，否则切分类后旧结果会写进新面板');
+  // 明细是当前值，必须标清楚，否则「选了全手动却看到 auto_decompose=开」会被当成没生效
+  assert.ok(panel.includes('当前生效值'), '生效值明细未标注「当前值」，会和「将写入」混');
+  // 该面板自带「应用」，底部那个写 localStorage 的「保存」必须收起
+  assert.ok(panel.includes("saveBtn.hidden = true"), '自带应用按钮的面板未收起全局保存，会出现两个写入口');
+  // 卡片必须带 dispatch/decompose：少下发会让「全自动」也显示重启警告
+  assert.ok(/dispatch: m\.dispatch, decompose: m\.decompose/.test(modeSrc),
+    '档位的 dispatch / decompose 未一起下发，渲染层只能瞎猜');
 });
 
 console.log('\n' + '─'.repeat(56));

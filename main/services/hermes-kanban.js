@@ -157,6 +157,7 @@ function buildPath(op, params = {}) {
     case 'assignees': return '/assignees' + suffix;
     case 'boards': return '/boards' + suffix;
     case 'config': return '/config' + suffix;
+    case 'orchestration': return '/orchestration';
     case 'diagnostics': return '/diagnostics' + suffix;
     case 'workers': return '/workers/active' + suffix;
     default: return null;
@@ -194,6 +195,8 @@ function buildWritePath(op, params = {}) {
       q.set('dry_run', p.dryRun === false ? 'false' : 'true');
       q.set('max', String(clampMaxSpawn(p.max)));
       return '/dispatch?' + q.toString();
+    // 编排开关（config.yaml 的 kanban 段）：CLI 侧是 PUT，不是 POST。
+    case 'orchestration': return '/orchestration';
     default: return null;
   }
 }
@@ -242,11 +245,50 @@ function cleanTaskInput(raw) {
   return out;
 }
 
-/** 单次 loopback 请求（GET 读 / POST·PATCH·DELETE 白名单写）。永不 throw。 */
+/**
+ * 编排开关的写投影：只认 CLI `PUT /orchestration` 白名单里的 4 个键，类型逐个收敛。
+ * 布尔以外的形态一律整体拒绝（不做「猜一个」的隐式转换，写 CLI 配置不接受歧义）。
+ */
+const ORCHESTRATION_KEYS = Object.freeze([
+  'auto_decompose', 'auto_promote_children', 'orchestrator_profile', 'default_assignee',
+]);
+function cleanOrchestration(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (const k of ORCHESTRATION_KEYS) {
+    if (o[k] === undefined || o[k] === null) continue;
+    if (k === 'auto_decompose' || k === 'auto_promote_children') {
+      if (typeof o[k] !== 'boolean') return null;
+      out[k] = o[k];
+    } else {
+      if (typeof o[k] !== 'string') return null;
+      const v = cleanText(o[k], 80);
+      if (v && !ASSIGNEE_RE.test(v)) return null;   // profile 名；空串表示清除覆盖
+      out[k] = v;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** 把 CLI /orchestration 的响应投影成 UI 用的驼峰形态。 */
+function projectOrchestration(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  return {
+    autoDecompose: d.auto_decompose !== false,
+    autoPromoteChildren: d.auto_promote_children !== false,
+    orchestratorProfile: str(d.orchestrator_profile, 80),
+    defaultAssignee: str(d.default_assignee, 80),
+    resolvedOrchestrator: str(d.resolved_orchestrator_profile, 80),
+    resolvedAssignee: str(d.resolved_default_assignee, 80),
+    activeProfile: str(d.active_profile, 80),
+  };
+}
+
+/** 单次 loopback 请求（GET 读 / POST·PATCH·PUT·DELETE 白名单写）。永不 throw。 */
 function requestJSON(info, method, pathWithQuery, body) {
   return new Promise((resolve) => {
     if (!validInfo(info) || typeof pathWithQuery !== 'string' || !pathWithQuery.startsWith('/')
-        || (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'DELETE')) {
+        || (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE')) {
       resolve({ ok: false, error: '看板请求参数非法' });
       return;
     }
@@ -337,6 +379,9 @@ function postJSON(info, pathWithQuery, body) {
 }
 function patchJSON(info, pathWithQuery, body) {
   return requestJSON(info, 'PATCH', pathWithQuery, body);
+}
+function putJSON(info, pathWithQuery, body) {
+  return requestJSON(info, 'PUT', pathWithQuery, body);
 }
 function deleteJSON(info, pathWithQuery) {
   return requestJSON(info, 'DELETE', pathWithQuery, null);
@@ -707,14 +752,34 @@ function createKanbanClient(getBackendInfo) {
       if (!r.ok) return r;
       return { ok: true, generation: info().generation || 0, ...projectWorkers(r.data) };
     },
+
+    /**
+     * 编排开关（config.yaml 的 `kanban` 段）—— 设置页「看板编排」的数据源之一。
+     * 只管 auto_decompose / auto_promote_children / 两个 profile；
+     * `dispatch_in_gateway` 不在这个端点里，由 hermes-config 读原文补上。
+     */
+    async orchestration() {
+      const r = await read('orchestration', {});
+      if (!r.ok) return r;
+      return { ok: true, generation: info().generation || 0, ...projectOrchestration(r.data) };
+    },
+
+    /** 写编排开关：只写显式传入的字段，其余不动；返回 CLI 回读后的生效值。 */
+    async setOrchestration(input = {}) {
+      const body = cleanOrchestration(input);
+      if (!body) return { ok: false, error: '编排参数不合法（只接受布尔与已存在的 profile 名）' };
+      const r = await write('orchestration', 'PUT', {}, body);
+      if (!r.ok) return r;
+      return { ok: true, generation: info().generation || 0, ...projectOrchestration(r.data) };
+    },
   };
 }
 
 module.exports = {
   createKanbanClient, buildPath, buildWritePath, validInfo,
-  cleanTaskInput, cleanBoardInput, cleanAssignee, clampMaxSpawn,
-  projectBoard, projectDetail, projectTask, projectDispatch, projectWorkers,
+  cleanTaskInput, cleanBoardInput, cleanAssignee, clampMaxSpawn, cleanOrchestration,
+  projectBoard, projectDetail, projectTask, projectDispatch, projectWorkers, projectOrchestration,
   COLUMNS, ALL_COLUMNS, PLUGIN_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
   TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE,
-  CREATE_STATUSES, REASSIGN_STATUSES,
+  CREATE_STATUSES, REASSIGN_STATUSES, ORCHESTRATION_KEYS,
 };

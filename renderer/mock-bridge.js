@@ -162,12 +162,46 @@
       }));
       return { ok: true, workers: ws, count: ws.length, checkedAt: Math.floor(Date.now() / 1000) };
     },
+    // 编排模式：Demo 里只是内存态，语义与真实一致（三档是两个布尔的派生值）
+    async kanbanOrchestration() {
+      return { ok: true, ...KB_MODE_STATE, modes: KB_MODE_LIST, degraded: false, warn: '' };
+    },
+    async kanbanSetMode(mode) {
+      const m = KB_MODE_LIST.find((x) => x.id === mode);
+      if (!m) return { ok: false, error: '未知的编排模式：' + String(mode) };
+      const before = KB_MODE_STATE.mode;
+      KB_MODE_STATE.dispatchInGateway = m.dispatch;
+      KB_MODE_STATE.autoDecompose = m.decompose;
+      KB_MODE_STATE.mode = m.id;
+      KB_MODE_STATE.modeLabel = m.label;
+      KB_MODE_STATE.decomposeStranded = !m.dispatch && m.decompose;
+      return {
+        ok: true, mode: m.id, modeLabel: m.label, changed: before === m.id ? [] : [m.id],
+        needsRestart: !m.dispatch, steps: [],
+        state: { ok: true, ...KB_MODE_STATE, modes: KB_MODE_LIST, degraded: false, warn: '' },
+      };
+    },
     async kanbanRun(runId) { return { ok: true, run: { id: runId, status: 'running', outcome: '', error: '' } }; },
   };
 
   /* ---- Kanban Demo 数据 ---- */
   const now = Math.floor(Date.now() / 1000);
   let KB_SEQ = 6, KB_EVT = 42;
+  // 编排模式：三档是两个布尔的派生值，Demo 与真实语义一致（不单独存「模式」）
+  const KB_MODE_LIST = [
+    { id: 'auto', label: '全自动', dispatch: true, decompose: true, needsRestart: false,
+      summary: '收集箱的卡会自动拆分并派发执行', detail: '演示数据：新卡会被自动拆解并推进执行。' },
+    { id: 'semi', label: '半自动', dispatch: true, decompose: false, needsRestart: false,
+      summary: '收集箱停住，其余照常自动执行', detail: '演示数据：只有 triage 不动，别的照旧。' },
+    { id: 'manual', label: '全手动', dispatch: false, decompose: false, needsRestart: true,
+      summary: '派发器整体停止，只有手动派发才会执行', detail: '演示数据：改这一档需要重启 gateway。' },
+  ];
+  const KB_MODE_STATE = {
+    mode: 'auto', modeLabel: '全自动',
+    dispatchInGateway: true, autoDecompose: true, autoPromoteChildren: true,
+    orchestratorProfile: '', defaultAssignee: '', resolvedOrchestrator: 'default',
+    resolvedAssignee: 'default', activeProfile: 'default', decomposeStranded: false,
+  };
   const KB_TASKS = [
     {
       id: 't_demo01', title: '收集粉丝反馈并归类成需求清单', body: '把最近两周的社群反馈按「体验 / 功能 / 性能」三类归档，输出一份带频次的清单。',

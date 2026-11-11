@@ -2223,6 +2223,45 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 .op-field-label:has(.op-textarea) { align-items: flex-start; }
 .op-field-label > .op-textarea { flex: 1; min-width: 0; }
 .op-form-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+/* ---- 设置页「看板编排」：三档模式卡片 + 只读生效值 ---- */
+.kbm-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 14px; }
+.kbm-card {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+  padding: 11px 13px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--canvas); color: var(--text); cursor: pointer;
+  font: inherit; transition: border-color 120ms ease, background 120ms ease;
+}
+.kbm-card:hover { background: var(--hover); }
+.kbm-card.on { border-color: var(--accent); background: var(--fill-2); }
+.kbm-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kbm-card b { font: 500 13px/1.4 var(--sans); }
+.kbm-card span { font: 400 var(--fs-xs)/1.55 var(--sans); color: var(--text-2); }
+.kbm-card em {
+  font: 400 var(--fs-xs)/1.65 var(--sans); font-style: normal; color: var(--text-3);
+  margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line);
+}
+.kbm-card em.kbm-warn { color: var(--yellow); border-top: 0; margin-top: 2px; padding-top: 2px; }
+.kbm-facts {
+  display: flex; flex-direction: column; gap: 7px; margin: 4px 0 14px;
+  padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--fill-2);
+}
+.kbm-facts > div { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: baseline; }
+.kbm-facts b { font: 500 12px/1.5 var(--sans); color: var(--text-2); }
+.kbm-facts span { font: 400 10.5px/1.5 var(--mono); color: var(--caption); min-width: 0; overflow-wrap: anywhere; }
+.kbm-facts i { font: 500 12px/1.5 var(--sans); font-style: normal; color: var(--text); text-align: right; }
+.kbm-facts u {
+  grid-column: 1 / -1; font: 400 10.5px/1.5 var(--sans);
+  color: var(--caption); text-decoration: none;
+}
+.kbm-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 12px; }
+.kbm-actions .set-row-hint { flex: 1; min-width: 160px; }
+.kbm-warn {
+  margin: 0 0 12px; padding: 7px 10px; border-radius: var(--r-sm);
+  font: 400 11.5px/1.7 var(--sans); color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+}
 .op-form-btns .mk-btn { padding: 0 12px; }
 .op-form .pf-note { margin-top: 10px; }
 
@@ -2299,6 +2338,17 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 }
 #kb-board-name { color: var(--text-2); font-weight: 500; }
 .kb-meta-sep { color: var(--line-2); }
+/* 页头模式标记：只读胶囊，点击进设置。故意做得比正文轻，不抢「看板名 + 概览」那行的层级 */
+.kb-mode-chip {
+  align-self: center; display: inline-flex; align-items: center;
+  padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--fill-2); color: var(--text-3); white-space: nowrap;
+  font: 400 11px/1.45 var(--sans); cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.kb-mode-chip:hover { border-color: var(--line-2); color: var(--text-2); background: var(--hover); }
+.kb-mode-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kb-mode-chip.is-manual { border-color: var(--yellow); color: var(--yellow); }
 .kb-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 
 /* 「⋯」菜单：低频入口收纳，absolute 面板，不新增任何通道 */

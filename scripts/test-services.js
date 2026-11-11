@@ -36,7 +36,8 @@ const section = (s) => console.log('\n' + s);
 
 const MODULES = [
   'gateway-client.js', 'hermes-backend.js', 'hermes-bin.js', 'hermes-chat.js',
-  'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-gateway.js', 'hermes-kanban.js', 'hermes-market.js',
+  'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-gateway.js', 'hermes-kanban.js',
+  'hermes-kanban-mode.js', 'hermes-market.js',
   'hermes-plugins.js', 'hermes-preview.js', 'hermes-profile.js', 'hermes-sessions.js',
   'hermes-skills.js', 'hermes-terminal.js', 'logger.js',
 ];
@@ -1383,6 +1384,112 @@ async function run() {
     assert.ok(!fs.existsSync(path.join(hermesRoot, orbPrefs.FILE)));
     assert.strictEqual(fs.readFileSync(path.join(hermesRoot, 'config.yaml'), 'utf8'),
       'model:\n  default: test-model\n');
+  });
+
+  section('N. 看板编排：三档模式是两个布尔推导出来的，不单独存');
+  const kbm = loaded['hermes-kanban-mode.js'];
+  const cfgMod = loaded['hermes-config.js'];
+
+  await t('模式推导：派发器关闭压倒一切（分解开着也只是往 ready 里堆卡）', () => {
+    assert.strictEqual(kbm.modeOf({ dispatchInGateway: true, autoDecompose: true }), 'auto');
+    assert.strictEqual(kbm.modeOf({ dispatchInGateway: true, autoDecompose: false }), 'semi');
+    assert.strictEqual(kbm.modeOf({ dispatchInGateway: false, autoDecompose: true }), 'manual');
+    assert.strictEqual(kbm.modeOf({ dispatchInGateway: false, autoDecompose: false }), 'manual');
+  });
+
+  await t('缺省值对齐 CLI config_defaults：没写过就是全自动', () => {
+    const d = kbm.describeMode({});
+    assert.strictEqual(d.mode, 'auto');
+    assert.strictEqual(d.dispatchInGateway, true);
+    assert.strictEqual(d.autoDecompose, true);
+    assert.strictEqual(d.decomposeStranded, false);
+  });
+
+  await t('派发器停了但分解还开着 → 必须自报 decomposeStranded', () => {
+    assert.strictEqual(kbm.describeMode({ dispatch_in_gateway: false }).decomposeStranded, true);
+    assert.strictEqual(
+      kbm.describeMode({ dispatch_in_gateway: false, auto_decompose: false }).decomposeStranded, false);
+  });
+
+  await t('parseKanbanSwitches：只读顶层 kanban 段，dashboard.kanban 不得串味', () => {
+    const text = [
+      'dashboard:',
+      '  kanban:',
+      '    auto_decompose: true',
+      'kanban:',
+      '  auto_decompose: false   # 关掉',
+      '  dispatch_in_gateway: no',
+      '  default_assignee: "worker"',
+      'model:',
+      '  default: x',
+    ].join('\n');
+    const s = cfgMod.parseKanbanSwitches(text);
+    assert.strictEqual(s.auto_decompose, false);
+    assert.strictEqual(s.dispatch_in_gateway, false);
+    assert.strictEqual(s.default_assignee, 'worker');
+    assert.strictEqual(s.auto_promote_children, true, '没写的键必须落默认值 true');
+  });
+
+  await t('parseKanbanSwitches：空配置不报错，全落默认', () => {
+    const s = cfgMod.parseKanbanSwitches('');
+    assert.strictEqual(s.dispatch_in_gateway, true);
+    assert.strictEqual(s.auto_decompose, true);
+  });
+
+  await t('apply 只写需要变的开关，未变的不重写', async () => {
+    const calls = [];
+    const rest = { ok: true, autoDecompose: true, autoPromoteChildren: true, orchestratorProfile: '',
+      defaultAssignee: '', resolvedOrchestrator: 'default', resolvedAssignee: 'default', activeProfile: 'default' };
+    const mode = kbm.createKanbanMode({
+      kanban: {
+        async orchestration() { return { ...rest }; },
+        async setOrchestration(body) { calls.push(['rest', body]); return { ok: true }; },
+      },
+      cfg: {
+        kanbanSwitches() { return { ok: true, auto_decompose: true, auto_promote_children: true, dispatch_in_gateway: true }; },
+        async setKanbanSwitch(k, v) { calls.push(['cli', k, v]); return { ok: true }; },
+      },
+    });
+    // 全自动 → 半自动：只该动 auto_decompose，且不需要重启
+    const r1 = await mode.apply('semi');
+    assert.strictEqual(r1.ok, true);
+    assert.strictEqual(r1.needsRestart, false);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(calls)), [['rest', { auto_decompose: false }]]);
+    // 全自动 → 全手动：必须写 dispatch_in_gateway，并且明确报需要重启
+    calls.length = 0;
+    const r2 = await mode.apply('manual');
+    assert.strictEqual(r2.ok, true);
+    assert.strictEqual(r2.needsRestart, true);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(calls)),
+      [['rest', { auto_decompose: false }], ['cli', 'dispatch_in_gateway', false]]);
+  });
+
+  await t('未知档位被拒，且不产生任何写入', async () => {
+    const calls = [];
+    const mode = kbm.createKanbanMode({
+      kanban: {
+        async orchestration() { return { ok: true, autoDecompose: true }; },
+        async setOrchestration(b) { calls.push(b); return { ok: true }; },
+      },
+      cfg: {
+        kanbanSwitches() { return { ok: true }; },
+        async setKanbanSwitch() { calls.push('cli'); return { ok: true }; },
+      },
+    });
+    const r = await mode.apply('nonsense');
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(calls, []);
+  });
+
+  await t('REST 不可用时降级读 config.yaml，不整块失败', async () => {
+    const mode = kbm.createKanbanMode({
+      kanban: { async orchestration() { return { ok: false, error: '后端未就绪' }; }, async setOrchestration() { return { ok: false }; } },
+      cfg: { kanbanSwitches() { return { ok: true, auto_decompose: false, dispatch_in_gateway: true }; }, async setKanbanSwitch() { return { ok: true }; } },
+    });
+    const s = await mode.read();
+    assert.strictEqual(s.ok, true);
+    assert.strictEqual(s.degraded, true);
+    assert.strictEqual(s.mode, 'semi');
   });
 
   // 清理：仅删除本测试自建的临时目录

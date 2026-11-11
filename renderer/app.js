@@ -3486,6 +3486,10 @@ const SETTINGS_CATEGORIES = [
     id: 'cron', label: '定时任务', ico: '◷', custom: 'cron',
     desc: '新建任务一律创建为暂停，不会立刻唤醒 agent 消耗额度；恢复、立即运行、移除都要二次确认。',
   },
+  {
+    id: 'kanban', label: '看板编排', ico: '◱', custom: 'kanban',
+    desc: '看板卡片的自动处理方式。三档模式是 config.yaml 里两个开关的派生值；桌面端不缓存，每次打开都回读。',
+  },
 ];
 const SETTINGS_STORE_KEY = 'hermes.settings';
 const SETTINGS_DEFAULTS = {
@@ -3637,6 +3641,11 @@ function renderSettingsPanel() {
   const cat = SETTINGS_CATEGORIES.find((c) => c.id === settingsCat);
   const panel = $('#set-panel'); panel.innerHTML = '';
   settingsPanelEpoch++;
+  // 底部栏是「保存到本地设置」的语义；自带「应用」按钮的面板会把它收起来，
+  // 切回来时必须还原，否则别的分类会失去保存入口。
+  const saveBtn = $('#set-save'), hintEl = $('#set-hint');
+  if (saveBtn) saveBtn.hidden = false;
+  if (hintEl && !(saveBtn && saveBtn.classList.contains('dirty'))) hintEl.textContent = '更改需保存后生效';
   if (cat.custom === 'model') { renderModelPanel(panel, cat); return; }
   if (cat.custom === 'profile') { renderProfilePanel(panel, cat); return; }
   if (cat.custom === 'shortcuts') { renderShortcutPanel(panel, cat); return; }
@@ -3645,6 +3654,7 @@ function renderSettingsPanel() {
   if (cat.custom === 'health') { renderHealthPanel(panel, cat); return; }
   if (cat.custom === 'mcp') { renderMcpPanel(panel, cat); return; }
   if (cat.custom === 'cron') { renderCronPanel(panel, cat); return; }
+  if (cat.custom === 'kanban') { renderKanbanModePanel(panel, cat); return; }
   cat.groups.forEach((g) => {
     const gt = document.createElement('div'); gt.className = 'pp-group-label'; gt.textContent = g.title;
     panel.appendChild(gt);
@@ -4282,6 +4292,210 @@ async function renderMcpPanel(panel, cat) {
 }
 
 /* ---------------- 定时任务 ---------------- */
+/**
+ * 设置页「看板编排」：三档模式的唯一入口。
+ *
+ * 这里写的是 hermes CLI 的 config.yaml（kanban 段），改的是 gateway 的自动派发 ——
+ * 不只是本应用，所以每次改动都过二次确认卡，并把「要不要重启」如实写在结果里。
+ * 模式本身不存储：它是 auto_decompose / dispatch_in_gateway 两个布尔的派生值。
+ */
+async function renderKanbanModePanel(panel, cat) {
+  const epoch = settingsPanelEpoch;
+  const alive = () => epoch === settingsPanelEpoch;
+
+  const head = document.createElement('div');
+  head.innerHTML = `<div class="pp-group-label">看板编排</div><div class="set-desc">${esc(cat.desc)}</div>`;
+  panel.appendChild(head);
+
+  // 底部那个「保存」写的是本地 localStorage，对编排开关无效 —— 收起来，
+  // 只留面板内的「应用」这一个写入口，两个入口会让人不知道该按哪个。
+  const saveBtn = $('#set-save'), hintEl = $('#set-hint');
+  if (saveBtn) saveBtn.hidden = true;
+  if (hintEl) hintEl.textContent = '此页的改动点「应用」才写入 CLI 配置';
+
+  const bar = document.createElement('div'); bar.className = 'op-bar';
+  const status = document.createElement('div'); status.className = 'mem-status';
+  const refresh = document.createElement('button');
+  refresh.type = 'button'; refresh.className = 'mem-refresh'; refresh.textContent = '刷新';
+  bar.append(status, refresh); panel.appendChild(bar);
+
+  const stage = document.createElement('div'); panel.appendChild(stage);
+
+  const note = document.createElement('div'); note.className = 'pf-note';
+  note.textContent = '写的是 hermes CLI 的 config.yaml（kanban 段），影响 gateway 的自动派发，不只是这个应用。'
+    + '自动分解每轮重读，下一轮 tick 就生效；派发器开关只在 gateway 启动时读一次，改完必须重启 gateway。';
+  panel.appendChild(note);
+
+  let state = null;   // 最近一次回读的生效值
+  let pick = null;    // 用户选中但未应用的档位
+  let busy = false;
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button'; applyBtn.className = 'mk-btn primary'; applyBtn.textContent = '应用';
+  const actions = document.createElement('div'); actions.className = 'kbm-actions';
+  const hint = document.createElement('div'); hint.className = 'set-row-hint';
+  actions.append(applyBtn, hint);
+
+  /** 会写进 config.yaml 的键值，逐行列出（不是假命令行，是真的键）。 */
+  const planLines = (modeId) => {
+    const m = state && state.modes ? state.modes.find((x) => x.id === modeId) : null;
+    if (!m) return '';
+    const lines = [];
+    if (state.autoDecompose !== m.decompose) lines.push(`kanban.auto_decompose = ${m.decompose}`);
+    if (state.dispatchInGateway !== m.dispatch) lines.push(`kanban.dispatch_in_gateway = ${m.dispatch}`);
+    return lines.length ? lines.join('\n') : '（与当前一致，不会有任何写入）';
+  };
+
+  const draw = () => {
+    stage.innerHTML = '';
+    if (!state) { status.textContent = '当前模式读取失败'; return; }
+    const sw = [];
+    sw.push(`派发器${state.dispatchInGateway ? '运行中' : '已停止'}`);
+    sw.push(`自动分解${state.autoDecompose ? '开' : '关'}`);
+    if (state.autoPromoteChildren) sw.push('子任务自动推进开');
+    status.textContent = `${state.modeLabel} · ${sw.join(' · ')}`;
+    status.classList.remove('is-error');
+
+    const group = document.createElement('div');
+    group.className = 'kbm-list';
+    group.setAttribute('role', 'radiogroup');
+    group.setAttribute('aria-label', '看板编排模式');
+    (state.modes || []).forEach((m) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'kbm-card' + (m.id === pick ? ' on' : '');
+      card.setAttribute('role', 'radio');
+      card.setAttribute('aria-checked', m.id === pick ? 'true' : 'false');
+      card.dataset.mode = m.id;
+      // 远端 / 档位文案一律 textContent，绝不拼进 innerHTML
+      const name = document.createElement('b'); name.textContent = m.label;
+      const sum = document.createElement('span'); sum.textContent = m.summary;
+      card.append(name, sum);
+      if (m.id === pick) {
+        const det = document.createElement('em'); det.textContent = m.detail;
+        card.appendChild(det);
+        if (m.needsRestart) {
+          const warn = document.createElement('em'); warn.className = 'kbm-warn';
+          warn.textContent = '这一档关掉的是 gateway 里的派发器，改完必须重启 gateway 才生效。';
+          card.appendChild(warn);
+        }
+      }
+      card.onclick = () => { if (busy) return; pick = m.id; draw(); };
+      group.appendChild(card);
+    });
+    stage.appendChild(group);
+    // 操作紧跟在卡片后面：三张卡 + 「应用」要能在首屏同时看到，
+    // 生效值明细是可以滚着看的次要信息，不能把它们顶到折叠线以下。
+    stage.appendChild(actions);
+
+    // 明细是「现在生效的值」，不是「改完会变成的值」—— 不标清楚，
+    // 选了全手动却看到 auto_decompose=开，会以为没生效。
+    const factsLabel = document.createElement('div');
+    factsLabel.className = 'set-row-hint';
+    factsLabel.textContent = '当前生效值（不含尚未应用的改动）';
+    stage.appendChild(factsLabel);
+
+    const facts = document.createElement('div'); facts.className = 'kbm-facts';
+    const rows = [
+      ['自动分解', 'auto_decompose', state.autoDecompose ? '开' : '关', '下一轮 tick 生效'],
+      ['派发器', 'dispatch_in_gateway', state.dispatchInGateway ? '开' : '关', '改动需重启 gateway'],
+      ['子任务自动推进', 'auto_promote_children', state.autoPromoteChildren ? '开' : '关', ''],
+      ['默认受让人', 'default_assignee', state.resolvedAssignee || state.defaultAssignee || '（跟随当前 profile）', ''],
+    ];
+    rows.forEach(([label, key, val, tip]) => {
+      const r = document.createElement('div');
+      const a = document.createElement('b'); a.textContent = label;
+      const b = document.createElement('span'); b.textContent = key;
+      const c = document.createElement('i'); c.textContent = val;
+      r.append(a, b, c);
+      if (tip) { const t = document.createElement('u'); t.textContent = tip; r.appendChild(t); }
+      facts.appendChild(r);
+    });
+    stage.appendChild(facts);
+
+    if (state.decomposeStranded) {
+      const warn = document.createElement('div'); warn.className = 'kbm-warn';
+      warn.textContent = '自动分解还开着，但派发器已停 —— 分解出来的卡只会堆在就绪队列里没人认领。';
+      stage.appendChild(warn);
+    }
+    if (state.degraded) {
+      const w = document.createElement('div'); w.className = 'kbm-warn';
+      w.textContent = '看板后端暂不可用，上面是 config.yaml 里的值，可能与运行中 gateway 的实际状态不一致。';
+      stage.appendChild(w);
+    }
+
+    applyBtn.disabled = busy || !pick || pick === state.mode;
+    hint.textContent = pick && pick !== state.mode
+      ? `将写入：${planLines(pick).replace(/\n/g, '；')}`
+      : '当前没有待应用的改动';
+  };
+
+  const runApply = async (modeId) => {
+    busy = true; applyBtn.disabled = true;
+    status.classList.remove('is-error');
+    status.textContent = '正在写入 CLI 配置…（派发器开关要冷启 CLI，约 5–10 秒）';
+    let r = null;
+    try { r = await api.kanbanSetMode(modeId); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    busy = false;
+    if (!alive()) return;
+    if (!r || !r.ok) {
+      status.textContent = '切换失败：' + ((r && r.error) || '未知错误');
+      status.classList.add('is-error');
+      draw();
+      return;
+    }
+    state = r.state || state;
+    pick = state.mode;
+    draw();
+    if (hintEl) hintEl.textContent = r.needsRestart ? '已写入 CLI 配置 · 需重启 gateway' : '已写入 CLI 配置';
+    // 看板页头那枚只读标记跟着更新：模式一变，卡会不会自己跑掉就变了
+    try { kbLoadMode(); } catch {}
+    if (r.needsRestart) {
+      status.textContent = '已写入。需要重启 gateway 才生效：hermes gateway restart';
+      toast('已保存，需重启 gateway 生效', 3200);
+    } else {
+      status.textContent = '已生效（下一轮 tick 生效，不用重启）';
+      toast('看板编排已切换', 1800);
+    }
+  };
+
+  applyBtn.onclick = () => {
+    if (!state || busy || !pick || pick === state.mode) return;
+    const m = (state.modes || []).find((x) => x.id === pick);
+    if (!m) return;
+    opConfirm(stage, {
+      title: `把看板编排改成「${m.label}」？`,
+      cmd: planLines(pick),
+      note: m.dispatch
+        ? '改的是 gateway 的自动派发行为，下一轮 tick 生效，不需要重启。'
+        : '这一档会停掉 gateway 里的派发器：改完必须重启 gateway 才真正生效，且所有看板都不再自动派发。',
+      confirmLabel: '确认切换',
+      onGo: () => runApply(pick),
+    });
+  };
+
+  const load = async () => {
+    if (!isNativeCLI()) {
+      status.textContent = '演示模式：需要桌面端原生环境读取编排开关。';
+      return;
+    }
+    status.textContent = '正在读取当前模式…';
+    let r = null;
+    try { r = await api.kanbanOrchestration(); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    if (!alive()) return;
+    if (!r || !r.ok) {
+      status.textContent = '读取失败：' + ((r && r.error) || '未知错误');
+      status.classList.add('is-error');
+      return;
+    }
+    state = r;
+    pick = r.mode;
+    draw();
+  };
+  refresh.onclick = () => { if (!busy) load(); };
+  await load();
+}
+
 async function renderCronPanel(panel, cat) {
   const epoch = settingsPanelEpoch;
   const alive = () => epoch === settingsPanelEpoch;
@@ -5010,6 +5224,8 @@ const KB = {
   view: 'cols', status: '', modal: '', modalKey: '', modalBusy: false,
   dispatch: { open: false, busy: false, epoch: 0 },
   filters: { q: '', assignee: '', tenant: '', archived: false, board: '' },
+  // 页头那枚只读模式标记的数据（null = 还没读到 / 读不到，此时不显示）
+  mode: null,
 };
 let kbSelectSig = '';
 
@@ -5141,6 +5357,7 @@ function showKanban(force) {
   page.hidden = false;
   closeKanbanDrawer();
   kanbanLoad(true);
+  kbLoadMode();
   kanbanStartPolling();
 }
 function closeKanbanPage() {
@@ -5648,6 +5865,36 @@ function kbGroups() {
 }
 /** 页头只写两样：当前看板名 + 一行概览。原来那排统计卡会把首屏挤掉，
  *  各组条数已经在筛选 chip 上各出现一次，这里只留「总量 + 进行中」。 */
+/**
+ * 页头那枚编排模式标记：只读 + 点击去设置，绝不在这里改任何东西。
+ * 三档模式由主进程从 config.yaml 的两个开关推导，渲染层只管显示 ——
+ * 否则 UI 会多出一份可以和 gateway 实际状态不一致的「模式」。
+ */
+const KB_MODE_TIP = Object.freeze({
+  auto: '收集箱的卡会自动拆解并派发执行。点击到设置里更改。',
+  semi: '收集箱停住，其余仍自动执行。点击到设置里更改。',
+  manual: '派发器已停，只有手动派发才会执行。点击到设置里更改。',
+});
+function kbModeChip(state) {
+  const el = $('#kb-head-mode');
+  if (!el) return;
+  if (!state || !state.ok) { el.hidden = true; return; }
+  KB.mode = state;
+  el.hidden = false;
+  el.dataset.mode = state.mode;
+  el.textContent = '自动编排·' + (state.modeLabel || state.mode);
+  el.title = KB_MODE_TIP[state.mode] || '看板编排模式（只读）';
+  el.classList.toggle('is-manual', state.mode === 'manual');
+}
+async function kbLoadMode() {
+  const el = $('#kb-head-mode');
+  if (!el) return;
+  if (!kbApi() || !isNativeCLI()) { el.hidden = true; return; }
+  let r = null;
+  try { r = await api.kanbanOrchestration(); } catch { r = null; }
+  kbModeChip(r);
+}
+
 function renderKanbanHead() {
   const nameEl = $('#kb-board-name'), statEl = $('#kb-head-stat'), sep = $('.kb-meta-sep');
   const o = KB.overview || {};
@@ -6309,6 +6556,9 @@ function setupKanban() {
     if (sp) sp.hidden = true; if (g) g.hidden = false;
   };
   const close = $('#kb-close'); if (close) close.onclick = () => closeKanbanPage();
+  // 页头模式标记：只读展示，点击跳设置（设置页是独立 palette，不关看板页）
+  const modeChip = $('#kb-head-mode');
+  if (modeChip) modeChip.onclick = () => { settingsCat = 'kanban'; try { toggleSettings(true); } catch {} };
   const dclose = $('#kb-drawer-close'); if (dclose) dclose.onclick = () => closeKanbanDrawer();
   const mask = $('#kb-drawer-mask'); if (mask) mask.onclick = () => closeKanbanDrawer();
 

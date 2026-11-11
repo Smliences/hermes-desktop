@@ -795,6 +795,13 @@ function boot() {
   // 写入是**改 CLI 配置**，只有渲染层二次确认卡的回调会调它；桌面端不自动写。
   handle('hermes-config:reasoning-display', () => hermesConfig.reasoningDisplay());
   handle('hermes-config:set-reasoning-display', (_e, on) => hermesConfig.setReasoningDisplay(on === true));
+  // 看板编排：三档模式 = 两个 CLI 开关的派生值（不单独存模式，避免自相矛盾）。
+  // 读走「config.yaml 原文 + 看板 REST」，写 auto_decompose 走 REST、
+  // 写 dispatch_in_gateway 走 `hermes config set`（5–7s，且改完必须重启 gateway）。
+  // 这是**改 CLI 配置**，只有渲染层二次确认卡的回调会调 set-mode。
+  const kanbanMode = require('./services/hermes-kanban-mode').createKanbanMode({ kanban, cfg: hermesConfig });
+  handle('kanban:orchestration', () => kanbanMode.read());
+  handle('kanban:set-mode', (_e, mode) => kanbanMode.apply(String(mode || '')));
   // 只读诊断：白名单 key → argv，渲染层无法传任意命令 / 参数
   const diagnostics = require('./services/hermes-diagnostics');
   handle('diagnostics:run', (_e, key) => diagnostics.run(key));

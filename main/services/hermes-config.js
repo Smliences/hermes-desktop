@@ -179,7 +179,96 @@ function setReasoningDisplay(on) {
   });
 }
 
+/**
+ * 看板编排的布尔开关（写进 config.yaml 的 `kanban` 段）。
+ *
+ * 为什么从原文解析而不是问 CLI：`hermes config get` 要冷启动 CLI，实测 5.7 秒，
+ * 设置页打开时等不起；而 `dispatch_in_gateway` 压根不在看板 REST 的 /orchestration
+ * 白名单里（那边只有 auto_decompose / auto_promote_children / 两个 profile），
+ * 没有更快的接口可问。
+ */
+const KANBAN_BOOL_KEYS = Object.freeze(['auto_decompose', 'auto_promote_children', 'dispatch_in_gateway']);
+const KANBAN_PROFILE_KEYS = Object.freeze(['orchestrator_profile', 'default_assignee']);
+
+/**
+ * 解析 `kanban:` 段的开关。缺省值对齐 CLI 的 config_defaults.py，全部默认 true ——
+ * 宁可显示「默认开」，也不要把「没写过」误报成关。
+ */
+function parseKanbanSwitches(text) {
+  const out = {
+    auto_decompose: true, auto_promote_children: true, dispatch_in_gateway: true,
+    orchestrator_profile: '', default_assignee: '', explicit: {},
+  };
+  let inKanban = false;
+  for (const raw of String(text == null ? '' : text).split(/\r?\n/)) {
+    const line = raw.replace(/\t/g, '  ');
+    if (/^kanban\s*:\s*(?:#.*)?$/.test(line)) { inKanban = true; continue; }
+    if (inKanban && /^\S/.test(line)) break;          // 下一个顶层键，段结束
+    if (!inKanban) continue;
+    const m = line.match(/^ {2}([a-z_]+)\s*:\s*(.+)$/);
+    if (!m) continue;
+    const key = m[1];
+    const val = scalar(m[2]);
+    if (KANBAN_BOOL_KEYS.includes(key)) {
+      out.explicit[key] = val;
+      out[key] = !/^(?:false|no|off|0)$/i.test(val);
+    } else if (KANBAN_PROFILE_KEYS.includes(key)) {
+      out.explicit[key] = val;
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+/** 读 `kanban` 段开关（文件读失败也返回可用的默认值，附 error 供 UI 提示）。 */
+function kanbanSwitches() {
+  const configPath = path.join(hermesHome(), 'config.yaml');
+  let text;
+  try { text = fs.readFileSync(configPath, 'utf8'); }
+  catch (err) {
+    return { ok: false, configPath, ...parseKanbanSwitches(''),
+      error: 'config.yaml 不可读：' + String((err && err.message) || err) };
+  }
+  return { ok: true, configPath, ...parseKanbanSwitches(text) };
+}
+
+/**
+ * 写一个 `kanban.*` 布尔。走官方 `hermes config set` —— 唯一会做键校验 + 正确回写的
+ * 路径；桌面端自己改 yaml 会丢注释。冷启动约 5–7 秒，调用方必须异步等。
+ *
+ * 这是**写 CLI 配置**：只允许用户点二次确认卡触发，渲染层不得自动调用。
+ */
+function setKanbanSwitch(key, on) {
+  if (!KANBAN_BOOL_KEYS.includes(key)) {
+    return Promise.resolve({ ok: false, error: '不支持的看板开关：' + String(key) });
+  }
+  return new Promise((resolve) => {
+    const argv = profile.cliArgs(['config', 'set', 'kanban.' + key, on ? 'true' : 'false']);
+    let child = null;
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
+    const killer = setTimeout(() => {
+      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
+      finish({ ok: false, error: '写入超时（hermes config set 未在 40s 内返回）' });
+    }, 40000);
+    try {
+      child = execFile(resolveHermesBin(), argv, {
+        timeout: 40000, maxBuffer: 1024 * 1024, env: profile.env({ NO_COLOR: '1' }),
+      }, (err, stdout, stderr) => {
+        const text = String(stdout || '').trim().slice(0, 2000);
+        if (err) {
+          const msg = String((stderr || '').trim() || (err && err.message) || err).split('\n')[0];
+          return finish({ ok: false, error: msg || '写入失败', text });
+        }
+        finish({ ok: true, text, state: kanbanSwitches() });
+      });
+      child.on('error', (e) => finish({ ok: false, error: String(e) }));
+    } catch (e) { finish({ ok: false, error: String(e) }); }
+  });
+}
+
 module.exports = {
   listProviders, listModels, configPaths, hermesHome, parseModelBlock, modelState,
+  parseKanbanSwitches, kanbanSwitches, setKanbanSwitch, KANBAN_BOOL_KEYS,
   reasoningDisplay, parseReasoningDisplay, setReasoningDisplay,
 };
