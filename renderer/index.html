@@ -433,6 +433,7 @@
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="dispatch"
                     aria-expanded="false" aria-controls="kb-dispatch-panel">手动派发控制台</button>
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="view">切换到网格视图</button>
+                  <button class="kb-more-item" type="button" role="menuitem" data-kb-more="project">新建项目…</button>
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="bind">绑定项目…</button>
                   <label class="kb-more-item is-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
                 </div>
@@ -557,7 +558,14 @@
               <form id="kb-form-bind" class="kb-form" autocomplete="off" hidden>
                 <label class="kb-frow"><span>绑定项目</span><hm-select id="kb-b-project" class="ui-select" aria-label="绑定到看板的项目"><option value="">不绑定项目</option></hm-select></label>
                 <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
-                <div class="kb-fnote">没有想要的项目？先在终端跑 <code>hermes project create &lt;名字&gt; &lt;文件夹…&gt;</code>，再回来刷新。</div>
+                <div class="kb-fnote">列表里没有想要的项目？用「更多操作 → 新建项目…」创建后再绑定。</div>
+              </form>
+              <form id="kb-form-project" class="kb-form" autocomplete="off" hidden>
+                <label class="kb-frow"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如：Hermes Agent" /></label>
+                <label class="kb-frow"><span>文件夹（每行一个）</span><textarea id="kb-p-folders" rows="3" placeholder="/Users/you/repos/hermes-agent&#10;可多行，第一个即主仓库；全部留空则只建项目壳"></textarea></label>
+                <label class="kb-frow"><span>slug</span><input id="kb-p-slug" type="text" maxlength="64" placeholder="可留空，默认由名称生成" /></label>
+                <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
+                <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
               </form>
             </div>
             <div class="kb-modal-foot">

@@ -988,6 +988,23 @@ async function run() {
     assert.ok(!('project_id' in kanban.cleanTaskInput({ title: 'x', idempotencyKey: key0 })), '未选项目不得带 project_id（保持继承语义）');
     assert.strictEqual(kanban.cleanTaskInput({ title: 'x', idempotencyKey: key0, projectId: 'bad name!' }), null, '非法项目标识未被拒');
   });
+  await t('建项目 argv：名称/文件夹/slug/描述的清洗与拒绝（不真跑 CLI）', () => {
+    const { createProjectArgv } = require('../main/services/hermes-project-cli');
+    const r = createProjectArgv('Hermes Agent', ['/tmp/repo', ' ~/x '], { description: ' d ', slug: 'hermes-agent' });
+    for (const expected of ['project', 'create', 'Hermes Agent', '/tmp/repo', '~/x']) {
+      assert.ok(r.argv.includes(expected), 'argv 缺少 ' + expected);
+    }
+    const di = r.argv.indexOf('--description');
+    assert.ok(di > 0 && r.argv[di + 1] === 'd', '描述未 trim');
+    assert.ok(r.argv.includes('--slug') && r.argv[r.argv.indexOf('--slug') + 1] === 'hermes-agent');
+    assert.strictEqual(createProjectArgv('').error, '请填写项目名称');
+    assert.strictEqual(createProjectArgv('a'.repeat(81)).error, '项目名称过长（≤80 字）');
+    assert.ok(String(createProjectArgv('ok', ['relative/path']).error || '').includes('绝对路径'), '相对路径未被拒');
+    assert.ok(String(createProjectArgv('ok', ['/a', '/b', '/c', '/d', '/e', '/f', '/g', '/h', '/i']).error || '').includes('8'), '文件夹数量未受限');
+    assert.ok(String(createProjectArgv('ok', [], { slug: 'Bad Slug' }).error || '').includes('slug'), '非法 slug 未被拒');
+    const bare = createProjectArgv('Solo');
+    assert.ok(bare.argv.includes('Solo') && !bare.argv.includes('--slug') && !bare.argv.includes('--description'), '纯名称不应带可选参数');
+  });
   await t('派发参数：dry_run 默认 true、显式 false 才真跑、max 硬上限 4', () => {
     assert.strictEqual(kanban.buildWritePath('dispatch'), '/dispatch?dry_run=true&max=1');
     assert.strictEqual(kanban.buildWritePath('dispatch', { dryRun: true }), '/dispatch?dry_run=true&max=1');

@@ -665,6 +665,10 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.bindBoard(input || {});
   });
+  // 建项目没有 REST 端点，唯一官方入口是 CLI 子命令（写 projects.db，用户点击触发）
+  handle('kanban:create-project', async (_e, input) => {
+    return require('./services/hermes-project-cli').createProject(input || {});
+  });
   handle('kanban:delete-task', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.deleteTask(taskId, opts || {});

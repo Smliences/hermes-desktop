@@ -6590,11 +6590,11 @@ function kbSyncStatusNote() {
 }
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
-  if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind')) return;
+  if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind' && kind !== 'project')) return;
   KB.modal = kind;
   KB.modalBusy = false;
   KB.modalKey = 'desktop-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind');
+  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind'), projForm = $('#kb-form-project');
   // 每次打开都从空白开始：上一次取消/创建留下的标题、受让人不能带进来
   if (taskForm) {
     taskForm.reset();
@@ -6609,17 +6609,19 @@ function kbModalOpen(kind, presetStatus) {
   if (preset && statusSel) statusSel.value = preset;
   if (boardForm) { boardForm.reset(); boardForm.hidden = kind !== 'board'; }
   if (bindForm) { bindForm.reset(); bindForm.hidden = kind !== 'bind'; }
+  if (projForm) { projForm.reset(); projForm.hidden = kind !== 'project'; }
   kbSyncStatusNote();
   kbSyncProjectSelects();
   const title = $('#kb-modal-title');
-  if (title) title.textContent = kind === 'task' ? '新建任务' : (kind === 'bind' ? '绑定项目' : '新建看板');
+  const TITLES = { task: '新建任务', bind: '绑定项目', project: '新建项目', board: '新建看板' };
+  if (title) title.textContent = TITLES[kind] || '新建';
   kbModalErr('');
   const submit = $('#kb-modal-submit');
-  if (submit) { submit.disabled = false; submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' : '创建看板'); }
+  if (submit) { submit.disabled = false; submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' : (kind === 'project' ? '创建项目' : '创建看板')); }
   kbSyncSelects();
   modal.hidden = false; mask.hidden = false;
   kbSetBackgroundInert(true);
-  const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') : $('#kb-b-slug'));
+  const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') : (kind === 'project' ? $('#kb-p-name') : $('#kb-b-slug')));
   try { if (first) first.focus({ preventScroll: true }); } catch {}
 }
 function kbModalClose() {
@@ -6660,6 +6662,16 @@ function kbModalSubmit() {
     if (!meta.slug) { kbModalErr('当前看板未就绪，请稍后重试'); return Promise.resolve(); }
     if (!a.kanbanBindBoard) { kbModalErr('此页需要 Hermes 桌面端才能绑定项目'); return Promise.resolve(); }
     payload = { slug: meta.slug, projectId: $('#kb-b-project')?.value || '' };
+  } else if (kind === 'project') {
+    if (!a.kanbanCreateProject) { kbModalErr('此页需要 Hermes 桌面端才能创建项目'); return Promise.resolve(); }
+    const pname = ($('#kb-p-name')?.value || '').trim();
+    if (!pname) { kbModalErr('请填写项目名称'); return Promise.resolve(); }
+    payload = {
+      name: pname,
+      folders: ($('#kb-p-folders')?.value || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+      slug: ($('#kb-p-slug')?.value || '').trim(),
+      description: ($('#kb-p-desc')?.value || '').trim(),
+    };
   } else {
     payload = {
       slug: ($('#kb-b-slug')?.value || '').trim(),
@@ -6676,13 +6688,14 @@ function kbModalSubmit() {
       let r;
       if (kind === 'task') r = await a.kanbanCreateTask(payload);
       else if (kind === 'bind') r = await a.kanbanBindBoard(payload);
+      else if (kind === 'project') r = await a.kanbanCreateProject(payload);
       else r = await a.kanbanCreateBoard(payload);
       if (KB.modal !== kind) return; // 期间已关弹窗，旧响应不写 DOM
       if (!r || !r.ok) { kbModalErr((r && r.error) || '操作失败'); return; }
       kbModalClose();
       toast(kind === 'bind'
         ? (payload.projectId ? '已绑定项目，生效见该板任务的默认工作区' : '已解除项目绑定')
-        : (kind === 'task' ? '任务已创建' : '看板已创建'), 1800);
+        : (kind === 'task' ? '任务已创建' : (kind === 'project' ? '项目已创建' : '看板已创建')), 1800);
       if (r.warning) toast('调度器提示：' + r.warning, 3600);
       if (kind !== 'task') { KB.overview = null; kbSelectSig = ''; }
       await kanbanLoad(true); // 写后回读 CLI 列表
@@ -6710,7 +6723,7 @@ function setupKanban() {
   const dclose = $('#kb-drawer-close'); if (dclose) dclose.onclick = () => closeKanbanDrawer();
   const mask = $('#kb-drawer-mask'); if (mask) mask.onclick = () => closeKanbanDrawer();
 
-  // 「⋯」菜单：新建看板 / 手动派发 / 切换视图 / 显示已归档
+  // 「⋯」菜单：新建看板 / 新建项目 / 绑定项目 / 手动派发 / 切换视图 / 显示已归档
   const moreBtn = $('#kb-more'), moreMenu = $('#kb-more-menu');
   if (moreBtn) moreBtn.onclick = () => kbMoreToggle(moreMenu ? moreMenu.hidden : true);
   if (moreMenu) {
@@ -6720,6 +6733,7 @@ function setupKanban() {
       const what = item.getAttribute('data-kb-more');
       // 勾选框那一项不关菜单：用户可能想连着看两个结果
       if (what === 'board') { kbMoreToggle(false); kbModalOpen('board'); return; }
+      if (what === 'project') { kbMoreToggle(false); kbModalOpen('project'); return; }
       if (what === 'bind') { kbMoreToggle(false); kbModalOpen('bind'); return; }
       if (what === 'dispatch') { kbMoreToggle(false); kbDispatchToggle(!KB.dispatch.open); return; }
       if (what === 'view') {
@@ -6755,7 +6769,7 @@ function setupKanban() {
   const mmask = $('#kb-modal-mask'); if (mmask) mmask.onclick = () => kbModalClose();
   const msubmit = $('#kb-modal-submit'); if (msubmit) msubmit.onclick = () => kbModalSubmit();
   // 表单里按 Esc 只收本弹窗，不冒泡关掉整页；字段用 keydown 守卫，命令面板同理。
-  document.querySelectorAll('#kb-form-task input, #kb-form-task hm-select, #kb-form-task textarea, #kb-form-board input, #kb-form-board textarea, #kb-form-bind hm-select')
+  document.querySelectorAll('#kb-form-task input, #kb-form-task hm-select, #kb-form-task textarea, #kb-form-board input, #kb-form-board textarea, #kb-form-bind hm-select, #kb-form-project input, #kb-form-project textarea')
     .forEach((el) => {
       guardFieldKey(el, () => kbModalClose());
       // 文本字段里回车即提交；textarea 保留换行，不抢全局快捷键

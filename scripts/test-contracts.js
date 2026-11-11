@@ -966,14 +966,14 @@ t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', (
   for (const ch of ['kanban:board', 'kanban:task', 'kanban:overview', 'kanban:run',
     'kanban:create-task', 'kanban:create-board', 'kanban:delete-task',
     'kanban:submit-task', 'kanban:reassign', 'kanban:dispatch-task',
-    'kanban:dispatch', 'kanban:workers', 'kanban:bind-board']) {
+    'kanban:dispatch', 'kanban:workers', 'kanban:bind-board', 'kanban:create-project']) {
     assert.ok(mainSrc.includes("handle('" + ch + "'"), 'main 缺少 handler ' + ch);
     assert.ok(preloadSrc.includes("ipcRenderer.invoke('" + ch + "'"), 'preload 缺少通道 ' + ch);
   }
   for (const fn of ['kanbanBoard', 'kanbanTask', 'kanbanOverview',
     'kanbanCreateTask', 'kanbanCreateBoard', 'kanbanDeleteTask',
     'kanbanSubmitTask', 'kanbanReassign', 'kanbanDispatchTask',
-    'kanbanDispatch', 'kanbanActiveWorkers', 'kanbanBindBoard']) {
+    'kanbanDispatch', 'kanbanActiveWorkers', 'kanbanBindBoard', 'kanbanCreateProject']) {
     assert.ok(kbAppSrc.includes('a.' + fn + '(') || kbAppSrc.includes('api.' + fn + '('), 'renderer 未调用 ' + fn);
   }
   assert.ok(mainSrc.includes('chat.backendInfo()'), '主进程未把后端只读快照注入看板客户端');

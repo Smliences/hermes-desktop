@@ -122,6 +122,11 @@
     async kanbanBindBoard(input = {}) {
       return { ok: true, generation: 1, board: { slug: String(input.slug || ''), project_id: String(input.projectId || '') }, current: '' };
     },
+    async kanbanCreateProject(input = {}) {
+      const name = String((input && input.name) || '').trim();
+      if (!name) return { ok: false, error: '请填写项目名称' };
+      return { ok: true, text: `[mock] created project ${name}` };
+    },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);
       if (i >= 0) KB_TASKS.splice(i, 1);
