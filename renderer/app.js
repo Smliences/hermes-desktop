@@ -5409,7 +5409,10 @@ function kbSyncSelects() {
   const ph = o.currentBoard ? `当前看板 (${o.currentBoard})` : '当前看板';
   if (sig !== kbSelectSig) {
     kbSelectSig = sig;
-    kbFillSelect('#kb-board', boards, KB.filters.board, ph);
+    // 占位项（空值）本身就代表当前看板，候选里必须把当前看板剔除，
+    // 否则会出现「当前看板 (default)」+「default (9)」两行指向同一个看板的怪相
+    const cur = String(o.currentBoard || '');
+    kbFillSelect('#kb-board', cur ? boards.filter((x) => x.value !== cur) : boards, KB.filters.board, ph);
     kbFillSelect('#kb-assignee', assignees, KB.filters.assignee, '全部受让人');
     kbFillSelect('#kb-tenant', tenants, KB.filters.tenant, '全部租户');
   }
@@ -5935,7 +5938,8 @@ async function kbLoadMode() {
 function renderKanbanHead() {
   const nameEl = $('#kb-board-name'), statEl = $('#kb-head-stat'), sep = $('.kb-meta-sep');
   const o = KB.overview || {};
-  const name = String(o.currentBoard || KB.filters.board || '当前看板');
+  // 筛到别的看板时页头要跟着显示被筛的看板，而不是 gateway 的当前看板
+  const name = String(KB.filters.board || o.currentBoard || '当前看板');
   if (nameEl) nameEl.textContent = name;
   if (!statEl) return;
   let text = '';
