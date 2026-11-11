@@ -530,7 +530,7 @@
                 <label class="kb-frow"><span>标题 <i>必填</i></span><input id="kb-f-title" type="text" maxlength="200" placeholder="例如：修复登录页的空状态" /></label>
                 <label class="kb-frow"><span>描述</span><textarea id="kb-f-body" rows="4" maxlength="20000" placeholder="补充背景、验收标准…"></textarea></label>
                 <div class="kb-fgrid">
-                  <label class="kb-frow"><span>起始状态</span><hm-select id="kb-f-status" class="ui-select"><option value="triage">收集箱 triage（不派发）</option><option value="ready">就绪 ready（可能被派发）</option></hm-select></label>
+                  <label class="kb-frow"><span>起始状态</span><hm-select id="kb-f-status" class="ui-select"><option value="triage">收集箱 triage（等自动分解）</option><option value="ready">就绪 ready（可能被派发）</option></hm-select></label>
                   <label class="kb-frow"><span>优先级</span><input id="kb-f-priority" type="number" min="0" max="100" value="0" /></label>
                   <label class="kb-frow"><span>受让人（profile）</span><hm-select id="kb-f-assignee" class="ui-select" aria-label="受让人（profile）" placeholder="留空则不指派"></hm-select></label>
                   <label class="kb-frow"><span>租户</span><input id="kb-f-tenant" type="text" maxlength="80" placeholder="可留空" /></label>
@@ -540,7 +540,7 @@
                   <span class="kb-fhint-line" id="kb-f-assignee-profiles"></span>
                 </div>
                 <label class="kb-frow"><span>目标看板</span><hm-select id="kb-f-board" class="ui-select"><option value="">当前看板</option></hm-select></label>
-                <div class="kb-fnote" id="kb-f-note">默认进入收集箱，不会被调度器自动派发给 agent。</div>
+                <div class="kb-fnote" id="kb-f-note">收集箱不会被派发器直接拉起，但网关的自动分解会补全 spec 并推进到就绪。</div>
               </form>
               <form id="kb-form-board" class="kb-form" autocomplete="off" hidden>
                 <label class="kb-frow"><span>标识 slug <i>必填</i></span><input id="kb-b-slug" type="text" maxlength="64" placeholder="例如 ops-2026" /></label>

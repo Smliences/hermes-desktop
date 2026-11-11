@@ -5729,7 +5729,7 @@ function renderKanbanBody() {
         ? `<div class="kb-empty-state"><h2>没有匹配的任务</h2><p>试试清空搜索、切换分组或放宽受让人筛选。</p></div>`
         : '';
     const addCard = (!KB.status && !empty)
-      ? `<div class="kb-add-row"><button class="kb-add-card" type="button" data-kb-new="task">＋ 新建任务<span>默认落在收集箱 triage · 不派发</span></button></div>`
+      ? `<div class="kb-add-row"><button class="kb-add-card" type="button" data-kb-new="task">＋ 新建任务<span>默认落在收集箱 triage · 等自动分解</span></button></div>`
       : '';
     if (groupsHost) groupsHost.innerHTML = body + addCard + empty;
     if (colsHost) colsHost.innerHTML = '';
@@ -5745,7 +5745,7 @@ function renderKanbanBody() {
       const addStatus = g.key === 'ready' ? 'ready' : 'triage';
       const add = canAdd
         ? `<button class="kb-add-col" type="button" data-kb-new="task" data-kb-new-status="${addStatus}"
-             title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：不会被自动派发'}">＋ 添加任务</button>`
+             title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：派发器不会直接拉起，等自动分解补全后才会被派发'}">＋ 添加任务</button>`
         : '';
       return `<div class="kb-col${collapsed}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
         <div class="kb-col-head"><span class="kb-col-dot"></span><span class="kb-col-name">${esc(g.label)}</span>
@@ -6194,7 +6194,10 @@ function kbModalErr(text) {
   e.textContent = text || '';
   e.hidden = !text;
 }
-/** 起始状态对应的底注：ready 会被调度器认领，必须给出警示色。 */
+/** 起始状态对应的底注：ready 会被调度器认领，必须给出警示色。
+ *  收集箱也不能写「不会派发」—— gateway 每个 tick 会把 triage 卡交给自动分解器
+ *  （kanban.auto_decompose，默认开），补全 spec、填受让人、推到 todo→ready 后照样拉起
+ *  worker。只有把 auto_decompose 关掉，收集箱才真的停住。 */
 function kbSyncStatusNote() {
   const sel = $('#kb-f-status'), note = $('#kb-f-note');
   if (!sel || !note) return;
@@ -6202,7 +6205,7 @@ function kbSyncStatusNote() {
   note.classList.toggle('warn', ready);
   note.textContent = ready
     ? '就绪状态可能被运行中的调度器立即认领并派发给 agent 执行，请确认后再创建。'
-    : '默认进入收集箱，不会被调度器自动派发给 agent。';
+    : '收集箱不会被派发器直接拉起，但 gateway 的自动分解（kanban.auto_decompose，默认开启）会补全 spec、填受让人并推进到 todo→ready，随后仍会被派发。';
 }
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');

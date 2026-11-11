@@ -2553,6 +2553,17 @@ t('没有冗余横幅：无任务状态交给列表达，错误才出条', () =>
     '错误条必须保留');
 });
 
+t('收集箱不能承诺「不会被派发」：gateway 默认会自动分解 triage', () => {
+  // kanban.auto_decompose 默认 true：gateway 每个 tick 把 triage 卡交给分解器，
+  // 补 spec + 填受让人 + 推到 todo→ready，随后照样 spawn。旧的「不派发」文案是假承诺。
+  const uiText = htmlSrc + kbAppSrc;
+  for (const lie of ['不会被自动派发', '收集箱 triage（不派发）', '不派发</span>']) {
+    assert.ok(!uiText.includes(lie), '仍在承诺 triage 不会被派发：' + lie);
+  }
+  assert.ok(kbAppSrc.includes('kanban.auto_decompose'), '新建弹窗底注必须点明自动分解这个真实机制');
+  assert.ok(kbAppSrc.includes('等自动分解'), '列尾入口文案要说明收集箱是「等自动分解」，不是「不派发」');
+});
+
 t('看板渲染链调用的每个函数都真的有定义', () => {
   // 血泪教训：renderKanban() 调了一个已被改名删除的函数，ReferenceError 把整条
   // 渲染链打断在第一步 —— 页面打开是空的，但 catch 里只留一句 unhandled rejection，
