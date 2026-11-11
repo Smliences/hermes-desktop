@@ -276,6 +276,7 @@ const state = {
   invalidTurns: new Set(),   // 已中止回合的 turnId：延迟到达的事件直接丢弃
   env: null, config: { model: '', reasoning: 'none', yolo: false },
   sessions: [], sendHistory: [], histIdx: -1,
+  projectsTree: [],         // 侧栏项目树投影（/api/profiles/projects/tree，降级为 []）
   attachments: [],           // [{ path, name, kind }] 本回合待附加的本地文件
 };
 const hasNative = typeof hermesAPI !== 'undefined';
@@ -337,8 +338,14 @@ let sessionsSeq = 0;
 async function refreshSessions(search = '') {
   const seq = ++sessionsSeq;
   const q = String(search || '').trim();
+  // 项目树与列表并行：项目归组失败不拖累会话列表本身（只降级成纯时间分组）
+  const treeP = (hasNative && typeof api.projectsTree === 'function')
+    ? Promise.resolve(api.projectsTree({ previewLimit: 3 })).catch(() => null)
+    : Promise.resolve(null);
   try {
-    const all = arr(await api.listSessions({ limit: 200, search: '' }));
+    const [allR, treeR] = await Promise.all([api.listSessions({ limit: 200, search: '' }), treeP]);
+    const all = arr(allR);
+    const tree = treeR && treeR.ok ? treeR : null;
     let hits = [];
     if (q && typeof api.searchMessages === 'function') {
       try { hits = arr(await api.searchMessages(q)); } catch (e) { console.warn('fts', e); }
@@ -351,6 +358,8 @@ async function refreshSessions(search = '') {
       .map((s) => ({ ...s, snippet: (hitMap.get(s.id) || {}).snippet || '', fulltext: hitMap.has(s.id) }))
       .filter((s) => !q || String(s.title || '').toLowerCase().includes(ql) || String(s.id).toLowerCase().includes(ql) || s.fulltext)
       .slice(0, 80);
+    state.projectsTree = Array.isArray(tree && tree.projects)
+      ? tree.projects.filter((p) => p && p.id && !p.isNoProject) : [];
     renderSessions(q);
   } catch (e) { console.warn('sessions', e); }
 }
@@ -367,12 +376,106 @@ function sessionGroup(s) {
   if (diff <= 7) return '最近 7 天';
   return '更早';
 }
+/** 侧栏单个会话行（项目预览与时间分组共用）：返回 li，由调用方挂事件 */
+function sessionItemEl(s, { query = '', snippet = '' } = {}) {
+  const tab = activeTab();
+  const li = document.createElement('li');
+  if (tab && s.id === tab.sessionId) li.classList.add('active');
+  const dt = s.started_at ? new Date(s.started_at * 1000) : null;
+  const when = dt ? `${dt.getMonth() + 1}/${dt.getDate()}` : '';
+  // 键盘可达：列表项与 ⋯ 入口原本都是纯 li/span，鼠标以外完全无法操作
+  li.setAttribute('role', 'option');
+  li.setAttribute('tabindex', '0');
+  li.setAttribute('aria-selected', tab && s.id === tab.sessionId ? 'true' : 'false');
+  li.innerHTML = `<span class="s-main"><span class="s-title">${hlMark(s.title, query)}</span>` +
+    (snippet ? `<span class="s-snippet">${hlMark(snippet, query)}</span>` : '') + `</span>` +
+    `<span class="s-actions" role="button" tabindex="0" aria-label="会话操作" title="会话操作">⋯</span>` +
+    `<span class="s-meta">${s.pinned ? '⌁ ' : ''}${when}</span>`;
+  // 从搜索结果点进来：把查询词带进会话内查找，直接落到命中位置并高亮，
+  // 省掉「打开会话 → 再自己搜一次」的往返。
+  li.onclick = () => {
+    const carry = s.fulltext ? query : '';
+    const p = openSession(s.id);
+    if (carry && p && typeof p.then === 'function') {
+      p.then(() => {
+        const t = activeTab();
+        // 过期响应 / 用户又点了别的会话时不要抢焦点
+        if (t && t.sessionId === s.id && t.items.length) findOpen(carry);
+      });
+    }
+  };
+  li.onkeydown = (e) => {
+    if (e.target !== li) return; // 让 ⋯ 自己处理，避免冒泡后重复触发
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSession(s.id); }
+  };
+  const acts = li.querySelector('.s-actions');
+  acts.onclick = (e) => { e.stopPropagation(); openSessionMenu(s, acts); };
+  acts.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); acts.click(); }
+  };
+  return li;
+}
+
+/** 项目行「＋」：在项目根目录新建会话 —— CLI 按 cwd 的 git 仓库根自动归属项目 */
+function newTabInProject(projectPath) {
+  const p = String(projectPath || '');
+  const t = newTab();
+  if (p.startsWith('/')) t.cwd = p;
+  $('#input').focus();
+}
 function renderSessions(q = '') {
   const ul = $('#session-list'); ul.innerHTML = '';
   const query = q || (($('#session-search') && $('#session-search').value.trim()) || '');
-  const tab = activeTab();
+  const searching = !!query;
+  const projects = (!searching && Array.isArray(state.projectsTree)) ? state.projectsTree : [];
+  // 已被项目认领的会话从时间分组排除（preview 行 + 全量 sessionIds；pinned 保留在置顶组）
+  const claimed = new Set();
+  for (const p of projects) for (const id of (p.sessionIds || [])) claimed.add(id);
+  const claimedNoPin = (id) => {
+    const s = state.sessions.find((x) => x.id === id);
+    return claimed.has(id) && !(s && (Number(s.pinned) > 0 || s.pinned === true));
+  };
+  // 项目分组：显式项目恒显示，auto 项目只在有会话时出现；服务端已按 lastActive 排序
+  let shownProject = false;
+  for (const p of projects) {
+    if (p.isAuto && !p.sessionCount) continue;
+    shownProject = true;
+    const gl = document.createElement('li');
+    gl.className = 's-group s-proj';
+    gl.setAttribute('role', 'presentation');
+    const safePath = esc(p.path || '');
+    gl.innerHTML = `<span class="s-pname">${esc(p.label || p.id)}<span class="s-pcount">${p.sessionCount || 0}</span></span>` +
+      (p.path ? `<button class="s-pnew" data-cwd="${safePath}" title="在 ${safePath} 新建会话（会话将归属该项目）" aria-label="在此项目新建会话">+</button>` : '');
+    const plus = gl.querySelector('.s-pnew');
+    if (plus) {
+      plus.onclick = (e) => { e.stopPropagation(); newTabInProject(p.path); };
+      plus.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); plus.click(); }
+      };
+    }
+    ul.appendChild(gl);
+    for (const ps of (p.previewSessions || []).slice(0, 3)) {
+      const li = sessionItemEl(ps, { query });
+      ul.appendChild(li);
+    }
+    if ((p.sessionCount || 0) > 3) {
+      const more = document.createElement('li');
+      more.className = 's-more';
+      more.setAttribute('role', 'presentation');
+      more.textContent = `… 该项目还有 ${p.sessionCount - 3} 条会话`;
+      ul.appendChild(more);
+    }
+  }
+  if (shownProject) {
+    const rest = document.createElement('li');
+    rest.className = 's-group';
+    rest.setAttribute('role', 'presentation');
+    rest.textContent = '其他会话';
+    ul.appendChild(rest);
+  }
   let lastGroup = null;
   for (const s of state.sessions) {
+    if (!searching && claimedNoPin(s.id)) continue; // 已在项目分组里，不重复出现
     const group = sessionGroup(s);
     if (group !== lastGroup) {
       const gl = document.createElement('li');
@@ -382,43 +485,15 @@ function renderSessions(q = '') {
       ul.appendChild(gl);
       lastGroup = group;
     }
-    const li = document.createElement('li');
-    if (tab && s.id === tab.sessionId) li.classList.add('active');
-    const dt = s.started_at ? new Date(s.started_at * 1000) : null;
-    const when = dt ? `${dt.getMonth() + 1}/${dt.getDate()}` : '';
-    // 键盘可达：列表项与 ⋯ 入口原本都是纯 li/span，鼠标以外完全无法操作
-    li.setAttribute('role', 'option');
-    li.setAttribute('tabindex', '0');
-    li.setAttribute('aria-selected', tab && s.id === tab.sessionId ? 'true' : 'false');
-    li.innerHTML = `<span class="s-main"><span class="s-title">${hlMark(s.title, query)}</span>` +
-      (s.snippet ? `<span class="s-snippet">${hlMark(s.snippet, query)}</span>` : '') + `</span>` +
-      `<span class="s-actions" role="button" tabindex="0" aria-label="会话操作" title="会话操作">⋯</span>` +
-      `<span class="s-meta">${s.pinned ? '⌁ ' : ''}${when}</span>`;
-    // 从搜索结果点进来：把查询词带进会话内查找，直接落到命中位置并高亮，
-    // 省掉「打开会话 → 再自己搜一次」的往返。
-    li.onclick = () => {
-      const carry = s.fulltext ? query : '';
-      const p = openSession(s.id);
-      if (carry && p && typeof p.then === 'function') {
-        p.then(() => {
-          const t = activeTab();
-          // 过期响应 / 用户又点了别的会话时不要抢焦点
-          if (t && t.sessionId === s.id && t.items.length) findOpen(carry);
-        });
-      }
-    };
-    li.onkeydown = (e) => {
-      if (e.target !== li) return; // 让 ⋯ 自己处理，避免冒泡后重复触发
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSession(s.id); }
-    };
-    const acts = li.querySelector('.s-actions');
-    acts.onclick = (e) => { e.stopPropagation(); openSessionMenu(s, acts); };
-    acts.onkeydown = (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); acts.click(); }
-    };
-    ul.appendChild(li);
+    ul.appendChild(sessionItemEl(s, { query, snippet: s.snippet }));
   }
-  if (!state.sessions.length) {
+  // 时间分组一条没出（全被项目认领）时撤掉「其他会话」标题；项目行以 DOM 顺序判断
+  if (shownProject) {
+    const kids = [...ul.children];
+    const restIdx = kids.findIndex((x) => x.textContent === '其他会话');
+    if (restIdx >= 0 && restIdx === kids.length - 1) kids[restIdx].remove();
+  }
+  if (!ul.children.length) {
     const li = document.createElement('li');
     li.innerHTML = `<span class="s-title" style="color:var(--text-3)">${query ? '没有匹配的会话' : '暂无会话'}</span>`;
     ul.appendChild(li);
@@ -1077,6 +1152,9 @@ async function send(text) {
     tabId: tab.id, query: text, sessionId: tab.sessionId || undefined,
     model: state.config.model || undefined, reasoning: state.config.reasoning,
     yolo: state.config.yolo || undefined,
+    // 项目内新建的页签带着项目根：首轮 session.create 以此为 cwd，CLI 按
+    // git 仓库根把会话归属到项目（每轮都传无害，resume 不再使用它）
+    cwd: tab.cwd || undefined,
     attachments: state.attachments.length ? state.attachments.map((a) => a.path) : undefined,
   };
   state.attachments = []; renderAttach();

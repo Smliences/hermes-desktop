@@ -173,6 +173,19 @@
       }));
       return { ok: true, workers: ws, count: ws.length, checkedAt: Math.floor(Date.now() / 1000) };
     },
+    /* 侧栏项目树 Demo：一个显式项目 + 未归类桶，形状对齐 hermes-kanban.js 的投影 */
+    async projectsTree() {
+      const now = Math.floor(Date.now() / 1000);
+      const mk = (i) => ({ id: 's_demo_' + i, title: KB_TASKS[i % KB_TASKS.length].title,
+        preview: '演示会话 ' + i, started_at: now - i * 3600, last_active: now - i * 3600 });
+      const demo = { id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '', icon: '',
+        isAuto: false, isNoProject: false, sessionCount: 2, lastActive: now,
+        previewSessions: [mk(0), mk(1)], sessionIds: ['s_demo_0', 's_demo_1'] };
+      const home = { id: '__no_project__', label: '未归类', path: null, color: '', icon: '',
+        isAuto: true, isNoProject: true, sessionCount: 1, lastActive: now - 7200,
+        previewSessions: [mk(2)], sessionIds: ['s_demo_2'] };
+      return { ok: true, generation: 1, projects: [demo, home], errors: [] };
+    },
     // 编排模式：Demo 里只是内存态，语义与真实一致（三档是两个布尔的派生值）
     async kanbanOrchestration() {
       return { ok: true, ...KB_MODE_STATE, modes: KB_MODE_LIST, degraded: false, warn: '' };

@@ -500,6 +500,9 @@ function boot() {
      保证 busyTurns / 球态计数 / 事件投递 / 关闭收尾只有一个口径。 */
   function submitTurn(tabId, payload) {
     const p = payload || {};
+    // 项目内新建会话：渲染层可以带 cwd（项目根）。必须是真实存在的绝对目录，
+    // 否则丢弃 —— session.create 兜底 homedir，绝不把伪造路径交给 CLI。
+    if (typeof p.cwd !== 'string' || !path.isAbsolute(p.cwd) || !fs.existsSync(p.cwd)) p.cwd = undefined;
     busyTurns += 1;
     pushOrbChatRunning(true);
     syncOrb();
@@ -647,6 +650,11 @@ function boot() {
   handle('kanban:overview', async (_e, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.overview(opts || {});
+  });
+  // 侧栏项目树（GET /api/profiles/projects/tree）：会话按项目归组的数据源
+  handle('projects:tree', async (_e, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.projectsTree(opts || {});
   });
   handle('kanban:run', async (_e, runId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };

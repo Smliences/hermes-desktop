@@ -27,6 +27,10 @@ const http = require('http');
 const log = require('./logger');
 
 const PLUGIN_BASE = '/api/plugins/kanban';
+/** 侧栏项目树来自 profiles 路由（与看板同一个 serve、同一个 token，不同前缀）。 */
+const PROFILE_BASE = '/api/profiles';
+/** 请求前缀白名单：requestJSON 只接受这两个值，渲染层无法指定任意路径前缀。 */
+const BASES = Object.freeze([PLUGIN_BASE, PROFILE_BASE]);
 const TIMEOUT_MS = 6000;
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_WRITE_BODY = 32 * 1024;
@@ -163,6 +167,12 @@ function buildPath(op, params = {}) {
     case 'orchestration': return '/orchestration';
     case 'diagnostics': return '/diagnostics' + suffix;
     case 'workers': return '/workers/active' + suffix;
+    // 侧栏项目树（GET /api/profiles/projects/tree）：服务端按 project → repo → lane
+    // 把会话分好组，previewSessions 是每项目最近几条、sessionIds 是全量认领 id。
+    case 'projectsTree': {
+      const preview = Number.isInteger(p.previewLimit) ? Math.max(1, Math.min(5, p.previewLimit)) : 3;
+      return `/projects/tree?preview_limit=${preview}&session_limit=2000`;
+    }
     default: return null;
   }
 }
@@ -308,7 +318,9 @@ function projectOrchestration(data) {
 }
 
 /** 单次 loopback 请求（GET 读 / POST·PATCH·PUT·DELETE 白名单写）。永不 throw。 */
-function requestJSON(info, method, pathWithQuery, body) {
+function requestJSON(info, method, pathWithQuery, body, base) {
+  // 前缀只允许两个白名单值；undefined 兼容旧调用 = 看板插件路由。
+  const prefix = BASES.includes(base) ? base : PLUGIN_BASE;
   return new Promise((resolve) => {
     if (!validInfo(info) || typeof pathWithQuery !== 'string' || !pathWithQuery.startsWith('/')
         || (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE')) {
@@ -323,7 +335,7 @@ function requestJSON(info, method, pathWithQuery, body) {
       payload = Buffer.from(JSON.stringify(body), 'utf8');
       if (payload.length > MAX_WRITE_BODY) { resolve({ ok: false, error: '请求内容过大' }); return; }
     }
-    const path = PLUGIN_BASE + pathWithQuery;
+    const path = prefix + pathWithQuery;
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; clearTimeout(hardTimer); resolve(v); } };
     let req;
@@ -394,8 +406,8 @@ function requestJSON(info, method, pathWithQuery, body) {
 }
 
 /** 读端点固定 GET；写端点由 createKanbanClient 的方法显式指定。 */
-function getJSON(info, pathWithQuery) {
-  return requestJSON(info, 'GET', pathWithQuery, null);
+function getJSON(info, pathWithQuery, base) {
+  return requestJSON(info, 'GET', pathWithQuery, null, base);
 }
 function postJSON(info, pathWithQuery, body) {
   return requestJSON(info, 'POST', pathWithQuery, body);
@@ -408,6 +420,56 @@ function putJSON(info, pathWithQuery, body) {
 }
 function deleteJSON(info, pathWithQuery) {
   return requestJSON(info, 'DELETE', pathWithQuery, null);
+}
+
+/** 侧栏项目树里单个会话预览行允许透出的字段（CLI _project_tree_row 行的白名单子集）。 */
+const TREE_SESSION_FIELDS = Object.freeze(['id', 'title', 'preview', 'started_at', 'last_active']);
+/** 项目认领的全量会话 id 封顶：侧栏只用来做「哪些会话已归组」的排除集合。 */
+const TREE_IDS_MAX = 600;
+
+/** 会话预览行投影：只留列表渲染需要的字段，cwd/成本/血缘等一律不透出。 */
+function projectTreeRow(s) {
+  const o = s && typeof s === 'object' ? s : {};
+  const out = {};
+  for (const k of TREE_SESSION_FIELDS) {
+    if (o[k] === undefined || o[k] === null) continue;
+    if (typeof o[k] === 'string') out[k] = k === 'preview' ? str(o[k], 400) : str(o[k], 200);
+    else if (typeof o[k] === 'number') out[k] = o[k];
+  }
+  return out.id ? out : null;
+}
+
+/**
+ * 把 CLI /projects/tree 的响应投影成侧栏用的形态。
+ * 只透出项目标识/计数/预览/认领 id；repos 与 lane（worktree 泳道）细节不上渲染层。
+ * 归属规则的权威在 CLI（git_repo_root || cwd），桌面端只是树投影。
+ */
+function projectTree(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const list = Array.isArray(d.projects) ? d.projects : [];
+  const projects = list.slice(0, 100).map((p) => {
+    const o = p && typeof p === 'object' ? p : {};
+    const previews = (Array.isArray(o.previewSessions) ? o.previewSessions : [])
+      .slice(0, 10).map(projectTreeRow).filter(Boolean);
+    const ids = (Array.isArray(o.sessionIds) ? o.sessionIds : [])
+      .filter((x) => typeof x === 'string' && x).slice(0, TREE_IDS_MAX);
+    const lastActive = Number(o.last_active) || 0;
+    const fallbackLabel = o.isNoProject ? '未归类' : (o.isAuto ? baseName(o.path) : '');
+    return {
+      id: str(o.id, 80), label: str(o.label, 120) || fallbackLabel,
+      path: str(o.path, 300), color: str(o.color, 16), icon: str(o.icon, 8),
+      isAuto: o.isAuto === true, isNoProject: o.isNoProject === true,
+      sessionCount: Number.isInteger(o.sessionCount) ? Math.max(0, Math.min(99999, o.sessionCount)) : 0,
+      lastActive: Number.isFinite(lastActive) ? lastActive : 0,
+      previewSessions: previews, sessionIds: ids,
+    };
+  }).filter((x) => x.id && (x.label || x.path));
+  return { projects, errors: Array.isArray(d.errors) ? d.errors.slice(0, 5).map((x) => safeObject(x)) : [] };
+}
+/** 从路径取末段作 auto 项目的展示名（CLI build_tree 的 auto 桶同语义）。 */
+function baseName(p) {
+  const s = String(p || '').replace(/\/+$/, '');
+  return s ? (s.split('/').pop() || '').slice(0, 120) : '';
 }
 
 /** 把 /board 的原始响应投影成 UI 需要的形态，补齐 8/9 列。 */
@@ -521,7 +583,8 @@ function createKanbanClient(getBackendInfo) {
     if (!path) return { ok: false, error: '非法的看板请求' };
     const snap = info();
     if (!validInfo(snap)) return { ok: false, error: '看板服务尚未就绪（桌面端后端未启动）' };
-    return getJSON(snap, path);
+    // projectsTree 走 profiles 路由（/api/profiles/projects/tree），其余都在插件路由下
+    return getJSON(snap, path, op === 'projectsTree' ? PROFILE_BASE : undefined);
   }
   async function write(op, method, params, body) {
     const path = buildWritePath(op, params);
@@ -811,6 +874,17 @@ function createKanbanClient(getBackendInfo) {
     },
 
     /**
+     * 侧栏项目树（GET /api/profiles/projects/tree）：项目 → 泳道 → 会话。
+     * previewSessions 是每项目最近几条会话（hydrate=False 时 lane 行为空），
+     * sessionIds 是该项目认领的全部会话 id —— 侧栏用它把已归组会话从时间分组里排除。
+     */
+    async projectsTree(opts = {}) {
+      const r = await read('projectsTree', { ...(opts || {}), previewLimit: opts && opts.previewLimit });
+      if (!r.ok) return r;
+      return { ok: true, generation: info().generation || 0, ...projectTree(r.data) };
+    },
+
+    /**
      * 编排开关（config.yaml 的 `kanban` 段）—— 设置页「看板编排」的数据源之一。
      * 只管 auto_decompose / auto_promote_children / 两个 profile；
      * `dispatch_in_gateway` 不在这个端点里，由 hermes-config 读原文补上。
@@ -836,7 +910,8 @@ module.exports = {
   createKanbanClient, buildPath, buildWritePath, validInfo,
   cleanTaskInput, cleanBoardInput, cleanBoardBind, cleanAssignee, clampMaxSpawn, cleanOrchestration,
   projectBoard, projectDetail, projectTask, projectDispatch, projectWorkers, projectOrchestration,
-  COLUMNS, ALL_COLUMNS, PLUGIN_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
+  projectTree, projectTreeRow,
+  COLUMNS, ALL_COLUMNS, PLUGIN_BASE, PROFILE_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
   TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE, PROJECT_RE,
   CREATE_STATUSES, REASSIGN_STATUSES, ORCHESTRATION_KEYS,
 };

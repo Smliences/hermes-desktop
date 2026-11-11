@@ -1005,6 +1005,48 @@ async function run() {
     const bare = createProjectArgv('Solo');
     assert.ok(bare.argv.includes('Solo') && !bare.argv.includes('--slug') && !bare.argv.includes('--description'), '纯名称不应带可选参数');
   });
+  await t('侧栏项目树：buildPath 白名单、会话行与树投影（字段封顶）', () => {
+    assert.strictEqual(kanban.buildPath('projectsTree'), '/projects/tree?preview_limit=3&session_limit=2000');
+    assert.strictEqual(kanban.buildPath('projectsTree', { previewLimit: 5 }),
+      '/projects/tree?preview_limit=5&session_limit=2000');
+    assert.ok(kanban.buildPath('projectsTree', { previewLimit: 99 }).includes('preview_limit=5'), 'preview 未封顶');
+    assert.ok(kanban.buildPath('projectsTree', { previewLimit: 0 }).includes('preview_limit=1'), 'preview 未抬底');
+    // 会话预览行：只留列表渲染需要的字段，cwd / 成本 / 血缘一律不透出
+    const row = kanban.projectTreeRow({
+      id: 's_1', title: '修 bug', preview: '摘要'.repeat(300), started_at: 1700000000,
+      cwd: '/secret/ws', git_repo_root: '/secret', input_tokens: 99, model: 'deepseek',
+    });
+    assert.deepStrictEqual(Object.keys(row).sort(),
+      ['id', 'preview', 'started_at', 'title'].sort(), '会话行字段越界');
+    assert.strictEqual(row.preview.length, 400, '摘要未封顶');
+    assert.strictEqual(kanban.projectTreeRow({ title: 'no id' }), null, '无 id 行必须丢弃');
+    // 树投影：显式项目与未归类桶都保留；无名字的 auto 项目从 path 末段取名
+    const tree = kanban.projectTree({ projects: [
+      { id: 'pj_1', label: 'Hermes', path: '/repo', sessionCount: 3, lastActive: 1700000000,
+        previewSessions: [{ id: 's_1', title: 'a' }, { title: '无id' }],
+        sessionIds: Array.from({ length: 700 }, (_, i) => 's_' + i), repos: [{ id: '/repo', sessionCount: 3 }] },
+      { id: '__no_project__', label: 'Home', isNoProject: true, sessionCount: 2,
+        previewSessions: [{ id: 's_x', title: 'x' }], sessionIds: ['s_x', 's_y'] },
+      { id: '/auto/repo', isAuto: true, path: '/auto/repo', sessionCount: 1,
+        previewSessions: [], sessionIds: ['s_z'] },
+      { id: '', label: '无 id 的坏行' },
+    ], errors: [{ message: 'profile x failed' }] });
+    assert.strictEqual(tree.projects.length, 3, '坏行未被丢弃');
+    const p1 = tree.projects[0];
+    assert.strictEqual(p1.previewSessions.length, 1, '无 id 预览行未滤掉');
+    assert.strictEqual(p1.sessionIds.length, 600, '认领 id 未封顶');
+    assert.ok(!('repos' in p1), 'repo 细节不上渲染层');
+    const home = tree.projects[1];
+    // CLI 的 Home 桶权威 label 就是 "Home"，桌面端不改写；无 label 才兜底「未归类」
+    assert.strictEqual(home.label, 'Home', 'CLI 给了 label 却被改写');
+    const noLabel = kanban.projectTree({ projects: [{ id: '__no_project__', isNoProject: true, sessionCount: 0 }] });
+    assert.strictEqual(noLabel.projects[0].label, '未归类', '无 label 的桶没有中文兜底');
+    assert.strictEqual(home.isNoProject, true);
+    const auto = tree.projects[2];
+    assert.strictEqual(auto.label, 'repo', 'auto 项目未从 path 取名');
+    assert.strictEqual(tree.errors.length, 1, 'errors 未透传');
+    assert.strictEqual(kanban.projectTree(null).projects.length, 0, '空响应不能抛错');
+  });
   await t('派发参数：dry_run 默认 true、显式 false 才真跑、max 硬上限 4', () => {
     assert.strictEqual(kanban.buildWritePath('dispatch'), '/dispatch?dry_run=true&max=1');
     assert.strictEqual(kanban.buildWritePath('dispatch', { dryRun: true }), '/dispatch?dry_run=true&max=1');
@@ -1152,6 +1194,16 @@ async function run() {
         return;
       }
       const fixtures = {
+        '/api/profiles/projects/tree': { projects: [
+          { id: 'pj_1', label: 'Hermes', path: '/repo', color: '#ff0000', icon: '⚡',
+            isAuto: false, isNoProject: false, sessionCount: 2, lastActive: 1700000000,
+            repos: [{ id: '/repo', label: 'repo', groups: [] }],
+            previewSessions: [{ id: 's_1', title: '甲', preview: 'pv', started_at: 1700000000,
+              cwd: '/secret/ws', input_tokens: 5 }],
+            sessionIds: ['s_1', 's_2'] },
+          { id: '__no_project__', label: 'Home', isNoProject: true, sessionCount: 1,
+            previewSessions: [{ id: 's_2', title: '乙' }], sessionIds: ['s_2'] },
+        ], active_id: null, scoped_session_ids: ['s_1', 's_2'], errors: [] },
         '/api/plugins/kanban/board': { columns: [{ name: 'running', tasks: [{ id: 't_ab12', title: 'A', workspace_path: '/secret' }] }],
           assignees: ['ops'], tenants: [], latest_event_id: 7, now: 1700000000 },
         '/api/plugins/kanban/tasks': { task: { id: 't_new1', title: '新任务', status: 'triage', workspace_path: '/secret' } },
@@ -1185,11 +1237,29 @@ async function run() {
     assert.ok(run.ok && run.run.outcome === 'completed', '/runs/:id 的 {run:{}} 包装未拆开');
     assert.ok(seen.length >= 3, '请求未真正发出');
     assert.ok(seen.every((x) => x.token === TOKEN), '会话 token 未注入每个请求');
-    assert.ok(seen.every((x) => x.path.startsWith('/api/plugins/kanban/')), '路径越出插件前缀');
+    assert.ok(seen.every((x) => x.path.startsWith('/api/plugins/kanban/') || x.path.startsWith('/api/profiles/')),
+      '路径越出白名单前缀');
     assert.ok(seen.some((x) => x.path.includes('board=default') && x.path.includes('tenant=acme')), 'query 未透传');
     const leaked = JSON.stringify([b, d, run]);
     assert.ok(!leaked.includes(TOKEN), 'token 泄漏到返回值');
     assert.ok(!leaked.includes('/secret'), '本机路径泄漏到返回值');
+  });
+  await t('projectsTree：走 profiles 路由、token 同样注入、投影后无敏感字段', async () => {
+    const before = seen.length;
+    const tr = await client.projectsTree({ previewLimit: 3 });
+    assert.ok(tr.ok, 'projectsTree 失败：' + tr.error);
+    assert.strictEqual(tr.generation, 7);
+    assert.strictEqual(tr.projects.length, 2, '树未按夹具投影');
+    const req = seen[before];
+    assert.strictEqual(req.method, 'GET');
+    assert.strictEqual(req.path, '/api/profiles/projects/tree?preview_limit=3&session_limit=2000');
+    assert.strictEqual(req.token, TOKEN, 'profiles 路由未注入会话 token');
+    const p1 = tr.projects[0];
+    assert.strictEqual(p1.label, 'Hermes');
+    assert.deepStrictEqual(Object.keys(p1.previewSessions[0]).sort(),
+      ['id', 'preview', 'started_at', 'title'].sort(), '预览行泄漏了 cwd / token 计数');
+    assert.ok(!JSON.stringify(tr).includes('/secret'), '树投影泄漏本机路径');
+    assert.strictEqual(tr.projects[1].label, 'Home', 'CLI 的 Home 桶 label 被改写');
   });
   await t('overview 拆开 CLI 的对象包装，组内失败互不拖累', async () => {
     const o = await client.overview({ board: 'default' });

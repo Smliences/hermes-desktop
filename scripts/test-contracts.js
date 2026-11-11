@@ -966,7 +966,8 @@ t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', (
   for (const ch of ['kanban:board', 'kanban:task', 'kanban:overview', 'kanban:run',
     'kanban:create-task', 'kanban:create-board', 'kanban:delete-task',
     'kanban:submit-task', 'kanban:reassign', 'kanban:dispatch-task',
-    'kanban:dispatch', 'kanban:workers', 'kanban:bind-board', 'kanban:create-project']) {
+    'kanban:dispatch', 'kanban:workers', 'kanban:bind-board', 'kanban:create-project',
+    'projects:tree']) {
     assert.ok(mainSrc.includes("handle('" + ch + "'"), 'main 缺少 handler ' + ch);
     assert.ok(preloadSrc.includes("ipcRenderer.invoke('" + ch + "'"), 'preload 缺少通道 ' + ch);
   }
@@ -976,6 +977,8 @@ t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', (
     'kanbanDispatch', 'kanbanActiveWorkers', 'kanbanBindBoard', 'kanbanCreateProject']) {
     assert.ok(kbAppSrc.includes('a.' + fn + '(') || kbAppSrc.includes('api.' + fn + '('), 'renderer 未调用 ' + fn);
   }
+  // 侧栏项目树在会话层消费（不在看板切片里）
+  assert.ok(appSrc.includes('api.projectsTree('), 'renderer 未消费项目树');
   assert.ok(mainSrc.includes('chat.backendInfo()'), '主进程未把后端只读快照注入看板客户端');
   assert.ok(read('main/services/hermes-chat.js').includes('backendInfo()'), 'ChatChannel 缺少 backendInfo 快照');
 });
@@ -988,7 +991,7 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
 t('读写边界：读固定 GET，写只有八条白名单，危险端点一律不暴露', () => {
-  assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null)"), '读端点未固定 GET');
+  assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null, base)"), '读端点未固定 GET');
   assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
@@ -1226,6 +1229,46 @@ t('拖拽派发样式：幽灵卡穿透指针、投放目标高亮、双主题�
   assert.ok(kbCss.includes('pointer-events: none'), '幽灵卡必须穿透指针，否则 elementFromPoint 命不中 chip');
   assert.ok(kbCss.includes('body.kb-dragging'), '拖动中未禁用文本选中');
   assert.ok(kbCss.includes('.compact .kb-dock-label'), '窄主区未适配投放区');
+});
+
+/* ---- 3r-2. 侧栏项目树：会话按项目归组 + 项目内新建会话（cwd 管道） ---- */
+t('侧栏项目树：数据只来自 /api/profiles/projects/tree 投影，时间分组不重复显示已归组会话', () => {
+  // 服务层：唯一走 profiles 前缀的读端点；前缀白名单只放行两个值
+  assert.ok(kbSrc.includes("const PROFILE_BASE = '/api/profiles'"), '缺少 profiles 前缀常量');
+  assert.ok(/function requestJSON\(info, method, pathWithQuery, body, base\)/.test(kbSrc),
+    'requestJSON 未开放前缀参数');
+  assert.ok(kbSrc.includes('BASES.includes(base) ? base : PLUGIN_BASE'), '请求前缀未按白名单收敛');
+  assert.ok(kbSrc.includes("case 'projectsTree':"), '缺少项目树读端点');
+  assert.ok(kbSrc.includes('function projectTree(') && kbSrc.includes('function projectTreeRow('),
+    '缺少树投影函数');
+  // 会话行白名单：cwd / 成本 / 血缘不上渲染层
+  assert.ok(kbSrc.includes("const TREE_SESSION_FIELDS = Object.freeze(['id', 'title', 'preview', 'started_at', 'last_active'])"),
+    '树会话行字段白名单被改动');
+  // 渲染层：refreshSessions 并行拉树、失败降级为纯时间分组；preview 行与认领 id 排除集合
+  assert.ok(appSrc.includes("api.projectsTree({ previewLimit: 3 })"), '渲染层未按 3 条预览拉项目树');
+  assert.ok(appSrc.includes('!p.isNoProject'), '未归类桶不得渲染成项目分组');
+  assert.ok(appSrc.includes('const claimed = new Set()'), '缺少已归组会话排除集合');
+  assert.ok(appSrc.includes('sessionItemEl('), '项目预览行未复用会话行渲染');
+  assert.ok(appSrc.includes("textContent = '其他会话'"), '缺少剩余会话分组标题');
+  // 样式类必须在 styles.css 有规则（CSS class 契约）
+  for (const cls of ['.s-proj', '.s-pname', '.s-pcount', '.s-pnew', '.s-more']) {
+    assert.ok(cssSrc.includes(cls), '缺少样式规则 ' + cls);
+  }
+});
+t('项目内新建会话：cwd 从项目根一路传到 session.create，主进程校验绝对路径 + 目录存在', () => {
+  // 渲染层：项目行「＋」→ newTabInProject（带 cwd 的新页签）；send payload 带 cwd
+  assert.ok(appSrc.includes('function newTabInProject('), '缺少项目内新建入口');
+  assert.ok(/if \(p\.startsWith\('\/'\)\) t\.cwd = p;/.test(appSrc), '新建页签未记录项目根');
+  assert.ok(/cwd: tab\.cwd \|\| undefined,/.test(appSrc), '发送回合未携带项目 cwd');
+  // 主进程：submitTurn 只放行真实存在的绝对目录（伪造路径丢弃，session.create 兜底 homedir）
+  const submitAnchor = 'function submitTurn(tabId, payload)';
+  const submitSlice = mainSrc.slice(mainSrc.indexOf(submitAnchor));
+  assert.ok(/typeof p\.cwd !== 'string' \|\| !path\.isAbsolute\(p\.cwd\) \|\| !fs\.existsSync\(p\.cwd\)/.test(submitSlice),
+    '主进程未校验 cwd（绝对路径 + 目录存在）');
+  assert.ok(submitSlice.includes('p.cwd = undefined'), '非法 cwd 未被丢弃');
+  // CLI 侧的承接：session.create 的 cwd 参数兜底 homedir（链条终点必须真的用上 cwd）
+  const chatSrc = read('main/services/hermes-chat.js');
+  assert.ok(chatSrc.includes('cwd: this.opts.cwd || os.homedir()'), 'session.create 未接 cwd');
 });
 
 section('3s. 插件 / 技能列表：磁盘缓存 + 后台刷新（打开页面不再等 6–8s 冷启）');
@@ -2549,7 +2592,7 @@ t('Demo 模式能打开看板：门禁按 kanbanBoard 是否存在判断，不�
   assert.ok(kbAppSrc.includes("const kbApi = () => (api && typeof api.kanbanBoard === 'function' ? api : null);"),
     'kbApi 又回到 hasNative 门禁，浏览器预览会打不开看板');
   const mock = read('renderer/mock-bridge.js');
-  for (const m of ['kanbanBoard(', 'kanbanOverview(', 'kanbanTask(', 'kanbanCreateTask(', 'kanbanReassign(', 'kanbanDispatch(']) {
+  for (const m of ['kanbanBoard(', 'kanbanOverview(', 'kanbanTask(', 'kanbanCreateTask(', 'kanbanReassign(', 'kanbanDispatch(', 'projectsTree(']) {
     assert.ok(mock.includes(m), 'mock-bridge 缺少看板方法 ' + m);
   }
 });
