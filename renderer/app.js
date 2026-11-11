@@ -5258,6 +5258,13 @@ function kbAgo(v) {
   if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前';
   return Math.floor(sec / 86400) + ' 天前';
 }
+function kbFullTime(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const d = new Date(n < 1e12 ? n * 1000 : n);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
 function kbSetLive(text, cls) {
   const el = $('#kb-live'), t = $('#kb-live-text');
   if (!el || !t) return;
@@ -5851,18 +5858,11 @@ function kbCardHtml(t, colName, opts) {
   const o = opts || {};
   const st = String(colName || t.status || '');
   const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
-  const pri = Number(t.priority) || 0;
-  // 顶行 = 优先级胶囊 + 相对时间（Dribbble 高赞稿的「元数据胶囊化」语言）。
-  // priority 是派发排序键（ORDER BY priority DESC，数字越大越先派），0 = 没设，不占位。
-  const priCls = pri >= 3 ? 'hi' : (pri === 2 ? 'mid' : 'lo');
-  const priLabel = pri >= 3 ? '高' : (pri === 2 ? '中' : '低');
-  const priHtml = pri >= 1 ? `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发）">${priLabel}</span>` : '';
+  // 方案一（OnPoint 极简白卡）：无顶行，标题是第一视觉焦点；优先级不占卡面，
+  // 只在抽屉里看。时间做成弱胶囊收进脚行，与评论数并排，状态点收右下。
   const ago = kbAgo(t.created_at);
-  const topHtml = (priHtml || ago)
-    ? `<div class="kb-card-top">${priHtml}<span class="kb-card-when">${ago ? esc(ago) : ''}</span></div>`
-    : '';
-  // 细粒度状态 chip：只有跨组展示（网格视图 / 搜索结果）才需要它自己说明处在哪一步；
-  // 列视图里列头彩条已经写着分组，卡上再挂一个「已完成」是纯冗余。
+  const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
+  // 来源行：受让人等身份 chip；细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要。
   const chips = [];
   if (o.showStatus && st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
   if (t.assignee) chips.push(kbAssigneeChip(t.assignee));
@@ -5881,11 +5881,10 @@ function kbCardHtml(t, colName, opts) {
   const sum = String(t.latest_summary || '').trim();
   const dragHint = draggable === '1' ? '拖到上方 worker 上可直接指派' : `${st || '该状态'} 不支持拖拽改派`;
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
-    ${topHtml}
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
     ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
-    <div class="kb-card-foot">${foot.join('<i aria-hidden="true">·</i>')}<span class="kb-card-dot" aria-hidden="true"></span></div>
+    <div class="kb-card-foot">${whenHtml}${foot.length ? `${whenHtml ? '<i aria-hidden="true">·</i>' : ''}${foot.join('<i aria-hidden="true">·</i>')}` : ''}<span class="kb-card-dot" aria-hidden="true"></span></div>
   </button>`;
 }
 

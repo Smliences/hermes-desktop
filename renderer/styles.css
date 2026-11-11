@@ -2582,10 +2582,10 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-group-rule { flex: 1; height: 1px; background: var(--line); }
 .kb-group-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 10px; }
 
-/* ---- 卡片 ----
-   语言来自 Dribbble 高赞稿（OnPoint / Ildiko Boards）：元数据胶囊化、
-   「图标+数字」、发丝脚行 + 组色状态点。卡片是画布色、列底是填充色，
-   靠色阶差分层而不是靠重边框；静置无阴影，hover 才轻浮起。 */
+/* ---- 卡片（方案一 · OnPoint 极简白卡）----
+   标题是第一视觉焦点，无顶行；时间做成弱胶囊、评论数并排收进发丝脚行，
+   组色状态点收右下。优先级不占卡面，只在抽屉里看。卡片是画布色、列底是
+   填充色，靠色阶差分层而不是靠重边框；静置无阴影，hover 才轻浮起。 */
 .kb-card {
   position: relative; display: block; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
   padding: 9px 11px 9px 13px; border: 1px solid var(--line); border-radius: var(--r-md);
@@ -2595,28 +2595,21 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--elev); }
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kb-card.sel { border-color: var(--blue); }
-/* 顶行：优先级胶囊 + 相对时间。胶囊只承担「要不要紧」，弱信息一律让位。 */
-.kb-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; min-height: 16px; }
-.kb-card-top:empty { display: none; }
-.kb-card-when { margin-left: auto; color: var(--caption); font: 400 10px/1.4 var(--sans); }
-.kb-pri {
-  flex: 0 0 auto; padding: 1px 7px; border-radius: var(--r-xs);
-  font: 500 9.5px/1.6 var(--sans);
-}
-.kb-pri.hi { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
-.kb-pri.mid { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
-.kb-pri.lo { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .kb-card-title { font: 500 13px/1.42 var(--sans); word-break: break-word; }
 .kb-card-sum {
   margin-top: 4px; color: var(--text-2); font-size: 11px; line-height: 1.55;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .kb-card-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
-/* 发丝脚行：ID / 评论数 / 子任务进度 + 右端组色状态点 */
+/* 发丝脚行：时间胶囊 / ID / 评论数 / 子任务进度 + 右端组色状态点 */
 .kb-card-foot {
   display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
   margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line);
   color: var(--caption); font: 400 10px/1.45 var(--sans);
+}
+.kb-card-when {
+  flex: 0 0 auto; padding: 1px 6px; border-radius: var(--r-xs);
+  background: var(--fill-2); color: var(--caption); font: 400 9.5px/1.6 var(--sans);
 }
 .kb-card-foot code { font: 400 9.5px/1.45 var(--mono); letter-spacing: -.01em; }
 .kb-card-foot i { color: var(--line-2); font-style: normal; }
