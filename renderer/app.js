@@ -5175,10 +5175,11 @@ function applySettings() {
 
 /* ══════════════════ Kanban 看板（CLI 原生任务队列） ══════════════════
    读走主进程转发的 /api/plugins/kanban/* REST，渲染层拿不到端口与 token。
-   写只有五条白名单：新建任务 / 新建看板 / 删除任务 / 提交派发(→ready) /
-   派发一次(dispatch tick)，都带严格参数校验与写后回读。派发是唯一会唤醒
-   agent 的路径：主进程默认 dry-run、单次上限 4、串行执行；渲染层必须先过
-   二次确认卡。decompose / specify / estimate / bulk 等会花钱的操作不做。
+   写只有八条白名单：新建任务 / 新建看板 / 删除任务 / 提交派发(→ready) /
+   改派 / 派发一次(dispatch tick) / 编排开关(PUT) / 看板绑项目，都带严格
+   参数校验与写后回读。派发是唯一会唤醒 agent 的路径：主进程默认 dry-run、
+   单次上限 4、串行执行；渲染层必须先过二次确认卡。
+   decompose / specify / estimate / bulk 等会花钱的操作不做。
    默认「分组网格」视图，空状态不占列；可切经典列视图。
    所有异步响应都带代次戳（KB.epoch / KB.detailEpoch / KB.dispatch.epoch），
    切页或后端换代后的旧响应一律丢弃，不写 DOM。 */
@@ -5434,6 +5435,7 @@ function kbSyncSelects() {
     kbFillSelect('#kb-f-board', cur ? boards.filter((x) => x.value !== cur) : boards, keep,
       cur ? `当前看板 (${cur})` : '当前看板');
   }
+  kbSyncProjectSelects();
   // 受让人 = Hermes profile 名：把磁盘上真实存在的 profile 做成候选，避免手打错名字
   // 受让人 = Hermes profile 名。改成自绘下拉，候选就是磁盘上真实存在的
   // profile；「留空则不指派」作为占位项，避免手打错名字导致派发器拉不起 worker。
@@ -5441,6 +5443,62 @@ function kbSyncSelects() {
   const ap = $('#kb-f-assignee');
   if (ap) ap.setOptions(profiles.map((n) => ({ value: n, label: n })), '留空则不指派');
   kbSyncAssigneeHint();
+}
+
+/** 项目候选（命名工作空间，决定任务的执行工作区）。
+ *  空值选项 = 继承看板绑定：看板绑了项目 → 任务自动获得确定性 git worktree；
+ *  没绑 → worker 在一次性 scratch 沙箱里跑。 */
+function kbProjectOptions() {
+  const o = KB.overview || {};
+  const projects = Array.isArray(o.projects) ? o.projects : [];
+  return projects.map((p) => ({
+    value: String((p && (p.id || p.slug)) || ''),
+    label: String((p && (p.name || p.slug)) || '')
+      + (p && p.slug && p.name && p.slug !== p.name ? ` (${p.slug})` : ''),
+  })).filter((x) => x.value);
+}
+/** 当前看板的绑定信息：{slug, projectId, projectName}，读不到时全空。 */
+function kbCurrentBoardMeta() {
+  const o = KB.overview || {};
+  const slug = String(KB.filters.board || o.currentBoard || '');
+  const b = (Array.isArray(o.boards) ? o.boards : [])
+    .find((x) => String((x && x.slug) || '') === slug) || null;
+  return {
+    slug,
+    projectId: b ? String(b.project_id || '') : '',
+    projectName: b ? String(b.project_name || '') : '',
+  };
+}
+function kbSyncProjectSelects() {
+  const o = KB.overview || {};
+  const projects = Array.isArray(o.projects) ? o.projects : [];
+  const opts = kbProjectOptions();
+  const meta = kbCurrentBoardMeta();
+  // 新建任务弹窗：没有任何项目且看板也没绑项目时，这个字段选什么都一样，收起整行
+  const fproj = $('#kb-f-project');
+  if (fproj) {
+    kbToggleField('#kb-f-project-row', projects.length > 0 || !!meta.projectId);
+    const keep = fproj.value;
+    const ph = meta.projectName
+      ? `继承看板项目（${meta.projectName}）`
+      : '继承看板设置（未绑定 → scratch 沙箱）';
+    kbFillSelect('#kb-f-project', opts, keep, ph);
+    kbSyncProjectNote();
+  }
+  // 绑定弹窗：占位项「不绑定项目」= 解绑（CLI 把 falsy project_id 当清除）
+  const bproj = $('#kb-b-project');
+  if (bproj) kbFillSelect('#kb-b-project', opts, meta.projectId, '不绑定项目');
+}
+/** 新建弹窗的项目底注：只有显式选了某个项目才出声，说明它对工作区的决定作用。 */
+function kbSyncProjectNote() {
+  const note = $('#kb-f-project-note'), sel = $('#kb-f-project');
+  if (!note || !sel) return;
+  const v = String(sel.value || '');
+  const p = (KB.overview && Array.isArray(KB.overview.projects) ? KB.overview.projects : [])
+    .find((x) => String((x && (x.id || x.slug)) || '') === v);
+  if (!v || !p) { note.hidden = true; note.textContent = ''; return; }
+  note.hidden = false;
+  note.textContent = `已选「${p.name || p.slug}」：worker 将在 ${p.primaryPath || '项目主仓库'} 下创建 git worktree（分支 = slug + 任务id），覆盖看板继承。`;
 }
 /** 受让人说明的第二行：只在填了非 profile 的名字时出声。
  *  可用清单已经在下拉里，再抄一遍 8 个名字只会把弹窗撑长、把真警告淹没。 */
@@ -5959,6 +6017,10 @@ function renderKanbanHead() {
     const total = groups.reduce((n, g) => n + g.all.length, 0);
     const running = (groups.find((g) => g.key === 'running') || { all: [] }).all.length;
     text = total ? (running ? `${total} 张任务 · ${running} 张进行中` : `${total} 张任务`) : '暂无任务';
+    // 看板绑定了项目时把项目名亮在概览行：项目决定该板任务的默认工作区
+    const bm = (Array.isArray(o.boards) ? o.boards : [])
+      .find((x) => String((x && x.slug) || '') === name);
+    if (bm && bm.project_name) text += ` · 项目 ${bm.project_name}`;
   }
   statEl.textContent = text;
   // 统计为空时连分隔符一起收起，否则页头会挂一个孤零零的「·」
@@ -6124,12 +6186,32 @@ function renderKanbanDetail(d) {
   if (Number(t.priority)) meta.push(`<span class="kb-chip pri">P${Number(t.priority)}</span>`);
   if (t.assignee) meta.push(kbAssigneeChip(t.assignee));
   if (t.tenant) meta.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
-  if (t.workspace_kind) meta.push(`<span class="kb-chip">${esc(t.workspace_kind)}</span>`);
   if (t.created_at) meta.push(`<span class="kb-chip">创建 ${esc(kbTime(t.created_at))}</span>`);
   if (t.completed_at) meta.push(`<span class="kb-chip">完成 ${esc(kbTime(t.completed_at))}</span>`);
 
   const jump = /^[A-Za-z0-9_-]{1,80}$/.test(String(t.session_id || ''))
     ? `<div class="kbd-section"><button class="kbd-link" type="button" data-kb-session="${esc(t.session_id)}">↗ 跳转到关联会话 ${esc(String(t.session_id).slice(0, 12))}…</button></div>` : '';
+  // 工作区：worker 实际在哪干活。scratch/dir/worktree 三种；绑了项目的任务
+  // 由 CLI 自动派生 worktree（<repo>/.worktrees/<任务id>），不绑就是一次性沙箱。
+  const WS_KIND_LABEL = {
+    scratch: '临时沙箱（scratch，完成后自动清理）',
+    dir: '指定目录（dir）',
+    worktree: 'git worktree（隔离副本）',
+  };
+  const projMap = {};
+  for (const p of ((KB.overview && Array.isArray(KB.overview.projects)) ? KB.overview.projects : [])) {
+    projMap[String(p.id || '')] = String(p.name || p.slug || '');
+    projMap[String(p.slug || '')] = String(p.name || p.slug || '');
+  }
+  const wsRows = [
+    ['类型', WS_KIND_LABEL[String(t.workspace_kind || 'scratch')] || String(t.workspace_kind || '')],
+    ['工作区路径', t.workspace_path ? String(t.workspace_path) : ''],
+    ['分支', t.branch_name ? String(t.branch_name) : ''],
+    ['所属项目', t.project_id ? (projMap[String(t.project_id)] || String(t.project_id)) : '（未绑定）'],
+  ].filter((r) => r[1]);
+  const wsHtml = `<div class="kbd-section"><h3>工作区</h3><ul class="kbd-list">${
+    wsRows.map((r) => `<li class="kbd-row">${esc(r[0])} <span class="kbd-val">${esc(r[1])}</span></li>`).join('')
+  }</ul></div>`;
   const links = d.links || {};
   const linkRows = [
     ...(links.parents || []).map((x) => `<li class="kbd-row">父任务 <button class="kbd-link" type="button" data-kb-task="${esc(x)}">${esc(x)}</button></li>`),
@@ -6166,6 +6248,7 @@ function renderKanbanDetail(d) {
     <div class="kbd-meta">${meta.join('')}</div>
     ${dispatchAct}
     ${reassignAct}
+    ${wsHtml}
     ${jump}
     ${t.body ? `<div class="kbd-section"><h3>描述</h3><pre class="kbd-text">${esc(clip(t.body, 12000))}</pre></div>` : ''}
     ${t.result || t.latest_summary ? `<div class="kbd-section"><h3>结果 / 交接</h3><pre class="kbd-text">${esc(clip(t.result || t.latest_summary, 12000))}</pre></div>` : ''}
@@ -6507,11 +6590,11 @@ function kbSyncStatusNote() {
 }
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
-  if (!modal || !mask || (kind !== 'task' && kind !== 'board')) return;
+  if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind')) return;
   KB.modal = kind;
   KB.modalBusy = false;
   KB.modalKey = 'desktop-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board');
+  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind');
   // 每次打开都从空白开始：上一次取消/创建留下的标题、受让人不能带进来
   if (taskForm) {
     taskForm.reset();
@@ -6525,16 +6608,18 @@ function kbModalOpen(kind, presetStatus) {
   const statusSel = $('#kb-f-status');
   if (preset && statusSel) statusSel.value = preset;
   if (boardForm) { boardForm.reset(); boardForm.hidden = kind !== 'board'; }
+  if (bindForm) { bindForm.reset(); bindForm.hidden = kind !== 'bind'; }
   kbSyncStatusNote();
+  kbSyncProjectSelects();
   const title = $('#kb-modal-title');
-  if (title) title.textContent = kind === 'task' ? '新建任务' : '新建看板';
+  if (title) title.textContent = kind === 'task' ? '新建任务' : (kind === 'bind' ? '绑定项目' : '新建看板');
   kbModalErr('');
   const submit = $('#kb-modal-submit');
-  if (submit) { submit.disabled = false; submit.textContent = kind === 'task' ? '创建任务' : '创建看板'; }
+  if (submit) { submit.disabled = false; submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' : '创建看板'); }
   kbSyncSelects();
   modal.hidden = false; mask.hidden = false;
   kbSetBackgroundInert(true);
-  const first = kind === 'task' ? $('#kb-f-title') : $('#kb-b-slug');
+  const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') : $('#kb-b-slug'));
   try { if (first) first.focus({ preventScroll: true }); } catch {}
 }
 function kbModalClose() {
@@ -6566,8 +6651,15 @@ function kbModalSubmit() {
       assignee: $('#kb-f-assignee')?.value || '',
       tenant: $('#kb-f-tenant')?.value || '',
       board: $('#kb-f-board')?.value || KB.filters.board || '',
+      // 空值 = 继承看板绑定（服务层只在非空时透传 project_id）
+      projectId: $('#kb-f-project')?.value || '',
       idempotencyKey: key,
     };
+  } else if (kind === 'bind') {
+    const meta = kbCurrentBoardMeta();
+    if (!meta.slug) { kbModalErr('当前看板未就绪，请稍后重试'); return Promise.resolve(); }
+    if (!a.kanbanBindBoard) { kbModalErr('此页需要 Hermes 桌面端才能绑定项目'); return Promise.resolve(); }
+    payload = { slug: meta.slug, projectId: $('#kb-b-project')?.value || '' };
   } else {
     payload = {
       slug: ($('#kb-b-slug')?.value || '').trim(),
@@ -6581,16 +6673,21 @@ function kbModalSubmit() {
   kbModalErr('');
   return (async () => {
     try {
-      const r = kind === 'task' ? await a.kanbanCreateTask(payload) : await a.kanbanCreateBoard(payload);
+      let r;
+      if (kind === 'task') r = await a.kanbanCreateTask(payload);
+      else if (kind === 'bind') r = await a.kanbanBindBoard(payload);
+      else r = await a.kanbanCreateBoard(payload);
       if (KB.modal !== kind) return; // 期间已关弹窗，旧响应不写 DOM
-      if (!r || !r.ok) { kbModalErr((r && r.error) || '创建失败'); return; }
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '操作失败'); return; }
       kbModalClose();
-      toast(kind === 'task' ? '任务已创建' : '看板已创建', 1800);
+      toast(kind === 'bind'
+        ? (payload.projectId ? '已绑定项目，生效见该板任务的默认工作区' : '已解除项目绑定')
+        : (kind === 'task' ? '任务已创建' : '看板已创建'), 1800);
       if (r.warning) toast('调度器提示：' + r.warning, 3600);
-      if (kind === 'board') { KB.overview = null; kbSelectSig = ''; }
+      if (kind !== 'task') { KB.overview = null; kbSelectSig = ''; }
       await kanbanLoad(true); // 写后回读 CLI 列表
     } catch (e) {
-      if (KB.modal === kind) kbModalErr((e && e.message) || '创建失败');
+      if (KB.modal === kind) kbModalErr((e && e.message) || '操作失败');
     } finally {
       KB.modalBusy = false;
       if (submit) submit.disabled = false;
@@ -6623,6 +6720,7 @@ function setupKanban() {
       const what = item.getAttribute('data-kb-more');
       // 勾选框那一项不关菜单：用户可能想连着看两个结果
       if (what === 'board') { kbMoreToggle(false); kbModalOpen('board'); return; }
+      if (what === 'bind') { kbMoreToggle(false); kbModalOpen('bind'); return; }
       if (what === 'dispatch') { kbMoreToggle(false); kbDispatchToggle(!KB.dispatch.open); return; }
       if (what === 'view') {
         KB.view = KB.view === 'grid' ? 'cols' : 'grid';
@@ -6657,7 +6755,7 @@ function setupKanban() {
   const mmask = $('#kb-modal-mask'); if (mmask) mmask.onclick = () => kbModalClose();
   const msubmit = $('#kb-modal-submit'); if (msubmit) msubmit.onclick = () => kbModalSubmit();
   // 表单里按 Esc 只收本弹窗，不冒泡关掉整页；字段用 keydown 守卫，命令面板同理。
-  document.querySelectorAll('#kb-form-task input, #kb-form-task hm-select, #kb-form-task textarea, #kb-form-board input, #kb-form-board textarea')
+  document.querySelectorAll('#kb-form-task input, #kb-form-task hm-select, #kb-form-task textarea, #kb-form-board input, #kb-form-board textarea, #kb-form-bind hm-select')
     .forEach((el) => {
       guardFieldKey(el, () => kbModalClose());
       // 文本字段里回车即提交；textarea 保留换行，不抢全局快捷键
@@ -6669,6 +6767,9 @@ function setupKanban() {
     });
   const statusSel = $('#kb-f-status');
   if (statusSel) statusSel.onchange = () => kbSyncStatusNote();
+  // 选了具体项目时，底注实时说明它对工作区的决定作用
+  const fproj = $('#kb-f-project');
+  if (fproj) fproj.addEventListener('change', () => kbSyncProjectNote());
   // 受让人手打的名字如果不是磁盘上的 profile，说明文字立刻转红字警告
   const assigneeInput = $('#kb-f-assignee');
   if (assigneeInput) assigneeInput.addEventListener('change', () => kbSyncAssigneeHint());

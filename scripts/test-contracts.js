@@ -966,14 +966,14 @@ t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', (
   for (const ch of ['kanban:board', 'kanban:task', 'kanban:overview', 'kanban:run',
     'kanban:create-task', 'kanban:create-board', 'kanban:delete-task',
     'kanban:submit-task', 'kanban:reassign', 'kanban:dispatch-task',
-    'kanban:dispatch', 'kanban:workers']) {
+    'kanban:dispatch', 'kanban:workers', 'kanban:bind-board']) {
     assert.ok(mainSrc.includes("handle('" + ch + "'"), 'main 缺少 handler ' + ch);
     assert.ok(preloadSrc.includes("ipcRenderer.invoke('" + ch + "'"), 'preload 缺少通道 ' + ch);
   }
   for (const fn of ['kanbanBoard', 'kanbanTask', 'kanbanOverview',
     'kanbanCreateTask', 'kanbanCreateBoard', 'kanbanDeleteTask',
     'kanbanSubmitTask', 'kanbanReassign', 'kanbanDispatchTask',
-    'kanbanDispatch', 'kanbanActiveWorkers']) {
+    'kanbanDispatch', 'kanbanActiveWorkers', 'kanbanBindBoard']) {
     assert.ok(kbAppSrc.includes('a.' + fn + '(') || kbAppSrc.includes('api.' + fn + '('), 'renderer 未调用 ' + fn);
   }
   assert.ok(mainSrc.includes('chat.backendInfo()'), '主进程未把后端只读快照注入看板客户端');
@@ -987,19 +987,19 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!appSrc.includes('backend.token'), 'renderer 不应直接读后端 token');
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
-t('读写边界：读固定 GET，写只有七条白名单，危险端点一律不暴露', () => {
+t('读写边界：读固定 GET，写只有八条白名单，危险端点一律不暴露', () => {
   assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null)"), '读端点未固定 GET');
   assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
-  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration']) {
+  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration', 'bindBoard']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少写端点 ' + op);
   }
   assert.ok(kbSrc.includes('TASK_ID_RE.test(String(p.taskId'), '任务 id 未过正则');
   assert.ok(!kbSrc.includes('execFile') && !kbSrc.includes('child_process') && !kbSrc.includes('spawn('),
     '不得新起 CLI 子进程');
   assert.ok(!kbSrc.includes('sqlite3') && !kbSrc.includes('kanban.db\''), '不得直读 kanban.db');
-  for (const op of ['board', 'task', 'run', 'stats', 'assignees', 'boards', 'config', 'diagnostics', 'workers']) {
+  for (const op of ['board', 'task', 'run', 'stats', 'assignees', 'boards', 'projects', 'config', 'diagnostics', 'workers']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少只读端点 ' + op);
   }
   assert.ok(kbSrc.includes('default: return null'), '白名单之外必须拒绝');
@@ -1010,6 +1010,11 @@ t('读写边界：读固定 GET，写只有七条白名单，危险端点一律�
     assert.ok(!kbSrc.includes(bad), '不得暴露端点 ' + bad);
   }
   assert.ok(kbSrc.includes('function cleanOrchestration'), 'orchestration 写 body 未过白名单');
+  // bindBoard 的 body 只放行 project_id 一个键（PATCH /boards/{slug}），且必须过 cleanBoardBind
+  assert.ok(kbSrc.includes('function cleanBoardBind') && kbSrc.includes("cleanBoardBind(o)"),
+    '看板绑项目写 body 未过白名单');
+  assert.ok(!/case 'bindBoard':[^}]*default_workdir/.test(kbSrc),
+    '绑定项目不得顺带改 default_workdir，防把任意路径写进看板元数据');
   assert.ok(/ORCHESTRATION_KEYS = Object\.freeze\(\[\s*'auto_decompose',\s*'auto_promote_children',\s*'orchestrator_profile',\s*'default_assignee'/.test(kbSrc),
     '编排字段必须锁定为 CLI 端点的四个键');
   assert.ok(!/case 'orchestration':[^}]*dispatch_in_gateway/.test(kbSrc),

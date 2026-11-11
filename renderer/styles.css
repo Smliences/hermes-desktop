@@ -2742,6 +2742,8 @@ body.kb-dragging * { cursor: grabbing !important; }
 }
 .kbd-row b { color: var(--text); font-weight: 500; }
 .kbd-row time { float: right; color: var(--caption); font: 400 10.5px/1.6 var(--mono); }
+/* 工作区区块的值列：路径 / 分支用等宽，长路径可断行不撑破卡片 */
+.kbd-val { color: var(--text); font: 400 11px/1.6 var(--mono); word-break: break-all; }
 .kbd-link {
   border: 0; background: transparent; padding: 0; cursor: pointer;
   color: var(--blue); font: 400 11.5px/1.5 var(--sans); text-decoration: underline; text-underline-offset: 3px;

@@ -42,6 +42,8 @@ const CREATE_STATUSES = Object.freeze(['triage', 'ready']);
 const REASSIGN_STATUSES = Object.freeze(['ready']);
 /** 受让人 = Hermes profile 名：字母或数字开头，可含 . _ -；空串表示取消指派。 */
 const ASSIGNEE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+/** 项目标识（id 或 slug）：字母或数字开头，可含 _ -。CLI 接受 id / slug 两种形态。 */
+const PROJECT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 /** 单次手动派发的硬上限，远低于 CLI 默认 8：一次误点最多唤醒 4 个 worker。 */
 const DISPATCH_MAX_SPAWN = 4;
 /** 提交派发后任务进入的状态。服务层写死，渲染层只传 taskId。 */
@@ -156,6 +158,7 @@ function buildPath(op, params = {}) {
     case 'stats': return '/stats' + suffix;
     case 'assignees': return '/assignees' + suffix;
     case 'boards': return '/boards' + suffix;
+    case 'projects': return '/projects' + suffix;
     case 'config': return '/config' + suffix;
     case 'orchestration': return '/orchestration';
     case 'diagnostics': return '/diagnostics' + suffix;
@@ -195,6 +198,11 @@ function buildWritePath(op, params = {}) {
       q.set('dry_run', p.dryRun === false ? 'false' : 'true');
       q.set('max', String(clampMaxSpawn(p.max)));
       return '/dispatch?' + q.toString();
+    // 给看板绑 / 解绑项目：CLI 是 PATCH /boards/{slug}（slug 在路径里，不走 ?board=）。
+    // 绑定后项目 primary repo 自动成为看板 default_workdir，任务获得确定性 worktree。
+    case 'bindBoard':
+      if (!BOARD_RE.test(String(p.slug || ''))) return null;
+      return '/boards/' + encodeURIComponent(String(p.slug)) + suffix;
     // 编排开关（config.yaml 的 kanban 段）：CLI 侧是 PUT，不是 POST。
     case 'orchestration': return '/orchestration';
     default: return null;
@@ -231,6 +239,12 @@ function cleanTaskInput(raw) {
   if (body) out.body = body;
   if (assignee) out.assignee = assignee;
   if (tenant) out.tenant = tenant;
+  // 建卡选项目：空/缺省 = 继承看板绑定的项目（CLI 语义），传了则锁定该项目。
+  const projectId = cleanText(o.projectId, 80);
+  if (projectId) {
+    if (!PROJECT_RE.test(projectId)) return null;
+    out.project_id = projectId;
+  }
   return out;
 }
 /** 新建看板：不传 switch，绝不改 CLI 的 current_board 指针。 */function cleanBoardInput(raw) {
@@ -243,6 +257,15 @@ function cleanTaskInput(raw) {
   if (name) out.name = name;
   if (description) out.description = description;
   return out;
+}
+
+/** 给看板绑 / 解绑项目：project_id 空串 = 解绑；非空必须过项目标识正则。 */
+function cleanBoardBind(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const projectId = typeof o.projectId === 'string' ? o.projectId.trim().slice(0, 80) : '';
+  if (!projectId) return { project_id: '' };  // CLI 的 write_board_metadata 把 falsy 当「清除」
+  if (!PROJECT_RE.test(projectId)) return null;
+  return { project_id: projectId };
 }
 
 /**
@@ -543,7 +566,7 @@ function createKanbanClient(getBackendInfo) {
     /** 首屏辅助数据：多看板、受让人、偏好、统计、诊断。组内并行，失败互不拖累。 */
     async overview(opts = {}) {
       const o = opts && typeof opts === 'object' ? opts : {};
-      const keys = ['boards', 'stats', 'assignees', 'config', 'diagnostics'];
+      const keys = ['boards', 'projects', 'stats', 'assignees', 'config', 'diagnostics'];
       const results = await Promise.all(keys.map((k) => read(k, o)));
       const out = { ok: true, generation: info().generation || 0, partial: false };
       keys.forEach((k, i) => {
@@ -556,6 +579,17 @@ function createKanbanClient(getBackendInfo) {
             const list = Array.isArray(d) ? d : (Array.isArray(d && d.boards) ? d.boards : []);
             out.boards = list.slice(0, 50).map((b) => safeObject(b));
             out.currentBoard = str(d && d.current, 80);
+            break;
+          }
+          case 'projects': {
+            const list = Array.isArray(d) ? d : (Array.isArray(d && d.projects) ? d.projects : []);
+            out.projects = list.slice(0, 50).map((p) => {
+              const o = p && typeof p === 'object' ? p : {};
+              return {
+                id: str(o.id, 80), slug: str(o.slug, 80), name: str(o.name, 120),
+                primaryPath: str(o.primary_path, 300), icon: str(o.icon, 8), color: str(o.color, 16),
+              };
+            }).filter((x) => x.id);
             break;
           }
           case 'stats': {
@@ -619,6 +653,26 @@ function createKanbanClient(getBackendInfo) {
       return {
         ok: true, generation: info().generation || 0,
         board: b ? project(b, ['slug', 'name', 'description', 'icon', 'color', 'is_current']) : null,
+        current: str(r.data && r.data.current, 80),
+      };
+    },
+
+    /**
+     * 给看板绑定 / 解绑项目（PATCH /boards/{slug}，body 只放行 project_id 一个键）。
+     * 绑定后：项目 primary repo 成为看板 default_workdir，该板上的任务默认获得
+     * 确定性 worktree（<repo>/.worktrees/<任务id>，分支 = slug + 任务 id）。
+     * 建项目本身没有 REST 端点，只能走 CLI `hermes project create` —— 这里只做绑定。
+     */
+    async bindBoard(input = {}) {
+      const o = input && typeof input === 'object' ? input : {};
+      const body = cleanBoardBind(o);
+      if (!body) return { ok: false, error: '项目标识不合法' };
+      const r = await write('bindBoard', 'PATCH', { slug: String(o.slug || '') }, body);
+      if (!r.ok) return r;
+      const b = r.data && r.data.board && typeof r.data.board === 'object' ? r.data.board : {};
+      return {
+        ok: true, generation: info().generation || 0,
+        board: safeObject(b),
         current: str(r.data && r.data.current, 80),
       };
     },
@@ -780,9 +834,9 @@ function createKanbanClient(getBackendInfo) {
 
 module.exports = {
   createKanbanClient, buildPath, buildWritePath, validInfo,
-  cleanTaskInput, cleanBoardInput, cleanAssignee, clampMaxSpawn, cleanOrchestration,
+  cleanTaskInput, cleanBoardInput, cleanBoardBind, cleanAssignee, clampMaxSpawn, cleanOrchestration,
   projectBoard, projectDetail, projectTask, projectDispatch, projectWorkers, projectOrchestration,
   COLUMNS, ALL_COLUMNS, PLUGIN_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
-  TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE,
+  TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE, PROJECT_RE,
   CREATE_STATUSES, REASSIGN_STATUSES, ORCHESTRATION_KEYS,
 };

@@ -433,6 +433,7 @@
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="dispatch"
                     aria-expanded="false" aria-controls="kb-dispatch-panel">手动派发控制台</button>
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="view">切换到网格视图</button>
+                  <button class="kb-more-item" type="button" role="menuitem" data-kb-more="bind">绑定项目…</button>
                   <label class="kb-more-item is-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
                 </div>
               </div>
@@ -543,6 +544,8 @@
                   <span class="kb-fhint-line" id="kb-f-assignee-profiles"></span>
                 </div>
                 <label class="kb-frow"><span>目标看板</span><hm-select id="kb-f-board" class="ui-select"><option value="">当前看板</option></hm-select></label>
+                <label class="kb-frow" id="kb-f-project-row"><span>项目</span><hm-select id="kb-f-project" class="ui-select" aria-label="项目（决定任务工作区）"><option value="">继承看板设置</option></hm-select></label>
+                <div class="kb-fnote" id="kb-f-project-note" hidden></div>
                 <div class="kb-fnote" id="kb-f-note">收集箱不会被派发器直接拉起，但网关的自动分解会补全 spec 并推进到就绪。</div>
               </form>
               <form id="kb-form-board" class="kb-form" autocomplete="off" hidden>
@@ -550,6 +553,11 @@
                 <label class="kb-frow"><span>显示名称</span><input id="kb-b-name" type="text" maxlength="80" placeholder="可留空" /></label>
                 <label class="kb-frow"><span>描述</span><textarea id="kb-b-desc" rows="3" maxlength="400" placeholder="可留空"></textarea></label>
                 <div class="kb-fnote">只创建看板，不会切换 CLI 的当前看板指针；同名标识会返回既有看板。</div>
+              </form>
+              <form id="kb-form-bind" class="kb-form" autocomplete="off" hidden>
+                <label class="kb-frow"><span>绑定项目</span><hm-select id="kb-b-project" class="ui-select" aria-label="绑定到看板的项目"><option value="">不绑定项目</option></hm-select></label>
+                <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
+                <div class="kb-fnote">没有想要的项目？先在终端跑 <code>hermes project create &lt;名字&gt; &lt;文件夹…&gt;</code>，再回来刷新。</div>
               </form>
             </div>
             <div class="kb-modal-foot">

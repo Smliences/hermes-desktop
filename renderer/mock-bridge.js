@@ -70,6 +70,9 @@
         currentBoard: 'main',
         assignees: ['default', 'writer', 'ops'],
         profiles: ['default', 'writer'],
+        projects: [
+          { id: 'pj_demo1', slug: 'hermes-agent', name: 'Hermes Agent', primaryPath: '/tmp/demo-repo', icon: '', color: '' },
+        ],
         stats: { by_status: {}, by_assignee: {}, oldest_ready_age: null },
         config: null, diagnostics: [],
       };
@@ -115,6 +118,9 @@
       const slug = String(input.slug || '').trim();
       if (!slug) return { ok: false, error: '请填写看板标识' };
       return { ok: true, generation: 1, slug, warning: '' };
+    },
+    async kanbanBindBoard(input = {}) {
+      return { ok: true, generation: 1, board: { slug: String(input.slug || ''), project_id: String(input.projectId || '') }, current: '' };
     },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);

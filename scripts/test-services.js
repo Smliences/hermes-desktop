@@ -958,19 +958,35 @@ async function run() {
     assert.strictEqual(kanban.buildPath('decompose'), null, '未知 op 必须拒绝');
     assert.strictEqual(kanban.buildPath('workers', { board: 'ops-2026' }), '/workers/active?board=ops-2026');
     assert.strictEqual(kanban.buildPath('board', { board: null }), '/board', 'null board 不应变成 slug "null"');
+    assert.strictEqual(kanban.buildPath('projects'), '/projects', '项目列表读端点缺失');
   });
-  await t('buildWritePath 只有五条写路径，动态段同样过正则', () => {
+  await t('buildWritePath 只有六条写路径，动态段同样过正则', () => {
     assert.strictEqual(kanban.buildWritePath('createTask'), '/tasks');
     assert.strictEqual(kanban.buildWritePath('createTask', { board: 'ops-2026' }), '/tasks?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('createBoard'), '/boards');
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: 't_ab12' }), '/tasks/t_ab12');
     assert.strictEqual(kanban.buildWritePath('submitTask', { taskId: 't_ab12' }), '/tasks/t_ab12');
+    assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'default' }), '/boards/default');
+    assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'ops 2026' }), null, '非法看板 slug 未被拒');
+    assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: '' }), null, '空 slug 未被拒');
     for (const bad of ['decompose', 'bulk', 'task', 'specify', 'reclaim', 'terminate', '']) {
       assert.strictEqual(kanban.buildWritePath(bad), null, '未知写 op 未被拒：' + bad);
     }
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('submitTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('createTask', { board: '../x' }), null);
+  });
+  await t('项目绑定 / 建卡选项目的入参清洗', () => {
+    assert.deepStrictEqual(kanban.cleanBoardBind({ projectId: 'pj_9' }), { project_id: 'pj_9' });
+    assert.deepStrictEqual(kanban.cleanBoardBind({ projectId: '' }), { project_id: '' }, '空串=解绑，不能拒绝');
+    assert.deepStrictEqual(kanban.cleanBoardBind({}), { project_id: '' });
+    assert.strictEqual(kanban.cleanBoardBind({ projectId: 'bad name!' }), null, '非法项目标识未被拒');
+    assert.strictEqual(kanban.cleanBoardBind({ projectId: '../etc' }), null, '路径穿越未被拒');
+    const key0 = 'desktop-unit-proj';
+    const ok = kanban.cleanTaskInput({ title: 'x', idempotencyKey: key0, projectId: 'hermes-agent' });
+    assert.strictEqual(ok.project_id, 'hermes-agent', '建卡 projectId 未透传');
+    assert.ok(!('project_id' in kanban.cleanTaskInput({ title: 'x', idempotencyKey: key0 })), '未选项目不得带 project_id（保持继承语义）');
+    assert.strictEqual(kanban.cleanTaskInput({ title: 'x', idempotencyKey: key0, projectId: 'bad name!' }), null, '非法项目标识未被拒');
   });
   await t('派发参数：dry_run 默认 true、显式 false 才真跑、max 硬上限 4', () => {
     assert.strictEqual(kanban.buildWritePath('dispatch'), '/dispatch?dry_run=true&max=1');

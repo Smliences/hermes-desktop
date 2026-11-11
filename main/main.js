@@ -660,6 +660,11 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.createBoard(input || {});
   });
+  // 项目（命名工作空间）：列表随 kanban:overview 下发；绑定走 PATCH /boards/{slug}
+  handle('kanban:bind-board', async (_e, input) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.bindBoard(input || {});
+  });
   handle('kanban:delete-task', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.deleteTask(taskId, opts || {});

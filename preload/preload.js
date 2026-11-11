@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanRun: (runId, opts) => ipcRenderer.invoke('kanban:run', runId, opts || {}),
   kanbanCreateTask: (input) => ipcRenderer.invoke('kanban:create-task', input || {}),
   kanbanCreateBoard: (input) => ipcRenderer.invoke('kanban:create-board', input || {}),
+  // 项目：列表随 kanbanOverview 下发；绑定 / 解绑走 PATCH /boards/{slug}（body 只放行 project_id）
+  kanbanBindBoard: (input) => ipcRenderer.invoke('kanban:bind-board', input || {}),
   kanbanDeleteTask: (taskId, opts) => ipcRenderer.invoke('kanban:delete-task', taskId, opts || {}),
   kanbanSubmitTask: (taskId, opts) => ipcRenderer.invoke('kanban:submit-task', taskId, opts || {}),
   kanbanReassign: (taskId, opts) => ipcRenderer.invoke('kanban:reassign', taskId, opts || {}),
