@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 与主窗口同一套严格 CSP：没有内联脚本、没有 eval、connect-src 全禁 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; connect-src 'none'" />
+  <title>Hermes</title>
+  <link rel="stylesheet" href="orb.css" />
+</head>
+<body data-state="idle" data-open="false">
+  <div id="orb-ball" class="orb-ball" role="button" tabindex="0" aria-pressed="false" aria-label="展开迷你聊天窗" title="点开聊天 · 右键 / 底部小箭头切换 Profile · 可拖动">
+    <span class="orb-ring" aria-hidden="true"></span>
+    <span class="orb-halo" aria-hidden="true"></span>
+    <span class="orb-letter">H</span>
+    <span id="orb-badge" class="orb-badge" hidden></span>
+    <span id="orb-dot" class="orb-dot" aria-hidden="true"></span>
+    <!-- 下拉入口：只在 hover / 键盘聚焦时淡淡出现，不破坏静止时的球面 -->
+    <span id="orb-caret" class="orb-caret" aria-hidden="true" title="切换 Profile / 最近会话">⌄</span>
+  </div>
+  <span id="orb-live" class="orb-sr" role="status" aria-live="polite"></span>
+  <script src="orb.js"></script>
+</body>
+</html>

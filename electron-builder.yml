@@ -1,0 +1,47 @@
+# electron-builder 打包配置
+appId: cn.workbuddy.hermes-desktop
+productName: Hermes Desktop Client
+copyright: MIT
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - main/**/*
+  - preload/**/*
+  - renderer/**/*
+  - package.json
+  - "!**/*.map"
+
+# node-pty 为原生模块，需按平台重编译（electron-builder 自动处理）
+npmRebuild: true
+asar: true
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  identity: null            # 本地开发不分发；正式分发需开发者证书
+  darkModeSupport: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  maintainer: dev@example.com

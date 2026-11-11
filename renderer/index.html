@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: http: https:; frame-src 'self' file: http: https:; child-src 'self' file: http: https:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'" />
+  <title>Hermes Agent</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="frame" class="sb-open sb-init">
+    <!-- ══════════ 图标栏（dsh 式极窄 rail） ══════════ -->
+    <nav id="iconrail">
+      <img class="ir-logo" src="assets/hermes-logo.png" alt="Hermes" role="button" tabindex="0" aria-label="展开侧栏" title="展开侧栏 ⌘B" />
+      <button class="ir-btn" id="btn-new-tab" title="新会话 ⌘T">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+      </button>
+      <button class="ir-btn ir-mitem" id="btn-gw-ir" title="消息平台接入">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="ir-btn ir-mitem" id="btn-plugins-ir" title="插件">
+        <svg class="plg-ico" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M10 3a2 2 0 0 1 2 2v1h2a1 1 0 0 1 1 1v2h1a2 2 0 1 1 0 4h-1v2a1 1 0 0 1-1 1h-2v1a2 2 0 1 1-4 0v-1H6a1 1 0 0 1-1-1v-2H4a2 2 0 1 1 0-4h1V7a1 1 0 0 1 1-1h2V5a2 2 0 0 1 2-2Z"/></svg>
+      </button>
+      <button class="ir-btn ir-mitem" id="btn-skills-ir" title="技能">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.6l1.4 4 4 1.4-4 1.4-1.4 4-1.4-4-4-1.4 4-1.4z"/></svg>
+      </button>
+      <button class="ir-btn ir-mitem" id="btn-kanban-ir" title="看板">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2" y="3" width="3.4" height="10" rx="1"/><rect x="6.3" y="3" width="3.4" height="7" rx="1"/><rect x="10.6" y="3" width="3.4" height="9" rx="1"/></svg>
+      </button>
+      <button class="ir-btn ir-mitem" id="btn-sessions" title="搜索会话">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.6" y="5.6" width="8" height="8" rx="1.8"/><path d="M10.4 2.6H4.4a1.8 1.8 0 0 0-1.8 1.8v6"/></svg>
+      </button>
+      <div class="ir-spacer"></div>
+      <button class="ir-btn" id="btn-settings-ir" title="设置">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </nav>
+
+    <!-- ══════════ 可展开侧栏 ══════════ -->
+    <aside id="sidebar">
+      <!-- WB 式侧栏头：第一行与红绿灯同轴放三个按钮，第二行品牌文字 -->
+      <div class="sb-head">
+        <div class="sb-head-actions">
+          <button id="sb-new" class="sb-hbtn" title="新会话 ⌘T">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+          </button>
+          <button id="sb-search-btn" class="sb-hbtn" title="搜索会话">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7.3" cy="7.3" r="4.1"/><path d="M13.2 13.2l-2.9-2.9"/></svg>
+          </button>
+          <button id="btn-sidebar-collapse" class="sb-hbtn" title="收起侧栏 ⌘B">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2.2" y="3" width="11.6" height="10" rx="2.2"/><path d="M6.6 3v10"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="sb-brand">
+        <img src="assets/hermes-logo.png" class="sb-logo" alt="" />
+        <span class="sb-wordmark">hermes <span class="sb-pill">AGENT</span></span>
+        <button id="pf-chip" class="pf-chip" title="切换 Profile">
+          <span class="pf-dot"></span><span class="pf-name" id="pf-name">default</span><span class="pf-caret">▾</span>
+        </button>
+      </div>
+      <button id="btn-new-session" class="new-session-btn">
+        <svg class="ns-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+        新会话
+      </button>
+      <div class="sb-menu">
+        <button class="sb-item" id="btn-gw"><span class="sb-ico"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg></span> <span class="sb-txt">消息平台</span></button>
+        <button class="sb-item" id="btn-plugins2"><span class="sb-ico"><svg class="plg-ico" viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M10 3a2 2 0 0 1 2 2v1h2a1 1 0 0 1 1 1v2h1a2 2 0 1 1 0 4h-1v2a1 1 0 0 1-1 1h-2v1a2 2 0 1 1-4 0v-1H6a1 1 0 0 1-1-1v-2H4a2 2 0 1 1 0-4h1V7a1 1 0 0 1 1-1h2V5a2 2 0 0 1 2-2Z"/></svg></span> 插件</button>
+        <button class="sb-item" id="btn-skills2"><span class="sb-ico"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.6l1.4 4 4 1.4-4 1.4-1.4 4-1.4-4-4-1.4 4-1.4z"/></svg></span> 技能</button>
+        <button class="sb-item" id="btn-kanban"><span class="sb-ico"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2" y="3" width="3.4" height="10" rx="1"/><rect x="6.3" y="3" width="3.4" height="7" rx="1"/><rect x="10.6" y="3" width="3.4" height="9" rx="1"/></svg></span> 看板</button>
+      </div>
+      <div class="sb-search">
+        <input id="session-search" type="text" placeholder="搜索会话名称或内容…" spellcheck="false" />
+        <button id="search-clear" hidden>✕</button>
+      </div>
+      <div class="sb-group-label">会话 <span class="sb-group-actions"><button id="sb-quick-search" class="sb-ga" title="搜索会话" aria-label="搜索会话"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg></button><button id="sb-storage-btn" class="sb-ga" title="会话空间管理" aria-label="会话空间管理"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5" ry="2.1"/><path d="M3 4v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V4"/><path d="M3 8v4c0 1.16 2.24 2.1 5 2.1s5-.94 5-2.1V8"/></svg></button></span></div>
+      <ul id="session-list" role="listbox"></ul>
+      <!-- 会话空间管理：轻量浮层，只读统计 + 优化建议 -->
+      <div id="storage-pop" class="storage-pop" hidden></div>
+      <!-- 左下角设置入口：单个齿轮图标按钮 -->
+      <div class="sb-bottom">
+        <button id="btn-settings" class="sb-gear" title="设置">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+      <!-- 右缘拖拽调宽手柄 -->
+      <div id="sb-resize" title="拖拽调整侧栏宽度"></div>
+    </aside>
+
+    <!-- ══════════ 主区 ══════════ -->
+    <main id="main">
+      <header id="chat-head">
+        <button class="main-ibtn head-lead" id="btn-expand" title="展开侧栏 ⌘B" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2.2" y="3" width="11.6" height="10" rx="2.2"/><path d="M6.6 3v10"/></svg>
+        </button>
+        <button class="main-ibtn head-lead" id="btn-new-lead" title="新会话 ⌘T" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+        </button>
+        <nav id="view-tabs">
+          <button class="vt active" data-view="chat">对话</button>
+          <button class="vt" data-view="trace">轨迹</button>
+        </nav>
+        <div class="head-spacer"></div>
+        <span id="env-badge" class="badge" hidden></span>
+        <button class="main-ibtn" id="btn-find" title="在会话中查找 ⌘F" aria-label="在会话中查找" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg>
+        </button>
+        <button class="main-ibtn" id="btn-rail-toggle" title="预览 / 终端面板 ⌘`">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M4.5 6.5l2.2 1.5-2.2 1.5M8.3 10h3.2"/></svg>
+        </button>
+      </header>
+
+      <!-- 页面级引导按钮：整页覆盖 chat-head 时，仍可切换侧栏 / 新建会话（与聊天页左上角按钮同规格、同坐标） -->
+      <div id="page-lead" class="page-lead" hidden>
+        <button class="main-ibtn" data-lead="sidebar" title="展开侧栏 ⌘B" aria-label="展开侧栏" aria-expanded="false">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2.2" y="3" width="11.6" height="10" rx="2.2"/><path d="M6.6 3v10"/></svg>
+        </button>
+        <button class="main-ibtn" data-lead="new" title="新会话 ⌘T" aria-label="新会话">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+        </button>
+      </div>
+
+      <!-- 会话内查找：absolute 浮层，不占布局；⌘F 打开、Esc 关闭。
+           高亮走 CSS Custom Highlight API（不改 DOM），因此不会干扰流式重建。 -->
+      <div id="find-bar" class="find-bar" role="search" hidden>
+        <svg class="find-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg>
+        <input id="find-input" type="text" placeholder="在会话中查找" spellcheck="false" aria-label="在会话中查找">
+        <span id="find-count" class="find-count" aria-live="polite">0/0</span>
+        <button type="button" id="find-prev" class="find-btn" title="上一个 ⇧⏎" aria-label="上一个匹配">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.4V3.6M4.4 7.2 8 3.6l3.6 3.6"/></svg>
+        </button>
+        <button type="button" id="find-next" class="find-btn" title="下一个 ⏎" aria-label="下一个匹配">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.6v8.8M4.4 8.8 8 12.4l3.6-3.6"/></svg>
+        </button>
+        <button type="button" id="find-close" class="find-btn" title="关闭 Esc" aria-label="关闭查找">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+
+      <div id="chat-scroll">
+        <!-- 新会话落地页：无内容，输入框垂直居中（#main.empty 布局） -->
+        <div id="landing" class="landing" hidden></div>
+        <!-- 聊天区会被流式全量重建，挂 aria-live 会让读屏每次重播整段对话；
+             改为独立的小播报节点，只播状态变化。 -->
+        <div id="chat"></div>
+        <div id="a11y-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+      </div>
+
+      <!-- ══════════ Composer（dsh 大圆角白卡） ══════════ -->
+      <div id="composer-wrap">
+        <!-- 模型配置漂移：非阻断提示，absolute 浮在输入框上方，不占布局高度。
+             只在桌面端 config.json 的模型与 CLI config.yaml 默认不一致时出现；
+             「跟随」是唯一会写配置的入口，必须由用户主动点击。 -->
+        <div id="model-drift" class="model-drift" role="status" aria-live="polite" hidden>
+          <span class="md-ico" aria-hidden="true">!</span>
+          <div class="md-copy">
+            <span class="md-title">当前模型与 CLI 默认不一致</span>
+            <span class="md-text" id="model-drift-text"></span>
+          </div>
+          <button type="button" class="md-btn primary" id="btn-md-follow">跟随 CLI 默认</button>
+          <button type="button" class="md-btn" id="btn-md-later" aria-label="本次会话不再提示模型差异">忽略</button>
+          <button type="button" class="md-close" id="btn-md-close" aria-label="关闭模型提示">×</button>
+        </div>
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="发消息或创建任务，/ 调用指令，@ 文件或对话" spellcheck="false"></textarea>
+          <!-- 附件：图片走多模态、PDF 走解析、其它文件按路径引用；空时不占布局 -->
+          <div id="attach-list" class="attach-list" role="list" aria-label="已附加的文件" hidden></div>
+          <div id="composer-row">
+            <button id="btn-attach" class="cr-icon" title="附加图片、PDF 或文件" aria-label="添加附件"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2V14" stroke="currentColor"></path><path d="M2 8H14" stroke="currentColor"></path></svg></button>
+            <button id="chip-yolo" class="cr-pill" title="绕过危险命令审批（仅本会话）" aria-pressed="false">⊙ 审批模式</button>
+            <div class="cr-spacer"></div>
+            <button id="chip-model" class="cr-btn cr-model" title="切换模型 / 思考程度">请选择模型 ⌄</button>
+            <button id="btn-stop" class="stop-btn" hidden title="停止" aria-label="停止生成"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1" fill="currentColor"></rect></svg></button>
+            <button id="btn-send" class="send-btn" title="发送 ⏎" aria-label="发送"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="M4.74024 9.11029L1.82882 7.79865C1.75022 7.76323 1.75026 7.65161 1.82889 7.61626L12.9665 2.60943C13.0354 2.57846 13.1125 2.63213 13.1073 2.70749L12.3914 13.1388C12.3864 13.2117 12.3073 13.2548 12.2433 13.2194L6.12677 9.83657" stroke="currentColor"></path><path d="M8.44336 11.0825L6.2832 13.2843C6.22048 13.3482 6.11182 13.3038 6.11182 13.2143V9.86772C6.11182 9.84165 6.122 9.8166 6.1402 9.79793L12.972 2.78748" stroke="currentColor"></path></svg></button>
+          </div>
+        </div>
+        <div class="composer-foot">
+          <span>内容由 AI 生成，请核实重要信息</span>
+          <span class="cf-spacer"></span>
+          <button class="cf-help" id="btn-help" title="快捷键与帮助 ⌘/">⌘/ 快捷键</button>
+          <span class="cf-count" id="input-count" aria-label="当前输入字符数"></span>
+        </div>
+      </div>
+
+      <!-- chip 下拉菜单（WB 式 popover）；二级菜单同样在这里声明，
+           由 openChipMenu 填内容并按需定位（不放里面是因为 #chip-menu 是 overflow:hidden） -->
+      <div id="chip-menu" hidden></div>
+      <div id="chip-submenu" hidden role="menu"></div>
+
+      <!-- ══════════ 细状态条（保留 hermes 桌面版状态能力） ══════════ -->
+      <div id="status-strip">
+        <span id="st-model">⬢ default</span>
+        <span class="st-metrics">
+          <span id="st-rounds" class="dim"></span>
+          <span id="st-tps" class="dim"></span>
+          <span id="st-duration" class="dim"></span>
+          <span id="st-tokens" class="dim"></span>
+          <!-- 上下文占用：dsh 是一个细环 + 百分比，环只做进度，明细放 title -->
+          <span id="st-ctx" class="dim" hidden>
+            <svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <circle class="ctx-ring-bg" cx="10" cy="10" r="8"></circle>
+              <circle class="ctx-ring-arc" id="ctx-ring-arc" cx="10" cy="10" r="8"></circle>
+            </svg>
+            <span id="st-ctx-pct"></span>
+          </span>
+        </span>
+        <span class="st-end">
+          <span id="st-activity" class="dim">空闲</span>
+          <span id="st-session" class="dim">—</span>
+        </span>
+      </div>
+
+      <!-- ══════════ 插件页（整页：统计 + 搜索 + 分组卡片） ══════════ -->
+      <section id="plugins-page" class="subpage" hidden>
+        <div class="pp-head">
+          <div class="pp-head-main">
+            <h1 class="pp-title">插件</h1>
+            <div class="pp-sub">管理本机已安装的 hermes 插件 · 状态持久化于 <code>~/.hermes/config.yaml</code></div>
+          </div>
+          <button class="pp-icon-btn pp-refresh" title="重新读取列表"><span class="spin" hidden>◠</span><span class="pp-refresh-glyph">↻</span></button>
+          <div class="pp-add-wrap">
+            <button class="pp-add pp-add-main">＋ 添加插件</button>
+            <button class="pp-add pp-add-caret" title="选择添加插件方式">▾</button>
+            <div class="pp-menu" hidden>
+              <button data-act="market">浏览插件市场</button>
+              <button data-act="local">从本地目录安装</button>
+              <button data-act="cmd">用命令安装（hermes plugins install）</button>
+            </div>
+          </div>
+          <button class="pp-icon-btn pp-close" title="关闭">✕</button>
+        </div>
+        <div class="pp-listview">
+          <div class="gw-stats pp-stats">
+            <div class="gw-stat"><b id="plg-stat-total">—</b><span>已安装</span></div>
+            <div class="gw-stat"><b id="plg-stat-on">—</b><span>已启用</span></div>
+            <div class="gw-stat"><b id="plg-stat-off">—</b><span>已停用</span></div>
+            <div class="gw-stat"><b id="plg-stat-source">—</b><span>数据源</span></div>
+          </div>
+          <div class="pp-toolbar">
+            <div class="pp-search-wrap">
+              <input id="plg-search" type="text" placeholder="搜索插件名称、描述或 ID…" spellcheck="false" />
+              <button id="plg-search-clear" hidden>✕</button>
+            </div>
+            <div class="pp-filters">
+              <button data-filter="all" class="on">全部</button>
+              <button data-filter="on">已启用</button>
+              <button data-filter="off">已停用</button>
+            </div>
+            <span class="pp-count" id="plg-count"></span>
+          </div>
+          <div class="pp-groups" id="plg-groups"></div>
+        </div>
+        <div class="pp-detailview" hidden>
+          <button class="pp-back">‹ 插件</button>
+          <div class="pp-detail-icon">✦</div>
+          <h2 class="pp-detail-title"></h2>
+          <div class="pp-detail-desc"></div>
+          <div class="ppd-form"></div>
+          <button class="pp-save">保存</button>
+        </div>
+      </section>
+
+      <!-- ══════════ 技能页（与插件页同构） ══════════ -->
+      <section id="skills-page" class="subpage" hidden>
+        <div class="pp-head">
+          <div class="pp-head-main">
+            <h1 class="pp-title">技能</h1>
+            <div class="pp-sub">管理本机已安装的 hermes 技能 · 停用状态写入 <code>~/.hermes/config.yaml</code></div>
+          </div>
+          <button class="pp-icon-btn pp-refresh" title="重新读取列表"><span class="spin" hidden>◠</span><span class="pp-refresh-glyph">↻</span></button>
+          <div class="pp-add-wrap">
+            <button class="pp-add pp-add-main">＋ 添加技能</button>
+            <button class="pp-add pp-add-caret" title="选择添加技能方式">▾</button>
+            <div class="pp-menu" hidden>
+              <button data-act="market">浏览技能市场</button>
+              <button data-act="local">从本地目录安装</button>
+              <button data-act="cmd">用命令安装（hermes skills install）</button>
+            </div>
+          </div>
+          <button class="pp-icon-btn pp-close" title="关闭">✕</button>
+        </div>
+        <div class="pp-listview">
+          <div class="gw-stats pp-stats">
+            <div class="gw-stat"><b id="sk-stat-total">—</b><span>已安装</span></div>
+            <div class="gw-stat"><b id="sk-stat-on">—</b><span>已启用</span></div>
+            <div class="gw-stat"><b id="sk-stat-off">—</b><span>已停用</span></div>
+            <div class="gw-stat"><b id="sk-stat-source">—</b><span>数据源</span></div>
+          </div>
+          <div class="pp-toolbar">
+            <div class="pp-search-wrap">
+              <input id="sk-search" type="text" placeholder="搜索技能名称、描述或分类…" spellcheck="false" />
+              <button id="sk-search-clear" hidden>✕</button>
+            </div>
+            <div class="pp-filters">
+              <button data-filter="all" class="on">全部</button>
+              <button data-filter="on">已启用</button>
+              <button data-filter="off">已停用</button>
+            </div>
+            <span class="pp-count" id="sk-count"></span>
+          </div>
+          <div class="pp-groups" id="sk-groups"></div>
+        </div>
+        <div class="pp-detailview" hidden>
+          <button class="pp-back">‹ 技能</button>
+          <div class="pp-detail-icon">✦</div>
+          <h2 class="pp-detail-title"></h2>
+          <div class="pp-detail-desc"></div>
+          <div class="ppd-form"></div>
+          <button class="pp-save">保存</button>
+        </div>
+      </section>
+
+      <!-- ══════════ 消息平台接入页 ══════════ -->
+      <section id="gateway-page" class="subpage" hidden>
+        <div class="pp-head">
+          <div class="pp-head-main">
+            <h1 class="pp-title">消息平台接入</h1>
+            <div class="pp-sub">把 Hermes 接到 Telegram、微信、飞书等平台 · 凭证只保存在本机 <code>~/.hermes/.env</code></div>
+          </div>
+          <button class="pp-icon-btn" id="gw-refresh" title="刷新状态">↻</button>
+          <button class="pp-add" id="gw-open-config" title="打开 config.yaml">打开配置文件</button>
+          <button class="pp-icon-btn" id="gw-close" title="关闭">✕</button>
+        </div>
+
+        <div class="gw-hero">
+          <div class="gw-hero-left">
+            <div class="gw-hero-label">Gateway 服务 <span class="gw-live" id="gw-live-dot"></span></div>
+            <div class="gw-hero-state" id="gw-service-state">读取中…</div>
+            <div class="gw-hero-meta" id="gw-service-meta"></div>
+          </div>
+          <div class="gw-hero-actions">
+            <button class="gw-btn" data-act="start">启动</button>
+            <button class="gw-btn" data-act="stop">停止</button>
+            <button class="gw-btn" data-act="restart">重启</button>
+          </div>
+        </div>
+
+        <div class="gw-stats" id="gw-stats"></div>
+
+        <div class="gw-toolbar">
+          <input id="gw-search" type="text" placeholder="搜索平台名称或凭证键…" spellcheck="false" />
+          <button id="gw-search-clear" hidden>✕</button>
+          <span class="gw-toolbar-hint" id="gw-count"></span>
+        </div>
+
+        <div id="gw-groups"></div>
+        <div class="gw-section-label">Profile 与 Gateway 状态</div>
+        <div class="gw-profiles" id="gw-profiles"></div>
+        <div class="gw-profiles-note">每个 profile 是独立实例（各自的会话库、插件、技能与配置）。用侧栏品牌行右侧的下拉或「设置 → Profile」即可切换；切换只改桌面端自己的选择，不写入 <code>~/.hermes</code>，终端 CLI 的 sticky 默认不受影响。</div>
+        <div class="gw-footnote">
+          配置方式：在 <code>~/.hermes/.env</code> 填入对应凭证，或在 config.yaml 的 <code>platforms.*</code> 段声明；
+          交互式向导请在终端运行 <code>hermes gateway setup</code>。本页只读取凭证的<strong>键名</strong>，不读取或显示任何凭证值。
+        </div>
+      </section>
+
+      <!-- ══════════ 插件 / 技能市场（CLI 原生 registries） ══════════ -->
+      <section id="market-page" class="subpage" hidden>
+        <div class="pp-head">
+          <div class="pp-head-main">
+            <h1 class="pp-title">插件与技能市场</h1>
+            <div class="pp-sub">直连 hermes CLI 原生目录 · 安装即下载第三方代码，请先审阅来源</div>
+          </div>
+          <button class="pp-icon-btn" id="mk-refresh" title="重新搜索">↻</button>
+          <button class="pp-icon-btn" id="mk-close" title="关闭">✕</button>
+        </div>
+
+        <div class="mk-tabs">
+          <button class="mk-tab active" data-kind="plugins">插件目录</button>
+          <button class="mk-tab" data-kind="skills">技能市场</button>
+          <span class="mk-tabs-note" id="mk-source-note"></span>
+        </div>
+
+        <div class="mk-searchbar">
+          <div class="mk-search-wrap">
+            <span class="mk-search-ico">⌕</span>
+            <input id="mk-query" type="text" placeholder="搜索插件或技能…" spellcheck="false" />
+            <button id="mk-clear" hidden>✕</button>
+          </div>
+          <hm-select id="mk-source" hidden class="ui-select">
+            <option value="all">全部来源</option>
+            <optgroup label="聚合来源">
+              <option value="official">official</option>
+              <option value="skills-sh">skills.sh</option>
+              <option value="well-known">well-known</option>
+              <option value="github">GitHub</option>
+              <option value="clawhub">ClawHub</option>
+              <option value="lobehub">LobeHub</option>
+              <option value="browse-sh">browse.sh</option>
+            </optgroup>
+            <optgroup label="厂商集合">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="nvidia">NVIDIA</option>
+              <option value="huggingface">Hugging Face</option>
+              <option value="voltagent">VoltAgent</option>
+              <option value="gstack">gstack</option>
+              <option value="minimax">MiniMax</option>
+            </optgroup>
+          </hm-select>
+          <button class="mk-go" id="mk-go">搜索</button>
+          <button class="mk-btn" id="mk-check-updates" hidden title="只读检查已安装插件是否有新版本">检查更新</button>
+        </div>
+        <div class="mk-chips" id="mk-chips"></div>
+
+        <div class="mk-status" id="mk-status">准备就绪</div>
+        <div class="mk-results" id="mk-results"></div>
+        <div class="mk-foot" id="mk-foot"></div>
+      </section>
+
+      <!-- ══════════ Kanban 看板（CLI 原生任务队列） ══════════ -->
+      <section id="kanban-page" class="subpage" hidden aria-label="看板">
+        <div class="kb-wrap">
+          <header class="kb-head">
+            <div class="kb-head-main">
+              <div class="kb-eyebrow">TASK BOARD · HERMES CLI</div>
+              <h1 class="pp-title">看板</h1>
+              <div class="pp-sub">多 Agent 任务队列 · 与终端和 Dashboard 共享同一份数据 · 支持新建、提交派发与手动 tick</div>
+            </div>
+            <div class="kb-head-actions">
+              <button class="kb-btn primary" id="kb-new-task" type="button">＋ 新建任务</button>
+              <button class="kb-btn" id="kb-new-board" type="button">＋ 新建看板</button>
+              <button class="kb-btn kb-btn-accent" id="kb-dispatch-toggle" type="button" aria-expanded="false" aria-controls="kb-dispatch-panel">⚡ 派发</button>
+              <button class="pp-icon-btn" id="kb-refresh" title="重新读取看板" aria-label="重新读取看板"><span class="kb-spin" hidden>◠</span><span class="kb-refresh-glyph">↻</span></button>
+              <button class="pp-icon-btn pp-close" id="kb-close" title="关闭" aria-label="关闭看板">✕</button>
+            </div>
+          </header>
+
+          <div class="kb-stats" id="kb-stats"></div>
+
+          <!-- 派发控制台：默认收起。试运行是纯读，真派发必须过二次确认卡 -->
+          <section class="kb-dispatch" id="kb-dispatch-panel" hidden aria-label="派发控制台">
+            <div class="kb-dp-top">
+              <div class="kb-dp-intro">
+                <div class="kb-dp-title">调度器 · 手动派发一次</div>
+                <div class="kb-dp-sub">调度器默认每 60 秒自动 tick 一次。这里只是立即催一次，把 <b>ready 且受让人是真实 profile</b> 的任务交给 worker —— 启动命令是 <code>hermes -p &lt;受让人&gt;</code>，用该 profile 自己的配置和工作区跑；不会改动 CLI 配置。</div>
+              </div>
+              <button class="pp-icon-btn" id="kb-dp-close" type="button" title="收起派发控制台" aria-label="收起派发控制台">✕</button>
+            </div>
+            <div class="kb-dp-warn">立即派发会启动 agent 进程、消耗模型额度，并可能回收超时或崩溃的 worker。请先用「试运行预览」确认范围。</div>
+            <div class="kb-dp-controls">
+              <label class="kb-field"><span>并发上限</span>
+                <hm-select id="kb-dp-max" class="ui-select" aria-label="本看板并发 worker 上限（含已在跑的）">
+                  <option value="1">1 个并发</option><option value="2">2 个并发</option>
+                  <option value="3">3 个并发</option><option value="4">4 个并发</option>
+                </hm-select>
+              </label>
+              <button class="kb-btn" id="kb-dp-preview" type="button">试运行预览</button>
+              <button class="kb-btn danger" id="kb-dp-run" type="button">立即派发一次</button>
+              <span class="kb-dp-state" id="kb-dp-state" role="status"></span>
+            </div>
+            <div class="kb-dp-cap" id="kb-dp-cap"></div>
+            <div class="kb-dp-confirm" id="kb-dp-confirm"></div>
+            <div class="kb-dp-cols">
+              <div class="kb-dp-col">
+                <h3>本次结果 <span class="kb-dp-tag" id="kb-dp-result-tag"></span></h3>
+                <div class="kb-dp-result" id="kb-dp-result"><div class="kb-dp-empty">先点「试运行预览」看看哪些任务会被派发，这一步不会启动任何 agent。</div></div>
+              </div>
+              <div class="kb-dp-col">
+                <h3>活跃 worker <button class="kb-dp-mini" id="kb-dp-workers-refresh" type="button">刷新</button></h3>
+                <div class="kb-dp-workers" id="kb-dp-workers"><div class="kb-dp-empty">打开控制台时自动读取。</div></div>
+              </div>
+            </div>
+          </section>
+
+          <div class="kb-statusbar" id="kb-statusbar" role="group" aria-label="按状态筛选"></div>
+
+          <div class="kb-toolbar">
+            <label class="kb-field kb-field-board"><span>看板</span><hm-select id="kb-board" class="ui-select" aria-label="选择看板"><option value="">当前看板</option></hm-select></label>
+            <div class="kb-search-wrap">
+              <input id="kb-search" type="text" placeholder="搜索任务标题、ID 或结果…" spellcheck="false" aria-label="搜索任务" />
+              <button id="kb-search-clear" hidden aria-label="清除搜索" type="button">✕</button>
+            </div>
+            <label class="kb-field"><span>受让人</span><hm-select id="kb-assignee" class="ui-select" aria-label="按受让人筛选"><option value="">全部</option></hm-select></label>
+            <label class="kb-field"><span>租户</span><hm-select id="kb-tenant" class="ui-select" aria-label="按租户筛选"><option value="">全部</option></hm-select></label>
+            <label class="kb-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
+            <div class="kb-view" role="group" aria-label="切换布局">
+              <button class="kb-view-btn active" id="kb-view-grid" type="button" aria-label="网格视图">网格</button>
+              <button class="kb-view-btn" id="kb-view-cols" type="button" aria-label="列视图">列</button>
+            </div>
+            <span class="kb-live" id="kb-live" title="自动刷新状态"><span class="kb-live-dot"></span><span id="kb-live-text">等待数据</span></span>
+            <span class="kb-count" id="kb-count"></span>
+          </div>
+
+          <!-- worker 投放区：把卡片拖到某个 profile 上 = 改派受让人（+可选立即启动 worker）。
+               受让人就是 Hermes profile 名，派发时调度器用 hermes -p <受让人> 拉起 worker。 -->
+          <section class="kb-dock" id="kb-dock" aria-label="拖拽卡片派发给指定 worker">
+            <div class="kb-dock-label">
+              <span class="kb-dock-ico" aria-hidden="true">⇢</span>
+              <span class="kb-dock-hint" id="kb-dock-hint">拖到这里派发</span>
+            </div>
+            <div class="kb-dock-workers" id="kb-dock-workers" role="group" aria-label="可派发的 profile"></div>
+          </section>
+          <!-- 投放结果单独占一行：留在 dock 里会改宽度 / 撑高，chip 就在指针底下漂移了 -->
+          <div class="kb-dock-status"><span class="kb-dock-msg" id="kb-dock-msg" role="status"></span></div>
+          <div class="kb-dock-confirm" id="kb-dock-confirm"></div>
+
+          <div class="kb-summary" id="kb-summary" hidden></div>
+          <div class="kb-message" id="kb-message" hidden></div>
+
+          <div class="kb-scroll" id="kb-scroll">
+            <div class="kb-groups" id="kb-groups"></div>
+            <div class="kb-columns" id="kb-columns" hidden></div>
+          </div>
+
+          <div class="kb-drawer-mask" id="kb-drawer-mask" hidden></div>
+          <aside class="kb-drawer" id="kb-drawer" hidden aria-label="任务详情">
+            <div class="kb-drawer-head">
+              <span class="kb-drawer-kicker">任务详情</span>
+              <button class="pp-icon-btn" id="kb-drawer-close" title="关闭详情" aria-label="关闭详情">✕</button>
+            </div>
+            <div class="kb-drawer-body" id="kb-drawer-body"></div>
+          </aside>
+
+          <!-- 新建弹窗：静态表单，用户输入只经 value / textContent，绝不拼进 HTML -->
+          <div class="kb-modal-mask" id="kb-modal-mask" hidden></div>
+          <div class="kb-modal" id="kb-modal" hidden role="dialog" aria-modal="true" aria-labelledby="kb-modal-title">
+            <div class="kb-modal-head">
+              <span class="kb-modal-title" id="kb-modal-title">新建任务</span>
+              <button class="pp-icon-btn" id="kb-modal-close" type="button" aria-label="关闭弹窗">✕</button>
+            </div>
+            <div class="kb-modal-body">
+              <form id="kb-form-task" class="kb-form" autocomplete="off" hidden>
+                <label class="kb-frow"><span>标题 <i>必填</i></span><input id="kb-f-title" type="text" maxlength="200" placeholder="例如：修复登录页的空状态" /></label>
+                <label class="kb-frow"><span>描述</span><textarea id="kb-f-body" rows="4" maxlength="20000" placeholder="补充背景、验收标准…"></textarea></label>
+                <div class="kb-fgrid">
+                  <label class="kb-frow"><span>起始状态</span><hm-select id="kb-f-status" class="ui-select"><option value="triage">收集箱 triage（不派发）</option><option value="ready">就绪 ready（可能被派发）</option></hm-select></label>
+                  <label class="kb-frow"><span>优先级</span><input id="kb-f-priority" type="number" min="0" max="100" value="0" /></label>
+                  <label class="kb-frow"><span>受让人（profile）</span><hm-select id="kb-f-assignee" class="ui-select" aria-label="受让人（profile）" placeholder="留空则不指派"></hm-select></label>
+                  <label class="kb-frow"><span>租户</span><input id="kb-f-tenant" type="text" maxlength="80" placeholder="可留空" /></label>
+                </div>
+                <div class="kb-fhint" id="kb-f-assignee-hint">
+                  <span class="kb-fhint-line">受让人 = Hermes profile 名 · 派发时用 <code>hermes -p &lt;名字&gt;</code> 拉起 worker</span>
+                  <span class="kb-fhint-line" id="kb-f-assignee-profiles"></span>
+                </div>
+                <label class="kb-frow"><span>目标看板</span><hm-select id="kb-f-board" class="ui-select"><option value="">当前看板</option></hm-select></label>
+                <div class="kb-fnote" id="kb-f-note">默认进入收集箱，不会被调度器自动派发给 agent。</div>
+              </form>
+              <form id="kb-form-board" class="kb-form" autocomplete="off" hidden>
+                <label class="kb-frow"><span>标识 slug <i>必填</i></span><input id="kb-b-slug" type="text" maxlength="64" placeholder="例如 ops-2026" /></label>
+                <label class="kb-frow"><span>显示名称</span><input id="kb-b-name" type="text" maxlength="80" placeholder="可留空" /></label>
+                <label class="kb-frow"><span>描述</span><textarea id="kb-b-desc" rows="3" maxlength="400" placeholder="可留空"></textarea></label>
+                <div class="kb-fnote">只创建看板，不会切换 CLI 的当前看板指针；同名标识会返回既有看板。</div>
+              </form>
+            </div>
+            <div class="kb-modal-foot">
+              <span class="kb-modal-err" id="kb-modal-err" hidden></span>
+              <button class="kb-btn" id="kb-modal-cancel" type="button">取消</button>
+              <button class="kb-btn primary" id="kb-modal-submit" type="button">创建</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ══════════ 右侧 rail：预览 | 终端 ══════════ -->
+    <aside id="rail" hidden>
+      <!-- 左缘拖拽调宽手柄：鼠标 / 键盘（← → Home End Enter）/ 双击复位，宽度记忆在 localStorage。
+           role=separator + aria-valuenow 让读屏用户也能调整，不只是鼠标能用。 -->
+      <div id="rail-resize" role="separator" aria-orientation="vertical"
+        aria-label="调整预览 / 终端面板宽度" aria-valuemin="280" aria-valuemax="760" aria-valuenow="400"
+        tabindex="0" title="拖拽调整宽度 · ← / → 微调 · 双击复位 400px"></div>
+      <div class="rail-head">
+        <nav class="rail-tabs" id="rail-tabs">
+          <button class="rt active" data-rail="preview">预览</button>
+          <button class="rt" data-rail="terminal">终端</button>
+        </nav>
+        <span class="rail-hint" id="term-mode"></span>
+        <button id="btn-term-close" class="ir-btn" title="关闭">✕</button>
+      </div>
+
+      <div class="rail-pane" id="preview-pane">
+        <div class="pv-bar">
+          <button class="pv-btn" id="pv-open" title="选择本机任意 HTML 文件">打开文件</button>
+          <input id="pv-path" type="text" placeholder="本地 .html 路径或 http(s) 地址，⏎ 加载" spellcheck="false" />
+          <button class="pv-icon" id="pv-reload" title="刷新预览">↻</button>
+          <button class="pv-icon" id="pv-external" title="在系统默认浏览器打开">↗</button>
+        </div>
+        <div class="pv-sub">
+          <label class="pv-auto"><input type="checkbox" id="pv-auto" checked /> 自动跟随 Agent 生成的网页</label>
+          <span class="pv-state" id="pv-state">尚未加载</span>
+        </div>
+        <div class="pv-stage">
+          <iframe id="pv-frame" title="HTML 预览" referrerpolicy="no-referrer"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"></iframe>
+          <div class="pv-empty" id="pv-empty">
+            <div class="pv-empty-ico">◫</div>
+            <div class="pv-empty-title">预览 Agent 生成的网页</div>
+            <div class="pv-empty-hint">Agent 写入 .html 文件时会自动显示在这里，也可以点「打开文件」选择本机任意网页。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rail-pane" id="term-pane" hidden>
+        <pre id="term-out" class="term-out"></pre>
+        <input id="term-in" type="text" placeholder="输入命令（⏎ 执行；输入 exit 关闭）" spellcheck="false" />
+      </div>
+    </aside>
+  </div>
+
+  <!-- ══════════ 命令面板 ══════════ -->
+  <div id="palette" class="palette" hidden>
+    <div class="palette-box" role="dialog" aria-modal="true" aria-label="命令面板">
+      <input id="palette-input" type="text" placeholder="输入命令…" spellcheck="false" />
+      <ul id="palette-list"></ul>
+    </div>
+  </div>
+
+  <!-- ══════════ 快捷键帮助（对标 Claude Code 的 ? / ⌘/ 帮助层） ══════════ -->
+  <div id="help-modal" class="palette" hidden>
+    <div class="help-box" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="help-head">
+        <span class="help-title" id="help-title">快捷键与操作</span>
+        <button class="ir-btn" id="help-close" title="关闭" aria-label="关闭">✕</button>
+      </div>
+      <div class="help-body" id="help-body"></div>
+      <div class="help-foot">按 <kbd>Esc</kbd> 关闭 · <kbd id="help-foot-palette">⌘K</kbd> 打开命令面板 · 输入框内 <kbd>↑</kbd> 复用上一条提问</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 设置（dsh 式大弹层：左导航 + 右面板） ══════════ -->
+  <div id="settings-page" class="palette" hidden>
+    <div class="settings-box" role="dialog" aria-modal="true" aria-labelledby="set-title">
+      <div class="set-head">
+        <div class="page-lead" data-lead-scope="modal">
+          <button class="main-ibtn" data-lead="sidebar" title="展开侧栏 ⌘B" aria-label="展开侧栏" aria-expanded="false">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2.2" y="3" width="11.6" height="10" rx="2.2"/><path d="M6.6 3v10"/></svg>
+          </button>
+          <button class="main-ibtn" data-lead="new" title="新会话 ⌘T" aria-label="新会话">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+          </button>
+        </div>
+        <span class="set-title" id="set-title">设置</span>
+        <div class="set-head-spacer"></div>
+        <button class="pp-add" id="set-open-config">打开配置文件</button>
+        <button class="ir-btn" id="set-close" title="关闭">✕</button>
+      </div>
+      <div class="set-body">
+        <nav class="set-nav" id="set-nav"></nav>
+        <div class="set-panel" id="set-panel"></div>
+      </div>
+      <div class="set-foot">
+        <span class="set-hint" id="set-hint">更改需保存后生效</span>
+        <div class="set-head-spacer"></div>
+        <button class="set-cancel" id="set-cancel">取消</button>
+        <button class="pp-save set-save" id="set-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="pf-menu" class="pf-menu" hidden></div>
+  <div id="session-menu" class="session-menu" hidden></div>
+  <input type="file" id="file-input" multiple hidden />
+  <script src="mock-bridge.js"></script>
+  <script src="ui-select.js"></script>
+  <script src="term-screen.js"></script>
+  <script src="app.js"></script>
+  <!-- 右侧面板宽度增强层：独立、零依赖，只操作 --rail-w 与手柄 aria -->
+  <script src="rail-resize.js"></script>
+</body>
+</html>

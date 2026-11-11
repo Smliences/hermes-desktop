@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 与主窗口同一套严格 CSP：无内联脚本、无 eval、connect-src 全禁（全走 preload 的 IPC） -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; connect-src 'none'" />
+  <title>Hermes</title>
+  <link rel="stylesheet" href="orb-chat.css" />
+</head>
+<body data-side="right" data-running="false">
+  <div class="oc-shell">
+    <!-- 朝球那一侧的细连接轨：点球弹出的面板要看得出来「从哪来」；
+         回合进行中由主进程把 data-running 置 true，这里跟着呼吸 -->
+    <span class="oc-rail" aria-hidden="true"></span>
+    <!-- 头部整条可拖动窗口；按钮区单独 no-drag，否则点不动 -->
+    <header class="oc-head">
+      <span class="oc-glyph" aria-hidden="true">H</span>
+      <div class="oc-heading">
+        <div id="oc-title" class="oc-title">新会话</div>
+        <div id="oc-meta" class="oc-meta">就绪</div>
+      </div>
+      <div class="oc-tools">
+        <button id="oc-expand" class="oc-icon" type="button" title="在 Hermes 窗口中打开" aria-label="在主窗口中打开">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.6 2.8h3.6v3.6" /><path d="M13.2 2.8L8.1 7.9" /><path d="M12.4 9.8v2.6a1.2 1.2 0 0 1-1.2 1.2H3.8a1.2 1.2 0 0 1-1.2-1.2V5a1.2 1.2 0 0 1 1.2-1.2h2.6" />
+          </svg>
+        </button>
+        <button id="oc-close" class="oc-icon" type="button" title="收起（Esc）" aria-label="收起小窗">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="oc-feed" class="oc-feed" role="log" aria-live="polite" aria-label="对话内容">
+      <div id="oc-empty" class="oc-empty">
+        <div class="oc-empty-mark" aria-hidden="true">H</div>
+        <p class="oc-empty-title">在这里接着聊</p>
+        <p class="oc-empty-hint">直接开聊，回到主窗口也能接着看。</p>
+      </div>
+    </main>
+
+    <footer class="oc-foot">
+      <div id="oc-status" class="oc-status" hidden></div>
+      <div class="oc-composer">
+        <textarea id="oc-input" class="oc-input" rows="1" placeholder="问点什么…" aria-label="输入消息" spellcheck="false"></textarea>
+        <button id="oc-send" class="oc-send" type="button" title="发送（↵）" aria-label="发送">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 13V3.6" /><path d="M3.9 7.5L8 3.4l4.1 4.1" />
+          </svg>
+        </button>
+        <button id="oc-stop" class="oc-stop" type="button" title="停止本回合（Esc 两次或点此）" aria-label="停止" hidden>
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1.2" /></svg>
+        </button>
+      </div>
+    </footer>
+  </div>
+  <script src="orb-chat.js"></script>
+</body>
+</html>

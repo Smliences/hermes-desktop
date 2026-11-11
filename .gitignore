@@ -1,0 +1,13 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+
+# 根目录的界面截图（开发取证用，不进仓库；renderer/assets 里的资源要保留）
+/*.png
+/*.jpg
+
+# 系统 / 编辑器噪声
+.DS_Store
+*.log
+npm-debug.log*
