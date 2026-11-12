@@ -2691,7 +2691,11 @@ t('构建白名单覆盖全部运行时目录，且不含构建产物', () => {
 });
 t('asar / npmRebuild / node-pty asarUnpack 未被改坏', () => {
   assert.ok(/asar:\s*true/.test(buildCfg));
-  assert.ok(/npmRebuild:\s*true/.test(buildCfg));
+  // node-pty 1.1.0 自带 NAPI prebuilds，跨 ABI 可用；强制重编译只会在 Python ≥3.12（无
+  // distutils）的机器上把打包整体拖失败。这条和 check-package 的架构断言是一对：关掉
+  // 重编译就必须确保 prebuilds 在，两者不能各自回退。
+  assert.ok(/npmRebuild:\s*false/.test(buildCfg),
+    'npmRebuild 必须是 false（否则机器上没编译链就打不出包，见 README 打包一节）');
   assert.ok(/asarUnpack:[\s\S]*node-pty/.test(buildCfg));
 });
 t('运行时依赖与可选原生依赖齐备', () => {

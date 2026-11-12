@@ -41,13 +41,17 @@ t('files 白名单覆盖 main / preload / renderer / package.json', () => {
   }
 });
 
-t('node-pty 在 asarUnpack 里，且有 darwin-x64 二进制', () => {
+t('node-pty 走 NAPI 预编译产物，且没被逼着重编译', () => {
   assert(/asarUnpack:[\s\S]{0,160}node-pty/.test(yml), 'asarUnpack 未包含 node-pty（asar 内的 .node 无法加载）');
-  const ok = exists('node_modules/node-pty/prebuilds/darwin-x64/pty.node')
-    || exists('node_modules/node-pty/build/Release/pty.node');
-  assert(ok, 'node-pty 没有可用的 darwin-x64 二进制（打包后终端会降级成普通管道）');
+  // 关掉重编译后完全依赖 prebuilds：这两个条件必须成对出现。若有人把 npmRebuild 改回
+  // true，在 Python 3.12+（无 distutils）的机器上 node-gyp 会直接失败，包都打不出来。
+  assert(/npmRebuild:\s*false/.test(yml),
+    'npmRebuild 必须是 false —— node-pty 已带 NAPI prebuilds，重编译只会在缺编译链的机器上失败');
+  const arch = `${process.platform}-${process.arch}`;
+  const bin = `node_modules/node-pty/prebuilds/${arch}/pty.node`;
+  assert(exists(bin), `关掉重编译后完全依赖预编译产物，缺 ${bin}`);
   // spawn-helper 是独立可执行文件，必须一起 unpack 并保留执行位
-  const helper = path.join(ROOT, 'node_modules/node-pty/prebuilds/darwin-x64/spawn-helper');
+  const helper = path.join(ROOT, `node_modules/node-pty/prebuilds/${arch}/spawn-helper`);
   if (fs.existsSync(helper)) {
     const mode = fs.statSync(helper).mode & 0o777;
     assert(mode & 0o111, 'spawn-helper 丢失执行位，伪终端会启动失败');
@@ -122,6 +126,33 @@ t('mac 打包目标与产物目录配置齐全，且产物不进仓库', () => {
   assert(/target:\s*[\s\S]{0,80}dmg/.test(yml), 'mac target 未配置 dmg');
   assert(/identity:\s*null/.test(yml), '未显式关闭签名（本地开发包应写 identity: null）');
   assert(/^release\//m.test(read('.gitignore')), '.gitignore 缺少 release/');
+});
+
+t('mac.target 不写死多架构（本地只有一份 Electron，会打出名字对、二进制错的假包）', () => {
+  // 先剥掉注释：文档里会写「不要用 arch: [arm64, x64]」这种反面例子，吃掉注释才不会误报。
+  const bare = yml.split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
+  const macStart = bare.indexOf('\nmac:');
+  const winStart = bare.indexOf('\nwin:');
+  const targetBlock = bare.slice(macStart, winStart > macStart ? winStart : undefined);
+
+  // 反面证据：electron-builder 25 遇到 arch:[arm64, x64] + electronDist（单一架构）时，
+  // 不下载、不报错，只把文件名改成 -arm64.dmg，里面躺着 x86_64 的 Mach-O（实测）。
+  assert(!/arch:\s*\[[^\]]*\]/.test(targetBlock),
+    'mac.target 里写死了 arch 列表 —— electronDist 只有一份架构时，electron-builder 会生成\n'
+    + '      名字是 -arm64、二进制却是 x64 的假包（Apple Silicon 上不装 Rosetta 打不开）。\n'
+    + '      要么删掉 arch 只打当前架构，要么先 npm i -D electron --arch=arm64。');
+});
+
+t('打包脚本走 scripts/dist.js（直接调 electron-builder 会被 NODE_OPTIONS 的 fs 代理搞挂）', () => {
+  for (const name of ['dist', 'dist:mac', 'dist:win', 'dist:linux']) {
+    assert(pkg.scripts && typeof pkg.scripts[name] === 'string', '缺少 npm 脚本 ' + name);
+    assert(pkg.scripts[name].includes('scripts/dist.js'),
+      `${name} 没走 scripts/dist.js —— 宿主注入的 NODE_OPTIONS（fs 代理 shim）会让 electron-builder`
+      + ' 在搬运 Electron.app 时以 "Invalid package default_app.asar" 失败');
+  }
+  const dist = read('scripts/dist.js');
+  assert(dist.includes('delete env.NODE_OPTIONS'), 'dist.js 没有摘掉 NODE_OPTIONS');
+  assert(dist.includes("execFileSync('lipo'"), 'dist.js 没有用 lipo 核对架构（会放过假包）');
 });
 
 console.log(`\n打包自检：${pass} 通过 / ${fail} 失败`);

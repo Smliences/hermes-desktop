@@ -282,30 +282,35 @@ v0.23.0 的架构改动是「**一台机器一个 gateway 拥有所有会话**�
 
 | 平台 | 目标 | 命令 |
 |---|---|---|
-| macOS (arm64/x64) | dmg | `npm run dist:mac` |
+| macOS（当前机器架构） | dmg | `npm run dist:mac` |
+| macOS（只解包，几秒，用于验证产物） | `.app` 目录 | `npm run dist:dir` |
 | Windows | NSIS | `npm run dist:win` |
 | Linux | AppImage / deb | `npm run dist:linux` |
 
-- `asar: true`；`node-pty` 通过 `asarUnpack` 整包取出（asar 内的 `.node` 无法 dlopen）；默认 `npmRebuild: true` 按 Electron ABI 重编译，编译链不全时可临时 `--config.npmRebuild=false` 改用自带 prebuilds；`files` 白名单只含 `main/ preload/ renderer/ package.json`，第三方运行时依赖由 builder 按 `dependencies` 自动收进来。
+- `asar: true`；`node-pty` 通过 `asarUnpack` 整包取出（asar 内的 `.node` 无法 dlopen）。**`npmRebuild: false`**：node-pty 1.1.0 自带 NAPI prebuilds，是与 ABI 无关的稳定接口，同一份 `.node` 在 Node 22 与 Electron 33（ABI 130）下都能加载（实测 spawn 出 `ASAR_PTY_OK`）。不重编译的另一个原因是重编译要 Python + node-gyp，而 Python ≥3.12 移除了 `distutils`，node-gyp 直接报 `No module named 'distutils'`——机器上有没有编译链不该决定能不能出包。`files` 白名单只含 `main/ preload/ renderer/ package.json`，第三方运行时依赖由 builder 按 `dependencies` 自动收进来。
 - 应用图标是 `build/icon.icns`（由 `renderer/assets/hermes-logo.png` 生成，含 16→1024 全尺寸）；缺了它会退回 Electron 默认图标。源图只有 128px，512/1024 是放大的，Dock 大图标下能看出像素感——正式分发建议补一张 ≥1024 的源图再重新生成。
 - 打包前先跑 `npm run pack:check`（也随 `npm test` 跑）：核对图标、`files` 白名单、`asarUnpack`、`node-pty` 的 darwin 二进制、`spawn-helper` 执行位、主进程 `require` 的包是否都在 `dependencies`、相对 require 与 `index.html` 引用是否都存在。这些正是「能构建但起不来」的常见原因。
 - 对宿主 hermes 是**运行时探测**，不捆绑 CLI；检测不到时降级为 Demo 模式并提示。
 - macOS 正式分发需 Developer ID 证书（当前 `identity: null` 适配本地开发）；Windows 建议 EV 证书减少 SmartScreen 告警。
 - 部署拓扑：用户机器 = hermes CLI（前置依赖） + Hermes Desktop Client.app（本应用）；后端 `hermes serve` 由应用自行托管在 loopback 随机端口，不对外暴露。
 
-### 构建环境要求（macOS 实测）
+### 打包实测与踩过的坑（macOS，2026-11-12）
 
-`npm run dist:mac` 需要重编译 `node-pty` 并获取 Electron 发行包。遇到以下报错时按表处理：
+产物 `release/Hermes Desktop Client-0.1.0.dmg`（约 100MB）。验证方式是**真的挂载再启动**：`hdiutil attach` → `ditto` 把 `.app` 拷到别处 → `open`，观察到 `backend ready on port 58970`、会话分组与「已连接」状态正常、日志 0 warn / 0 error，图标为 `build/icon.icns`（与产物内的逐字节一致）。终端（PTY）单独验证：用同版本 Electron 直接 `require` 打包产物里的 `app.asar/node_modules/node-pty` 并 spawn，确认 asar → `app.asar.unpacked` 的 `.node` 重定向生效、`spawn-helper` 打包后仍带执行位（`rwxr-xr-x`）。
 
-| 现象 | 原因 | 处理 |
+打包**统一走 `scripts/dist.js`**（`npm run dist:*` 都是它），因为有两件事必须由它处理，而它们的报错都指不到真因：
+
+| 现象 | 真因 | 现在怎么处理 |
 |---|---|---|
-| `ModuleNotFoundError: No module named 'distutils'` | 默认 `python3` ≥ 3.12 已移除 distutils，而 node-gyp 9.x 仍 import 它 | `PYTHON=/usr/bin/python3 npm_config_python=/usr/bin/python3 npm run dist:mac`（macOS 自带 3.9），或升级 node-gyp / 安装 setuptools |
-| `Get https://github.com/.../electron-v33…-darwin-x64.zip: EOF` | 构建机无法访问 GitHub Releases | 已在 `electron-builder.yml` 写死 `electronDist: node_modules/electron/dist`（复用 devDependency 里的 Electron）；彻底删掉那行才回退到按 version 下载，也可设 `ELECTRON_MIRROR` |
-| `broker denied delete` / `Invalid package default_app.asar` | 受限沙箱拦截了文件搬运 / 删除（node 进程的 fs 写被代理拒绝） | 在普通终端（非受限环境）执行打包；本工具沙箱内只做静态核对（`npm run pack:check`），不产出可分发包 |
-| 终端页空白 / 伪终端起不来 | `node-pty` 的 `spawn-helper` 丢了执行位（npm 解包时实测装成 644） | `npm run postinstall` 或 `node scripts/fix-pty-perm.js`；`pack:check` 也会拦下 |
-| 只想快速验证产物结构 | dmg 较慢 | `npx electron-builder --dir --mac --x64`（只产 `release/mac/*.app`） |
+| `Invalid package …/default_app.asar`（栈里出现 `node-brokered-fs-shim`） | 宿主把 `NODE_OPTIONS` 注入成 fs 代理 shim，electron-builder 搬运几万个文件时被 broker 拒 | `dist.js` spawn 子进程时 `delete env.NODE_OPTIONS`，不必再换普通终端手工执行 |
+| 文件名 `-arm64.dmg`，里面却是 `x86_64` 二进制 | `electronDist` 只有一份架构的 Electron，builder 不下载也不报错，只改文件名 | `dist.js` 用 `lipo -archs` 核对，对不上直接退出并给修法；`mac.target` 不再写死 arch 列表 |
+| `ModuleNotFoundError: No module named 'distutils'` | Python ≥3.12 移除 distutils，node-gyp 9.x 仍 import 它 | 已用 `npmRebuild: false` + NAPI prebuilds 绕开；确需重编译时装 `setuptools` |
+| `Get https://github.com/.../electron-v33…-darwin-x64.zip: EOF` | 构建机访问不了 GitHub Releases | `electron-builder.yml` 写死 `electronDist: node_modules/electron/dist` 复用 devDependency 里的 Electron；删掉那行才回退到按 version 下载，也可设 `ELECTRON_MIRROR` |
+| 终端页空白 / 伪终端起不来 | `spawn-helper` 丢执行位（npm 解包时实测装成 644） | `npm run postinstall` 或 `node scripts/fix-pty-perm.js`；`pack:check` 也会拦下 |
 
-`npm test` 末尾会跑 `scripts/check-package.js`，静态核对 `electron-builder.yml`（`asar` / `npmRebuild` / `asarUnpack` / `files` 白名单）、图标、`package.json` 入口与依赖归属、相对 require 与 `index.html` 引用，不需要联网或原生编译。
+双架构要显式准备：本机只装了 x64 的 Electron，想同时出 arm64 包需先 `npm i -D electron@33.4.11 --arch=arm64`，再 `npx electron-builder --mac --arm64`。未签名包（`identity: null`）在本机构建后能直接打开，拷到别的机器会被 Gatekeeper 判为「已损坏」——对外分发必须 Developer ID 签名 + 公证。
+
+`npm test` 末尾会跑 `scripts/check-package.js`，静态核对 `electron-builder.yml`（`asar` / `npmRebuild` / `asarUnpack` / `files` 白名单、`mac.target` 是否写死多架构）、`dist.js` 是否真的摘掉 `NODE_OPTIONS` 并做架构核对、图标、`package.json` 入口与依赖归属、相对 require 与 `index.html` 引用，不需要联网或原生编译。
 
 ## 九、已知边界
 

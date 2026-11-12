@@ -15,10 +15,11 @@
     "test:services": "node scripts/test-services.js",
     "test:contracts": "node scripts/test-contracts.js",
     "pack:check": "node scripts/check-package.js",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist": "node scripts/dist.js",
+    "dist:dir": "node scripts/dist.js --mac --dir",
+    "dist:mac": "node scripts/dist.js --mac",
+    "dist:win": "node scripts/dist.js --win",
+    "dist:linux": "node scripts/dist.js --linux"
   },
   "devDependencies": {
     "electron": "^33.4.11",

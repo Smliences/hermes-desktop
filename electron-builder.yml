@@ -25,19 +25,28 @@ files:
   - package.json
   - "!**/*.map"
 
-# node-pty 是原生模块：默认按 Electron ABI 重编译（需要 python3 + node-gyp）。
-# 它自带 prebuilds（darwin-x64 / darwin-arm64 等，NAPI 跨 ABI），编译链不全时可临时
-# `--config.npmRebuild=false` 改用预编译产物，但换 Electron 大版本后要重新验证。
-npmRebuild: true
+# node-pty 1.1.0 自带 NAPI prebuilds（darwin-x64 / darwin-arm64 / win32-*），NAPI 是与
+# ABI 无关的稳定接口，同一个 .node 在 Node 22 和 Electron 33 下都能加载（实测 ABI 130
+# 下 spawn 正常）。所以**关掉重编译**：
+#   1) 重编译要 python3 + node-gyp，Python 3.12+ 移除了 distutils，node-gyp 直接报
+#      "No module named 'distutils'"，机器上有没有编译链不该决定能不能出包；
+#   2) 编出来的产物和 prebuilds 功能等价，白等一次几分钟的编译。
+# 换 node-pty 大版本或换平台后要重新确认 prebuilds 目录还在（check-package.js 会拦）。
+npmRebuild: false
 asar: true
 asarUnpack:
   - "**/node_modules/node-pty/**"
 
 mac:
   category: public.app-category.developer-tools
+  # 不写 arch：默认只打**当前机器**的架构。原因见上面 electronDist —— 本地只有一份
+  # 架构的 Electron，写 arch: [arm64, x64] 时 electron-builder 不会去下载另一份，而是
+  # 把同一份 x64 Electron.app 复制成 -arm64.dmg（实测文件名 arm64、二进制 x86_64），
+  # 在 Apple Silicon 上不装 Rosetta 根本打不开。要出双架构就先装对应 Electron：
+  #   npm i -D electron@33.4.11 --arch=arm64 && npx electron-builder --mac --arm64
+  # scripts/dist.js 会在架构对不上时直接拦下，不生成假包。
   target:
     - target: dmg
-      arch: [arm64, x64]
   identity: null            # 本地开发不分发；正式分发需开发者证书
   darkModeSupport: true
 
