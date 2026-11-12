@@ -1,7 +1,18 @@
 # electron-builder 打包配置
+#
+# 注意：构建过程要搬运/删除 Electron.app 里的几万个文件，必须在**普通终端**执行：
+#   npm run dist:mac
+# 在受限沙箱（文件写入被代理拦截）里会以 "Invalid package …/default_app.asar" 失败。
+# 打包前先跑 `npm run pack:check`（也会随 npm test 自动跑），它会拦下缺图标、
+# 漏 files 白名单、node-pty 没 unpack、把运行时依赖错放 devDependencies 这类
+# 「能构建但起不来」的问题。
 appId: cn.workbuddy.hermes-desktop
 productName: Hermes Desktop Client
 copyright: MIT
+
+# 直接用 devDependency 里已解压的 Electron，避免每次打包都从 GitHub 下载二进制
+# （离线 / 内网环境否则会卡在下载）。删掉这行则回退到按 version 下载。
+electronDist: node_modules/electron/dist
 
 directories:
   output: release
@@ -14,7 +25,9 @@ files:
   - package.json
   - "!**/*.map"
 
-# node-pty 为原生模块，需按平台重编译（electron-builder 自动处理）
+# node-pty 是原生模块：默认按 Electron ABI 重编译（需要 python3 + node-gyp）。
+# 它自带 prebuilds（darwin-x64 / darwin-arm64 等，NAPI 跨 ABI），编译链不全时可临时
+# `--config.npmRebuild=false` 改用预编译产物，但换 Electron 大版本后要重新验证。
 npmRebuild: true
 asar: true
 asarUnpack:

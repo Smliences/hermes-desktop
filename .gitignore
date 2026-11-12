@@ -2,6 +2,9 @@
 node_modules/
 dist/
 out/
+release/
+# 打包图标集是中间产物，build/icon.icns 才是要提交的资源
+build/*.iconset/
 
 # 根目录的界面截图（开发取证用，不进仓库；renderer/assets 里的资源要保留）
 /*.png
