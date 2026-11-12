@@ -3144,6 +3144,20 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
   assert.ok(read('renderer/mock-bridge.js').includes('async backendStatus()'), 'Demo 桥缺少 backendStatus');
 });
 
+t('窗口聚焦刷新：防抖 + 并发保护 + 保滚动位置', () => {
+  assert.ok(appSrc.includes('const FOCUS_REFRESH_MS = 6000'), '缺少聚焦刷新防抖阈值');
+  assert.ok(appSrc.includes('function refreshOnFocus('), '缺少聚焦刷新实现');
+  assert.ok(appSrc.includes('function initFocusRefresh('), '缺少聚焦刷新初始化');
+  assert.ok(appSrc.includes("window.addEventListener('focus', refreshOnFocus)"), '未监听窗口聚焦');
+  assert.ok(appSrc.includes("document.addEventListener('visibilitychange'"), '未监听可见性变化');
+  assert.ok(appSrc.includes('if (document.hidden) return;'), '隐藏时不应刷新');
+  assert.ok(appSrc.includes('focusRefreshBusy'), '缺少并发保护（连续触发会叠加重建列表）');
+  // renderSessions 会重建整个列表：滚动位置必须还原
+  assert.ok(appSrc.includes('ul.scrollTop = top'), '刷新后未还原滚动位置');
+  assert.ok(appSrc.includes('let lastFocusRefresh = Date.now();'), '启动时应把首屏刷新计为一次');
+  assert.ok(appSrc.includes('initFocusRefresh();'), '启动时未注册聚焦刷新');
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;

@@ -404,6 +404,31 @@ function ensureSidebarTree() {
     ensureSidebarTree();
   }, Math.min(1000 + n * 800, 3500));
 }
+/* ---------- 窗口重新获得焦点：补齐「后端侧发生的变化」 ----------
+   项目树与会话列表只在启动和本地操作后刷新，终端里 `hermes project create`、
+   或别的窗口新建的会话，切回来是看不到的。聚焦补一次，但要防抖（避免切来切去
+   反复重建列表）并保住滚动位置。 */
+const FOCUS_REFRESH_MS = 6000;
+// 启动时的首屏刷新算作一次，别让紧接着的 focus 立刻再拉一遍
+let lastFocusRefresh = Date.now();
+let focusRefreshBusy = false;
+function refreshOnFocus() {
+  if (document.hidden) return;
+  const now = Date.now();
+  if (focusRefreshBusy || (lastFocusRefresh && now - lastFocusRefresh < FOCUS_REFRESH_MS)) return;
+  lastFocusRefresh = now;
+  focusRefreshBusy = true;
+  const ul = $('#session-list');
+  const top = ul ? ul.scrollTop : 0;
+  Promise.resolve(refreshSessions(currentSearch()))
+    .catch(() => {})
+    .then(() => {
+      // renderSessions 重建了整个列表，滚动位置要还回去（越界时浏览器会自己夹住）
+      if (ul) ul.scrollTop = top;
+      focusRefreshBusy = false;
+      ensureSidebarTree();
+    });
+}
 /* ---------- 后端连接状态 ----------
    gateway 掉线过去只在「下一次操作失败」时以 toast 出现，用户看到的是一堆「连接已重置」，
    却不知道原因。这里把主进程推来的状态落成侧栏底部一个点：绿=可用、蓝=正在连、
@@ -453,6 +478,11 @@ function initConnStatus() {
     else toast('重连失败：' + ((r && r.error) || '未知错误'), 3200);
     pull();
   };
+}
+function initFocusRefresh() {
+  window.addEventListener('focus', refreshOnFocus);
+  // 切标签页回来时 focus 不一定会触发，可见性变化要单独接一次
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOnFocus(); });
 }
 /* ---------- 时间分桶：置顶 / 今天 / 昨天 / 其他会话 ----------
    官方 calendarBucket 的收敛版：只保留三档（用户侧只需要「今天 / 昨天 / 其余」），
@@ -7960,6 +7990,7 @@ async function init() {
   syncComposerState();
   syncComposerProject(); // 首屏把项目下拉的候选与当前页签状态落地
   initConnStatus();      // 后端连接状态点：先拉一次快照，之后靠主进程推送
+  initFocusRefresh();    // 切回窗口时补齐终端 / 其他窗口产生的变化
   // 非阻断：启动即核对桌面端模型与 CLI 默认是否漂移；切 profile 会 reload 重跑
   syncModelDrift(true);
   // 球下拉里选了别的 profile 的会话：doSwitchProfile 重载后在这里补上打开动作。
