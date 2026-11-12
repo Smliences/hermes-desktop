@@ -278,6 +278,8 @@ const state = {
   sessions: [], sendHistory: [], histIdx: -1,
   projectsTree: [],         // 侧栏项目树投影（/api/profiles/projects/tree，降级为 []）
   projectsTreeOk: false,    // 树请求是否成功；后端冷启慢于首屏时由 ensureSidebarTree 重试
+  booted: false,            // 会话列表是否已成功落地过一次（false = 首屏骨架 + 后端启动提示）
+  bootError: '',            // 首屏拉取失败的原因（骨架里显示，便于区分「慢」和「挂了」）
   attachments: [],           // [{ path, name, kind }] 本回合待附加的本地文件
 };
 const hasNative = typeof hermesAPI !== 'undefined';
@@ -379,8 +381,22 @@ async function refreshSessions(search = '') {
       state.projectsTreeOk = false;
     }
     syncComposerProject(); // 树刷新后同步候选（冷启自愈落地时也走这里）
+    // 有数据 = 后端确实答了话，首屏可以收骨架；空列表则等连接状态或下一次重试来确认。
+    // 这里不调 bootSettled()：它会再补拉一次列表，而本次结果就是最新的。
+    if (state.sessions.length && !state.booted) {
+      state.booted = true;
+      bootRetry = 0;
+      if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
+    }
+    state.bootError = '';
     renderSessions(q);
-  } catch (e) { state.projectsTreeOk = false; console.warn('sessions', e); }
+    if (!state.booted) ensureSidebarBoot();
+  } catch (e) {
+    state.projectsTreeOk = false;
+    state.bootError = (e && e.message) || '会话列表读取失败';
+    console.warn('sessions', e);
+    if (!state.booted) { renderSessions(currentSearch()); ensureSidebarBoot(); }
+  }
 }
 /** 后端冷启（gateway 常需 5~12s）会晚于首屏：树接口失败时按退避重试，直到项目分组落地。
  *  独立拉树、成功即落地并重绘侧栏，不与会话列表的并发代次（sessionsSeq）互相拖累。 */
@@ -429,6 +445,74 @@ function refreshOnFocus() {
       ensureSidebarTree();
     });
 }
+/* ---------- 首屏启动骨架 ----------
+   CLI 冷启要 5~7.5s、gateway 10~15s，而首屏一开始就 await 会话列表：这段时间侧栏
+   是一片空白，看起来像「没有历史会话」而不是「还在启动」。这里在列表区先铺骨架 + 一句
+   状态说明，等后端真的可用（或列表已带回数据）再收掉；期间按退避重试拉列表，
+   因为「后端还没起来」和「真的一条会话都没有」在界面上必须是两种东西。 */
+let bootRetry = 0;
+let bootTimer = null;
+function bootSettled() {
+  if (state.booted) return;
+  state.booted = true;
+  state.bootError = '';
+  bootRetry = 0;
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
+  try { renderSessions(currentSearch()); } catch {}
+  // 骨架收起后补拉一次：后端刚 ready 的那一刻，列表可能还是上一次的失败结果
+  try { refreshSessions(currentSearch()).catch(() => {}); } catch {}
+}
+function ensureSidebarBoot() {
+  if (state.booted || currentSearch()) return;
+  if (bootRetry >= 12) {
+    // 约 30s 还没答案就停下：一直转下去比承认「慢」更像卡死
+    if (!state.bootError) {
+      state.bootError = '后端启动超时';
+      try { renderSessions(currentSearch()); } catch {}
+    }
+    return;
+  }
+  const n = ++bootRetry;
+  if (bootTimer) clearTimeout(bootTimer);
+  bootTimer = setTimeout(async () => {
+    bootTimer = null;
+    if (state.booted) return;
+    try { await refreshSessions(currentSearch()); } catch {}
+  }, Math.min(1200 + n * 500, 3000));
+}
+/** 骨架里的两行文案：慢、断开、超时是三种情况，不能都写成「正在启动」。 */
+function bootCopy() {
+  if (!state.bootError) return ['正在启动本地后端…', '首次启动要拉起 hermes serve，通常 5–15 秒'];
+  if (state.bootError === '后端启动超时') return ['后端启动较慢', '仍在等待；可点左下角状态点重连，或稍后再试'];
+  return ['后端未连接', '桌面端会自动重试，也可以点左下角状态点手动重连'];
+}
+function renderSidebarSkeleton(ul) {
+  const [title, sub] = bootCopy();
+  const head = document.createElement('li');
+  head.className = 's-boot';
+  head.setAttribute('role', 'presentation');
+  const t = document.createElement('span');
+  t.className = 's-boot-title';
+  t.textContent = title;
+  const s = document.createElement('span');
+  s.className = 's-boot-sub';
+  s.textContent = sub;
+  head.append(t, s);
+  ul.appendChild(head);
+  for (let i = 0; i < 4; i++) {
+    const li = document.createElement('li');
+    li.className = 's-skel';
+    li.setAttribute('role', 'presentation');
+    li.setAttribute('aria-hidden', 'true');
+    // 逐条错相，四条骨架不会像一块整体在闪
+    li.style.setProperty('--i', String(i));
+    const dot = document.createElement('span'); dot.className = 's-skel-dot';
+    const bar = document.createElement('span'); bar.className = 's-skel-bar';
+    li.append(dot, bar);
+    ul.appendChild(li);
+  }
+}
+
 /* ---------- 后端连接状态 ----------
    gateway 掉线过去只在「下一次操作失败」时以 toast 出现，用户看到的是一堆「连接已重置」，
    却不知道原因。这里把主进程推来的状态落成侧栏底部一个点：绿=可用、蓝=正在连、
@@ -438,16 +522,21 @@ function renderConnStatus(st) {
   const btn = $('#btn-conn');
   if (!btn) return;
   const s = st || {};
-  let state = 'connecting';
-  if (s.connected) state = 'ready';
-  else if (s.state === 'error' || s.state === 'idle' || s.state === 'stopped') state = 'offline';
-  btn.dataset.state = state;
-  const label = CONN_TEXT[state] || '未知';
+  // 局部量别叫 state：外层还有一个全局 state（会话/页签模型），重名会把 booted 写丢
+  let mode = 'connecting';
+  if (s.connected) mode = 'ready';
+  else if (s.state === 'error' || s.state === 'idle' || s.state === 'stopped') mode = 'offline';
+  btn.dataset.state = mode;
+  // 后端刚可用 = 首屏骨架该收起了：即使一条会话都没有，也已经是确定答案
+  // （首次装机的空列表和「还没拉回来」在界面上必须是两种东西）
+  if (mode === 'ready' && !state.booted) bootSettled();
+  else if (mode === 'offline' && !state.booted) { state.bootError = '后端未连接'; renderSessions(currentSearch()); }
+  const label = CONN_TEXT[mode] || '未知';
   const txt = btn.querySelector('.sb-conn-text');
   if (txt) txt.textContent = label;
-  btn.title = state === 'ready'
+  btn.title = mode === 'ready'
     ? `后端已连接${s.port ? '（端口 ' + s.port + '）' : ''}`
-    : (state === 'offline' ? '后端未连接，点击重连' : '正在连接后端…');
+    : (mode === 'offline' ? '后端未连接，点击重连' : '正在连接后端…');
   btn.setAttribute('aria-label', '后端' + label);
 }
 function initConnStatus() {
@@ -852,6 +941,8 @@ function renderSessions(q = '') {
     ul.appendChild(sessionItemEl(s, { query, snippet: s.snippet }));
   }
   if (!ul.children.length) {
+    // 首屏还没拿到第一个确定答案：铺骨架 + 状态说明，而不是直接说「暂无会话」
+    if (!query && !state.booted) { renderSidebarSkeleton(ul); return; }
     const li = document.createElement('li');
     li.innerHTML = `<span class="s-title" style="color:var(--text-3)">${query ? '没有匹配的会话' : '暂无会话'}</span>`;
     ul.appendChild(li);
@@ -8038,6 +8129,8 @@ setupSettings();
 async function init() {
   refreshProfileChip(); // 尽早刷新，不受后续会话加载/后端重启阻塞
   applySettings();      // 设置此前只写不读：启动时也要恢复主题/字号/步骤详略
+  // 先铺骨架：下面 env / 会话列表都要等后端，空白侧栏会被误读成「没有历史会话」
+  try { renderSessions(''); } catch {}
   try { const env = await api.env(); state.env = env; state.config = { ...state.config, ...env.config }; } catch {}
   // env-chip 已按需求移除（侧栏左下角改为齿轮按钮），仅保留 state.env 数据
   await refreshSessions();

@@ -3184,8 +3184,12 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
   assert.ok(/id="btn-conn"/.test(htmlSrc) && htmlSrc.includes('sb-conn-dot'), '侧栏缺少连接状态点');
   assert.ok(appSrc.includes('function renderConnStatus(') && appSrc.includes("CONN_TEXT = { ready: '已连接'"),
     '缺少连接状态渲染');
-  assert.ok(appSrc.includes("if (s.connected) state = 'ready';") && appSrc.includes("state = 'offline';"),
+  // 局部量不能叫 state：外层还有全局 state，重名会把 booted 写丢（真踩过）
+  assert.ok(appSrc.includes("let mode = 'connecting';") && appSrc.includes("if (s.connected) mode = 'ready';")
+    && appSrc.includes("mode = 'offline';"),
     '状态映射不完整（ready / offline）');
+  assert.ok(!/function renderConnStatus\(st\) \{[^}]*let state = 'connecting'/.test(appSrc),
+    'renderConnStatus 的局部量又变回 state，会遮蔽全局 state');
   assert.ok(appSrc.includes('api.onBackendStatus(renderConnStatus)'), '未订阅状态变化');
   assert.ok(appSrc.includes('await api.reconnectBackend()'), '点击未接重连通道');
   assert.ok(appSrc.includes('initConnStatus();'), '启动时未初始化连接状态');
@@ -3198,6 +3202,41 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
   assert.ok(!/--amber/.test(cssSrc), '不得发明不存在的 token');
   // Demo 桥
   assert.ok(read('renderer/mock-bridge.js').includes('async backendStatus()'), 'Demo 桥缺少 backendStatus');
+});
+
+t('首屏骨架：后端冷启期间不把侧栏留白，也不谎称「暂无会话」', () => {
+  // CLI 冷启 5~7.5s、gateway 10~15s，首屏 await 列表的这段时间过去是整片空白，
+  // 用户会以为历史会话没了。骨架 + 一句状态说明把「慢」和「空」区分开。
+  assert.ok(appSrc.includes('booted: false') && appSrc.includes("bootError: ''"),
+    'state 缺少首屏 boot 标记');
+  assert.ok(appSrc.includes("if (!query && !state.booted) { renderSidebarSkeleton(ul); return; }"),
+    '空列表时没有先走骨架分支（会直接显示「暂无会话」）');
+  assert.ok(appSrc.includes('function renderSidebarSkeleton('), '缺少骨架渲染');
+  // 退出条件：后端 ready（会话数为 0 也算确定答案）或列表真的带回数据
+  assert.ok(appSrc.includes("if (mode === 'ready' && !state.booted) bootSettled();"),
+    '后端 ready 时没有收掉骨架（首次装机空列表会一直转）');
+  assert.ok(appSrc.includes("if (mode === 'offline' && !state.booted)"),
+    '后端断开时骨架没有切到错误提示');
+  assert.ok(appSrc.includes('if (state.sessions.length && !state.booted) {'),
+    '列表带回数据后没有立即收骨架');
+  // 重试要有上限：连不上就停在错误提示，不无限轮询
+  assert.ok(appSrc.includes('if (bootRetry >= 12) {'), '首屏重试缺少上限');
+  assert.ok(appSrc.includes("state.bootError = '后端启动超时';"), '重试用尽后没有把「一直在转」换成可读状态');
+  assert.ok(appSrc.includes('function bootCopy()'), '骨架文案未按慢 / 断开 / 超时分开');
+  assert.ok(appSrc.includes('Math.min(1200 + n * 500, 3000)'), '首屏重试缺少退避');
+  // 首屏要在 await 之前就把骨架铺上，否则 await 期间仍是空白
+  const initFn = appSrc.slice(appSrc.indexOf('async function init('), appSrc.indexOf('await api.env()'));
+  assert.ok(initFn.includes("try { renderSessions(''); } catch {}"), 'init 未在 await 之前铺骨架');
+  // 样式：占位块 + 扫光 + 减少动效 / 只用既有 token
+  for (const rule of ['.s-boot', '.s-boot-title', '.s-boot-sub', '.s-skel', '.s-skel-dot',
+    '.s-skel-bar', 's-skel-fade']) {
+    assert.ok(cssSrc.includes(rule), '缺少骨架样式 ' + rule);
+  }
+  assert.ok(/@media \(prefers-reduced-motion: reduce\) \{\s*#session-list \.s-skel-dot, #session-list \.s-skel-bar \{ animation: none/.test(cssSrc),
+    '骨架扫光未尊重 reduced-motion');
+  // 骨架行的权重必须压过 `#session-list li`（ID 选择器），否则又会被拉回「一行居中」
+  assert.ok(/#session-list li\.s-boot \{[^}]*align-items: stretch/.test(cssSrc),
+    '骨架状态行没压过 #session-list li 的 align-items:center');
 });
 
 t('窗口聚焦刷新：防抖 + 并发保护 + 保滚动位置', () => {

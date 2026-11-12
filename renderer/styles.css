@@ -3242,3 +3242,41 @@ body.kb-dragging * { cursor: grabbing !important; }
 @media (prefers-reduced-motion: reduce) {
   .sb-conn[data-state="connecting"] .sb-conn-dot { animation: none; }
 }
+
+/* ── 首屏骨架：后端冷启那 5~15s 的侧栏 ───────────────────────────────────
+   不是「加载圈」，是「内容的形状」：四行占位 + 一句状态说明。占位块用当前色系
+   的极低不透明度扫光，双主题都不需要额外配色；状态行用正文色，保证读得清。 */
+/* 选择器都带 #session-list 前缀：`#session-list li`（ID 权重）会把 display / align-items /
+   padding 全部压过裸类名，骨架行会被拉成「一行居中文字 + 一排等宽色块」 */
+#session-list li.s-boot {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px;
+  padding: 8px 10px 10px; margin: 2px 0 4px; min-height: 0;
+  border-radius: var(--r-md); text-align: left;
+  background: var(--fill-2); cursor: default;
+}
+#session-list li.s-boot:hover { background: var(--fill-2); color: inherit; }
+#session-list .s-boot-title { display: block; color: var(--text-2); font: 500 12px/1.4 var(--sans); }
+#session-list .s-boot-sub { display: block; color: var(--caption); font: 400 10.5px/1.5 var(--sans); }
+#session-list li.s-skel {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; height: 30px; min-height: 0; pointer-events: none; cursor: default;
+}
+#session-list li.s-skel:hover { background: transparent; }
+#session-list .s-skel-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--fill-3);
+  animation: s-skel-fade 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * .12s);
+}
+#session-list .s-skel-bar {
+  height: 10px; border-radius: 5px; flex: 0 0 auto;
+  /* 宽度按行递减，看起来像真实的会话标题而不是等长色块 */
+  width: calc(70% - var(--i, 0) * 7%);
+  background: var(--fill-3);
+  animation: s-skel-fade 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * .12s);
+}
+@keyframes s-skel-fade { 0%, 100% { opacity: .45; } 50% { opacity: .95; } }
+@media (prefers-reduced-motion: reduce) {
+  #session-list .s-skel-dot, #session-list .s-skel-bar { animation: none; opacity: .7; }
+}
