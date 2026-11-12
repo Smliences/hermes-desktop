@@ -1238,13 +1238,17 @@ t('拖拽派发：投放区齐备、只改指派不越权、真派发仍过二�
     '不应依赖 HTML5 拖放：拦不住误触 click，也拦不住拖拽期间的轮询重建');
   assert.ok(kbAppSrc.includes("scroll.addEventListener('pointerdown', kbDragDown)"), '卡片未挂拖拽起点');
   assert.ok(kbAppSrc.includes('KbDrag.suppressClick'), '拖拽结束后未吞掉浏览器补发的 click（会误打开抽屉）');
-  // 可拖状态白名单：running 要先 reclaim，done / archived 再派发没有意义
+  // 可拖状态分两档：改派源（running 要先 reclaim，done / archived 再派发没意义）
+  // 与拖拽源（多一个 done —— 已完成的卡片要能拖回别的列重开）
   assert.ok(kbAppSrc.includes("const KB_DRAGGABLE = Object.freeze(['triage', 'todo', 'scheduled', 'ready', 'blocked', 'review'])"),
-    '可拖状态白名单被改');
-  const dragDecl = kbAppSrc.slice(kbAppSrc.indexOf('const KB_DRAGGABLE'), kbAppSrc.indexOf('const KbDrag'));
-  assert.ok(!/['"]running['"]/.test(dragDecl) && !/['"]done['"]/.test(dragDecl) && !/['"]archived['"]/.test(dragDecl),
-    'running / done / archived 不应进入可拖白名单');
-  assert.ok(kbAppSrc.includes("KB_DRAGGABLE.includes(st) ? '1' : '0'"), '卡片未按状态决定可拖性');
+    '可改派状态白名单被改');
+  assert.ok(kbAppSrc.includes('const KB_DRAG_SOURCE = Object.freeze([...KB_DRAGGABLE, \'running\', \'done\'])'),
+    '拖拽源没有在改派白名单上补 running / done');
+  const reassignDecl = kbAppSrc.slice(kbAppSrc.indexOf('const KB_DRAGGABLE'), kbAppSrc.indexOf('const KB_DRAG_SOURCE'));
+  assert.ok(!/['"]running['"]/.test(reassignDecl) && !/['"]done['"]/.test(reassignDecl)
+    && !/['"]archived['"]/.test(reassignDecl),
+    'running / done / archived 不应进入改派白名单');
+  assert.ok(kbAppSrc.includes("KB_DRAG_SOURCE.includes(st) ? '1' : '0'"), '卡片未按状态决定可拖性');
   // 落地只做两件 CLI 原生支持的事：PATCH 改派（可顺带 → ready）+ 派发 1 个名额
   assert.ok(kbAppSrc.includes('a.kanbanReassign(taskId, {'), '落地未走改派通道');
   assert.ok(kbAppSrc.includes("assignee: profile, status: 'ready'"), '落地未把卡片推进到 ready');
@@ -1280,6 +1284,52 @@ t('拖拽派发样式：幽灵卡穿透指针、投放目标高亮、双主题�
   assert.ok(kbCss.includes('pointer-events: none'), '幽灵卡必须穿透指针，否则 elementFromPoint 命不中 chip');
   assert.ok(kbCss.includes('body.kb-dragging'), '拖动中未禁用文本选中');
   assert.ok(kbCss.includes('.compact .kb-dock-label'), '窄主区未适配投放区');
+});
+
+/* ---- 拖列改状态：卡片拖进另一列 = 走 CLI 的状态动词（PATCH /tasks/{id}） ---- */
+t('拖列改状态：5 列各落一个 CLI 状态动词，running 与归档都不许手动设', () => {
+  // 列 → 状态：进行中列落 review（人不能直接设 running，能做的只是「提交待验收」）
+  assert.ok(kbAppSrc.includes("const KB_GROUP_STATUS = Object.freeze({\n  todo: 'todo', ready: 'ready', running: 'review', blocked: 'blocked', done: 'done',\n})"),
+    '列到状态的映射被改（running 列必须落 review）');
+  const mapDecl = kbAppSrc.slice(kbAppSrc.indexOf('const KB_GROUP_STATUS'),
+    kbAppSrc.indexOf('const KB_STATUS_ACTION'));
+  assert.ok(!/archived/.test(mapDecl), '已归档列不得成为落地目标（CLI 侧归档单向，误拖没有回退口）');
+  assert.ok(!/running:\s*'running'/.test(mapDecl), '不能把任务手动设成 running');
+  assert.ok(kbAppSrc.includes('const KB_STATUS_SETTABLE = Object.freeze(Object.values(KB_GROUP_STATUS))'),
+    '缺少落地状态的取值白名单');
+  // 落地函数：过 IPC 通道、写后回读、同列 no-op、从 running 强制完成要先确认
+  assert.ok(kbAppSrc.includes('async function kbDropToStatus('), '缺少拖列落地函数');
+  assert.ok(kbAppSrc.includes('a.kanbanSetStatus(taskId, { status: target, board: KB.filters.board || \'\' })'),
+    '落地未走 set-status 通道');
+  assert.ok(kbAppSrc.includes("if (from === target) { kbDockMsg(`这张卡已经是「${label}」`, ''); return; }"),
+    '同列拖拽未短路（会白写一条事件）');
+  assert.ok(kbAppSrc.includes("if (from === 'running') {"),
+    '从运行中拖出（强制覆盖在跑 worker）未先确认');
+  assert.ok(kbAppSrc.includes("confirmLabel: target === 'done' ? '强制标为完成' : `强制改为${label}`"),
+    '强制覆盖的确认按钮文案缺失');
+  assert.ok(/await kanbanLoad\(true\);\s*\/\/ write-ok|await kanbanLoad\(true\); \/\/ 写后回读/.test(kbAppSrc)
+    && kbAppSrc.includes('if (KB.detailId === taskId) openKanbanTask(taskId, true);'),
+    '落地后没有回读并刷新抽屉');
+  // 拖拽编排：chip 优先，其次才是列；reset 必须把列高亮一起摘掉
+  assert.ok(kbAppSrc.includes('kbSetColTarget(chip ? null : kbColAt(x, y));'),
+    '悬停判定没有区分「profile chip」与「列」');
+  assert.ok(kbAppSrc.includes("el.closest('.kb-col[data-group]')"), '列命中没有限定在 .kb-col[data-group]');
+  assert.ok(kbAppSrc.includes('if (KbDrag.col && KbDrag.col.el) KbDrag.col.el.classList.remove(\'over\');'),
+    '拖动结束没有摘掉列高亮');
+  assert.ok(kbAppSrc.includes("if (col) kbDropToStatus(id, col, from);"),
+    '松手没有把落点列交给状态推进');
+  // 主进程 / preload / 服务层三段白名单
+  assert.ok(mainSrc.includes("handle('kanban:set-status'"), '主进程缺少 kanban:set-status 通道');
+  assert.ok(preloadSrc.includes("invoke('kanban:set-status'"), 'preload 缺少 kanbanSetStatus');
+  assert.ok(kbSrc.includes("const SET_STATUSES = Object.freeze(['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done'])"),
+    '服务层状态白名单被改');
+  assert.ok(kbSrc.includes("case 'setStatus':"), 'buildWritePath 缺少 setStatus 分支');
+  assert.ok(kbSrc.includes("if (status === 'running')"), '服务层未拦 running');
+  assert.ok(kbSrc.includes('kbStatusReason('), '缺少状态拒绝原因中文化');
+  assert.ok(kbSrc.includes('还有没做完的父任务'), '409 的父任务原因未中文化');
+  // Demo 桥 + 落点高亮样式
+  assert.ok(read('renderer/mock-bridge.js').includes('async kanbanSetStatus('), 'Demo 桥缺少 kanbanSetStatus');
+  assert.ok(kbCss.includes('.kb-col.over'), '缺少列落点高亮样式');
 });
 
 /* ---- 3r-2. 侧栏项目树：会话按项目归组 + 项目内新建会话（cwd 管道） ---- */

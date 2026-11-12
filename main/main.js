@@ -772,6 +772,11 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.reassignTask(taskId, opts || {});
   });
+  // 拖列改状态：把卡片拖进另一列（PATCH /tasks/{id}，body 只放 status）
+  handle('kanban:set-status', async (_e, taskId, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.setTaskStatus(taskId, opts || {});
+  });
   // 拖拽派发：dry_run 预演确认队首就是这张卡片，再真派发 1 个名额
   handle('kanban:dispatch-task', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };

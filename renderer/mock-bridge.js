@@ -221,6 +221,24 @@
       KB_EVT += 1;
       return { ok: true, generation: 1, assignee: t.assignee, task: t };
     },
+    // 拖列改状态：Demo 里照 CLI 的拒绝规则走一遍，好让「父任务没做完 → 409」的文案也能验
+    async kanbanSetStatus(taskId, opts = {}) {
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, error: '任务不存在（Demo）' };
+      const status = String(opts.status || '');
+      if (status === 'running') return { ok: false, error: '运行中不能手动设置：它只能由调度器认领，或用 reclaim 结束这次运行' };
+      if (!['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done'].includes(status)) {
+        return { ok: false, error: `不支持把任务改成「${status || '空'}」` };
+      }
+      if (status === 'ready' && KB_TASKS.some((x) => x.id !== t.id && x.parent_id === t.id
+        && !['done', 'archived'].includes(x.status))) {
+        return { ok: false, error: `还有没做完的父任务：'${t.title}' (${t.id}, status=${t.status})` };
+      }
+      t.status = status;
+      if (status === 'done') t.started_at = t.started_at || Math.floor(Date.now() / 1000);
+      KB_EVT += 1;
+      return { ok: true, generation: 1, status, task: t };
+    },
     async kanbanDispatch(opts = {}) {
       const dry = opts.dryRun !== false;
       const ready = KB_TASKS.filter((t) => t.status === 'ready' && t.assignee);

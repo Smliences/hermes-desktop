@@ -5931,10 +5931,26 @@ const KB_STATUS_LABEL = Object.freeze({
 });
 /** 允许拖拽改派的状态。running 要先 reclaim 才能换人，done / archived 再派发没有意义。 */
 const KB_DRAGGABLE = Object.freeze(['triage', 'todo', 'scheduled', 'ready', 'blocked', 'review']);
+/** 拖拽源比改派宽两档：running 要能拖出去（卡在运行中的任务很常见，得能强制收尾），
+ *  done 要能拖回去重开（reopen）；archived 不给拖 —— CLI 侧归档单向，误拖没有回退口。
+ *  注意 running 只在**拖列**里放行：拖到 profile chip 上仍按改派处理并被拒。 */
+const KB_DRAG_SOURCE = Object.freeze([...KB_DRAGGABLE, 'running', 'done']);
+/** 列 → 落地状态。这 5 个都是 CLI 认的状态动词（PATCH /tasks/{id} 的 status）：
+ *  「进行中」列落 review —— 人不能把任务直接设成 running（只能调度器认领），
+ *  能做的只有「提交待验收」，语义上也正好落在这一列。 */
+const KB_GROUP_STATUS = Object.freeze({
+  todo: 'todo', ready: 'ready', running: 'review', blocked: 'blocked', done: 'done',
+});
+/** 松手提示与 toast 共用的动作文案。 */
+const KB_STATUS_ACTION = Object.freeze({
+  todo: '放回待办', ready: '提到就绪', review: '提交待验收', blocked: '标记受阻', done: '标记完成',
+});
+/** 渲染层能请求的落地状态集合（= 上表的取值），拖拽入口据此做最后一道校验。 */
+const KB_STATUS_SETTABLE = Object.freeze(Object.values(KB_GROUP_STATUS));
 /** 指针拖拽的共享状态（一次只有一个拖动中的卡片）。 */
 const KbDrag = {
   armed: false, on: false, id: '', title: '', status: '',
-  x0: 0, y0: 0, card: null, ghost: null, target: null, suppressClick: false,
+  x0: 0, y0: 0, card: null, ghost: null, target: null, col: null, suppressClick: false,
   gh: 0, vel: 0, raf: 0,
 };
 const KB = {
@@ -6410,7 +6426,7 @@ function kbDragBegin() {
   }
   const tip = document.createElement('small');
   tip.className = 'kb-ghost-tip';
-  tip.textContent = (KbDrag.status ? KbDrag.status + ' · ' : '') + '松手放到 profile 上';
+  tip.textContent = (KbDrag.status ? KbDrag.status + ' · ' : '') + '松手到列里改状态，或落到 profile 上改派';
   g.appendChild(tip);
   g.style.width = Math.round(Math.min(r.width || 240, 300)) + 'px';
   document.body.appendChild(g);
@@ -6472,8 +6488,31 @@ function kbSetDropTarget(chip) {
   kbDockHint(name ? '松手 → ' + name : (KbDrag.title ? '⠿ ' + KbDrag.title : '⠿ 正在拖动'));
 }
 function kbDragHover(x, y) {
-  kbSetDropTarget(kbChipAt(x, y));
+  const chip = kbChipAt(x, y);
+  kbSetDropTarget(chip);
+  // profile chip 优先：落在 chip 上就只算改派，不再高亮列，避免一次拖拽两个投放目标
+  kbSetColTarget(chip ? null : kbColAt(x, y));
   kbDragAutoScroll(x, y);
+}
+/** 指针下面是不是某一列（列头与列体都算）。返回 {el, status}；「已归档」列返回 null。 */
+function kbColAt(x, y) {
+  try {
+    const el = document.elementFromPoint(x, y);
+    const hit = el && el.closest ? el.closest('.kb-col[data-group]') : null;
+    if (!hit) return null;
+    const status = KB_GROUP_STATUS[String(hit.getAttribute('data-group') || '')] || '';
+    return status ? { el: hit, status } : null;
+  } catch { return null; }
+}
+function kbSetColTarget(next) {
+  const cur = KbDrag.col;
+  if ((cur && next && cur.el === next.el) || (!cur && !next)) return;
+  if (cur && cur.el) cur.el.classList.remove('over');
+  KbDrag.col = next || null;
+  if (next && next.el) next.el.classList.add('over');
+  if (KbDrag.ghost) KbDrag.ghost.classList.toggle('ok', !!next || !!KbDrag.target);
+  if (next) kbDockHint(`松手 → ${KB_STATUS_ACTION[next.status] || next.status}`);
+  else if (!KbDrag.target) kbDockHint(KbDrag.title ? '⠿ ' + KbDrag.title : '⠿ 正在拖动');
 }
 /** 指针靠近 chip 行的左右边缘就自动横向滚动，否则窄窗口里根本够不到后面的 profile */
 function kbDragAutoScroll(x, y) {
@@ -6507,6 +6546,7 @@ function kbDragReset(instant) {
   const wasOn = KbDrag.on;
   if (KbDrag.raf) { cancelAnimationFrame(KbDrag.raf); KbDrag.raf = 0; }
   if (KbDrag.target && KbDrag.target.classList) KbDrag.target.classList.remove('over');
+  if (KbDrag.col && KbDrag.col.el) KbDrag.col.el.classList.remove('over');
   if (KbDrag.card && KbDrag.card.classList) KbDrag.card.classList.remove('is-dragging');
   const g = KbDrag.ghost;
   if (g) {
@@ -6520,7 +6560,7 @@ function kbDragReset(instant) {
   if (dock) dock.classList.remove('is-drag');
   KbDrag.armed = false; KbDrag.on = false; KbDrag.id = ''; KbDrag.title = '';
   KbDrag.status = ''; KbDrag.card = null; KbDrag.ghost = null; KbDrag.target = null;
-  KbDrag.vel = 0; KbDrag.gh = 0;
+  KbDrag.col = null; KbDrag.vel = 0; KbDrag.gh = 0;
   kbDockHint(KB_DOCK_IDLE);
   return wasOn;
 }
@@ -6554,14 +6594,65 @@ function kbDragMove(e) {
 function kbDragUp() {
   if (!KbDrag.armed && !KbDrag.on) return;
   const dropped = KbDrag.target ? KbDrag.target.getAttribute('data-kb-worker') : '';
+  const col = KbDrag.col ? KbDrag.col.status : '';
   const id = KbDrag.id;
+  const from = KbDrag.status;
   const moved = kbDragReset();
   if (moved) {
     // 拖动结束后浏览器会补一个 click；先吞掉，再在下一个任务里复位标志
     KbDrag.suppressClick = true;
     setTimeout(() => { KbDrag.suppressClick = false; }, 0);
   }
-  if (moved && dropped && KB_ASSIGNEE_RE.test(dropped)) kbDropToWorker(id, dropped);
+  if (!moved) return;
+  if (dropped && KB_ASSIGNEE_RE.test(dropped)) { kbDropToWorker(id, dropped); return; }
+  if (col) kbDropToStatus(id, col, from);
+}
+
+/**
+ * 落地：把卡片拖进另一列 = 让 CLI 走一次状态动词（PATCH /tasks/{id} {status}）。
+ * 状态机规则全在 CLI（父任务没做完会 409 并点名），桌面端只负责确认与文案：
+ *   - running → done/review 是「人类强制覆盖在跑 worker 的认领」，先过确认卡；
+ *   - 其余迁移没有副作用，直接写。
+ */
+async function kbDropToStatus(taskId, status, srcStatus) {
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(String(taskId || ''))) return;
+  const target = String(status || '');
+  if (!KB_STATUS_SETTABLE.includes(target)) return;
+  const a = kbApi();
+  if (!a || !a.kanbanSetStatus) { kbDockMsg('此页需要 Hermes 桌面端才能改状态', 'err'); return; }
+  const task = kbFindTask(taskId);
+  if (!task) { kbDockMsg('找不到这张卡片，先刷新看板', 'err'); return; }
+  const from = String(task.status || srcStatus || '');
+  const label = KB_STATUS_LABEL[target] || target;
+  // 同列内拖（例如 scheduled 拖到「待办」）：目标状态已经成立，别白写一条事件
+  if (from === target) { kbDockMsg(`这张卡已经是「${label}」`, ''); return; }
+  const go = async () => {
+    kbDockMsg(`正在把 ${taskId} 改成「${label}」…`, '');
+    try {
+      const r = await a.kanbanSetStatus(taskId, { status: target, board: KB.filters.board || '' });
+      if (!r || !r.ok) { kbDockMsg('改状态失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      await kanbanLoad(true); // 写后回读：列归组、计数、chip 都跟着变
+      if (KB.detailId === taskId) openKanbanTask(taskId, true);
+      kbDockMsg(`已改成「${label}」`, 'on');
+    } catch (e) {
+      kbDockMsg('改状态失败：' + ((e && e.message) || '未知错误'), 'err');
+    }
+  };
+  // 从「运行中」拖出 = 覆盖在跑的 worker 的认领（CLI 侧是 force），先问一句
+  if (from === 'running') {
+    const host = $('#kb-dock-confirm');
+    if (host) {
+      opConfirm(host, {
+        title: `这张卡还在跑：${String(task.title || taskId).slice(0, 32)}`,
+        cmd: `PATCH /api/plugins/kanban/tasks/${taskId}   {"status":"${target}"}`,
+        note: `worker 可能还在执行。CLI 把人工动作当作强制覆盖：这一轮的结果会被丢弃，任务直接记成「${label}」。确定现在改吗？`,
+        confirmLabel: target === 'done' ? '强制标为完成' : `强制改为${label}`,
+        onGo: go,
+      });
+      return;
+    }
+  }
+  await go();
 }
 
 /** 落地第一步：改派受让人（顺带推进到 ready）。不启动任何进程。 */
@@ -6638,7 +6729,7 @@ function kbMatch(t) {
 function kbCardHtml(t, colName, opts) {
   const o = opts || {};
   const st = String(colName || t.status || '');
-  const draggable = KB_DRAGGABLE.includes(st) ? '1' : '0';
+  const draggable = KB_DRAG_SOURCE.includes(st) ? '1' : '0';
   // 方案一（OnPoint 极简白卡）：无顶行，标题是第一视觉焦点。优先级用 P 编号
   // 胶囊绝对定位在右上角，恒显示（P3 红 / P2 黄 / P1 绿 / P0 未设灰）。
   // 时间做成弱胶囊收进脚行，与评论数并排，状态点收右下。
@@ -6667,7 +6758,9 @@ function kbCardHtml(t, colName, opts) {
   // 卡面描述：优先最新执行回报（latest_summary = task_runs.summary），
   // 没跑过 worker 的任务回退到建任务时写的描述 body —— 否则新卡永远是光杆标题。
   const sum = String(t.latest_summary || t.body || '').trim();
-  const dragHint = draggable === '1' ? '拖到上方 worker 上可直接指派' : `${st || '该状态'} 不支持拖拽改派`;
+  const dragHint = draggable === '1'
+    ? '拖动：落到别的列改状态，落到上方 profile 上改派'
+    : `${st || '该状态'} 不支持拖拽（已归档的卡片不参与拖动）`;
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
     ${priHtml}
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>

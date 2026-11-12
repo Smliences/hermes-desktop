@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanDeleteTask: (taskId, opts) => ipcRenderer.invoke('kanban:delete-task', taskId, opts || {}),
   kanbanSubmitTask: (taskId, opts) => ipcRenderer.invoke('kanban:submit-task', taskId, opts || {}),
   kanbanReassign: (taskId, opts) => ipcRenderer.invoke('kanban:reassign', taskId, opts || {}),
+  // 拖列改状态：卡片从一列拖到另一列（status 由主进程按白名单复核，不含 running）
+  kanbanSetStatus: (taskId, opts) => ipcRenderer.invoke('kanban:set-status', taskId, opts || {}),
   // 拆解（调辅助模型、会计费）：调用方必须传 { confirm: true }，服务层再独立校验一次
   kanbanDecompose: (taskId, opts) => ipcRenderer.invoke('kanban:decompose', taskId, opts || {}),
   kanbanDispatchTask: (taskId, opts) => ipcRenderer.invoke('kanban:dispatch-task', taskId, opts || {}),

@@ -967,6 +967,9 @@ async function run() {
     assert.strictEqual(kanban.buildWritePath('createBoard'), '/boards');
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: 't_ab12' }), '/tasks/t_ab12');
     assert.strictEqual(kanban.buildWritePath('submitTask', { taskId: 't_ab12' }), '/tasks/t_ab12');
+    assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: 't_ab12' }), '/tasks/t_ab12');
+    assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: 't_ab12', board: 'ops-2026' }),
+      '/tasks/t_ab12?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'default' }), '/boards/default');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'ops 2026' }), null, '非法看板 slug 未被拒');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: '' }), null, '空 slug 未被拒');
@@ -976,6 +979,13 @@ async function run() {
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('submitTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('createTask', { board: '../x' }), null);
+    assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: '../x' }), null);
+    // 人工状态推进的动词表：7 个都认，running（只能调度器认领）与 archived（单向）不在里面
+    for (const s of ['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done']) {
+      assert.ok(kanban.SET_STATUSES.includes(s), '缺少状态动词 ' + s);
+    }
+    assert.ok(!kanban.SET_STATUSES.includes('running'), 'running 不能人工设置');
+    assert.ok(!kanban.SET_STATUSES.includes('archived'), '归档不在人工推进白名单里');
   });
   await t('项目绑定 / 建卡选项目的入参清洗', () => {
     assert.deepStrictEqual(kanban.cleanBoardBind({ projectId: 'pj_9' }), { project_id: 'pj_9' });
@@ -1181,6 +1191,7 @@ async function run() {
   let force401 = false;
   let force400 = false;
   let decomposeMode = 'fanout';
+  let statusMode = 'ok';
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => { raw += c.toString('utf8'); });
@@ -1228,6 +1239,11 @@ async function run() {
         return;
       }
       if (req.method === 'PATCH' && p === '/api/plugins/kanban/tasks/t_ab12') {
+        if (statusMode === 'conflict') {
+          res.statusCode = 409;
+          res.end(JSON.stringify({ detail: "Cannot move to 'ready': blocked by parent(s) not done — '拆解前的任务' (t_c1, status=todo)" }));
+          return;
+        }
         res.end(JSON.stringify({ task: { id: 't_ab12', title: 'A', status: 'ready', workspace_path: '/secret' } }));
         return;
       }
@@ -1361,6 +1377,44 @@ async function run() {
     assert.ok(one.ok && one.single === true && one.fanout === false, 'fanout=false 的正常结局被判成失败');
     assert.strictEqual(one.newTitle, '改写后的标题');
     decomposeMode = 'fanout';
+  });
+  await t('拖列改状态：只放行 7 个动词、running 本地拦下、body 只有 status', async () => {
+    const before = seen.length;
+    const run = await client.setTaskStatus('t_ab12', { status: 'running' });
+    assert.ok(!run.ok && run.error.includes('运行中'), 'running 未在本地拦下：' + run.error);
+    const arch = await client.setTaskStatus('t_ab12', { status: 'archived' });
+    assert.ok(!arch.ok, '归档未被拦下（CLI 侧单向，误拖没有回退口）');
+    const junk = await client.setTaskStatus('t_ab12', { status: '' });
+    assert.ok(!junk.ok, '空状态未拦下');
+    const badId = await client.setTaskStatus('../etc/passwd', { status: 'todo' });
+    assert.ok(!badId.ok, '非法 id 未拦下');
+    assert.strictEqual(seen.length, before, '被拦下的请求竟然发了出去');
+
+    const ok = await client.setTaskStatus('t_ab12', { status: 'done', board: 'default' });
+    assert.ok(ok.ok, '改状态失败：' + ok.error);
+    assert.strictEqual(ok.status, 'done');
+    const req = seen[before];
+    assert.strictEqual(req.method, 'PATCH');
+    assert.strictEqual(req.path, '/api/plugins/kanban/tasks/t_ab12?board=default');
+    assert.strictEqual(req.body, '{"status":"done"}', 'body 只允许放 status：' + req.body);
+    // 投影：workspace_path 这类本机字段不得跟着 task 回到渲染层
+    assert.ok(ok.task && !('workspace_path' in ok.task), '任务投影泄漏了本机路径');
+
+    // 原因 / 摘要只在对应状态下才进 body，其它状态下不塞
+    const blk = await client.setTaskStatus('t_ab12', { status: 'blocked', reason: '等外部接口' });
+    assert.ok(blk.ok);
+    assert.strictEqual(seen[seen.length - 1].body, '{"status":"blocked","block_reason":"等外部接口"}');
+    const todo = await client.setTaskStatus('t_ab12', { status: 'todo', reason: '这句不该进 body' });
+    assert.ok(todo.ok);
+    assert.strictEqual(seen[seen.length - 1].body, '{"status":"todo"}', 'block_reason 污染了非受阻状态');
+
+    // 409：CLI 会点名是哪几个父任务没做完，必须中文化而不是甩英文
+    statusMode = 'conflict';
+    const cf = await client.setTaskStatus('t_ab12', { status: 'ready' });
+    assert.ok(!cf.ok, '409 被当成成功');
+    assert.ok(cf.error.includes('还有没做完的父任务') && cf.error.includes('t_c1'),
+      '409 原因未中文化或丢了父任务名：' + cf.error);
+    statusMode = 'ok';
   });
   await t('三个写操作：方法 / 路径 / header / body 白名单全部正确', async () => {
     const before = seen.length;

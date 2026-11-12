@@ -2736,6 +2736,15 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-col[data-dot="green"] { --kb-dot: var(--green); }
 .kb-col[data-dot="red"] { --kb-dot: var(--red); }
 .kb-col[data-dot="muted"] { --kb-dot: var(--n-400); }
+/* 拖动中指针落在哪一列：整列描边 + 底色提亮 —— 「松手就落进这一列」要能一眼看出来，
+   只靠底部状态条一行字太远（指针在列中间、提示在最下面）。 */
+.kb-col.over {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 7%, var(--fill-2));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 55%, transparent);
+}
+.kb-col.over::before { background: var(--accent); }
+.kb-col.over .kb-col-body { background: color-mix(in oklab, var(--accent) 5%, transparent); }
 /* 「显示已归档」＝在第 5 列右侧追加一列，不是把五列重新切六份。
    以前六列直接走 flex 等分，容器固定 → 每列从 207px 掉到 171px，卡片标题多折一行、
    列头也发挤；而 .kb-col 的 min-width 只有 160px，够不到触发横向滚动的门槛。

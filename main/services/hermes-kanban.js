@@ -10,7 +10,8 @@
  *   - 会话 token 只存在于本模块与 master 进程，绝不进入返回值 / 渲染层；
  *     每个请求由主进程自己加 `X-Hermes-Session-Token`。
  *   - 读端点只允许 GET；写端点固定白名单（新建任务/看板、删除任务、提交派发、
- *     改派受让人、派发 tick），路径由本模块构造，渲染层无法拼任意路径或任意 body 字段。
+ *     改派受让人、拖列改状态、派发 tick、拆解、项目绑定、编排开关），路径由本模块构造，
+ *     渲染层无法拼任意路径或任意 body 字段。
  *   - 任务 id / board slug / run id 全部过严格正则，query 走 URLSearchParams
  *     编码；固定 loopback 127.0.0.1 + 端口数字校验 + 不跟随重定向 + 超时 + 体积上限。
  *   - CLI 返回的 task 行含 workspace_path / claim_lock / worker_pid 等本机敏感
@@ -20,9 +21,9 @@
  *     （并发请求直接拒绝）。派发结果里的 workspace 路径与 worker PID 一律不透出。
  *     「派发这一张」（dispatchTask）额外先在 dry_run 里确认它是队首，
  *     否则真派发会先唤醒更早的卡片 —— 那种情况一律不写库。
- *   - 明确不放行：specify、estimate、bulk、reclaim、terminate、
- *     任意其它状态推进、orchestration 配置写入（只读推导在 hermes-kanban-mode.js）、
- *     看板切换（switch 恒为 false）。
+ *   - 明确不放行：specify、estimate、bulk、reclaim、terminate、把任务设成 running、
+ *     归档、orchestration 配置写入（只读推导在 hermes-kanban-mode.js）、
+ *     看板切换（switch 恒为 false）。人工状态推进只走 SET_STATUSES 那 7 个动词。
  *   - 唯一会花 LLM 钱的写路径是「拆解此任务」（POST /tasks/:id/decompose）。
  *     它调用 CLI 的 auxiliary.kanban_decomposer，最长 180s：因此单独给它
  *     200s 预算（不能套用 6s 的常规超时），并且**必须显式 confirm === true**
@@ -51,6 +52,12 @@ const RUN_ID_RE = /^\d{1,12}$/;
 const CREATE_STATUSES = Object.freeze(['triage', 'ready']);
 /** 改派允许顺带推进到的状态。只有 ready —— 其它状态推进不在本桌面端白名单里。 */
 const REASSIGN_STATUSES = Object.freeze(['ready']);
+/** 人工拖列改状态允许的目标。CLI 的 PATCH /tasks/{id} 认这 7 个动词：
+ *  triage/todo/ready 走 `_drag_to`（blocked、scheduled → ready 会先 unblock），
+ *  review 走 request_review(force)、done 走 complete_task(force)、blocked/scheduled 各带原因。
+ *  **running 明确不在表里**：CLI 会回 “Cannot set status to 'running' directly”，
+ *  它只能由调度器 claim；archived 也不放行 —— 归档在 CLI 侧是单向的，误拖没有回退口。 */
+const SET_STATUSES = Object.freeze(['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done']);
 /** 受让人 = Hermes profile 名：字母或数字开头，可含 . _ -；空串表示取消指派。 */
 const ASSIGNEE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 /** 项目标识（id 或 slug）：字母或数字开头，可含 _ -。CLI 接受 id / slug 两种形态。 */
@@ -208,6 +215,10 @@ function buildWritePath(op, params = {}) {
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
     case 'reassign':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
+    // 人工拖列改状态：与 HTTP 方法无关地复用同一端点，body 只放 status（+ 可选原因/摘要）
+    case 'setStatus':
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
     case 'dispatch':
@@ -609,6 +620,29 @@ function projectDecompose(data) {
   };
 }
 
+/**
+ * 状态推进的英文拒绝原因 → 中文。CLI 对非法迁移回 409，detail 里带**具体哪个父任务**
+ * 没完成（`Cannot move to 'ready': blocked by parent(s) not done — 'A' (t_x, status=todo)`），
+ * 原样拍到界面上用户只会看到一串英文。命中不了的保留原文，别吞诊断。
+ */
+const STATUS_REASON = Object.freeze([
+  [/blocked by parent\(s\) not done\s*—\s*(.+)$/i, (m) => `还有没做完的父任务：${m[1]}`],
+  [/unsatisfied parent dependencies:\s*([^;]+);/i, (m) => `前置任务没完成：${m[1]}，先把它们做完或归档`],
+  [/Cannot set status to 'running' directly/i, '运行中不能手动设置：它只能由调度器认领'],
+  [/not valid from current state/i, '当前状态不允许这样改（先刷新看板，看看这张卡的实时状态）'],
+  [/unknown status:\s*(\w+)/i, (m) => `CLI 不认识状态「${m[1]}」`],
+  [/title cannot be empty/i, '标题不能为空'],
+]);
+function kbStatusReason(text) {
+  const s = str(text, 300);
+  if (!s) return '';
+  for (const [re, zh] of STATUS_REASON) {
+    const m = s.match(re);
+    if (m) return zh(m);
+  }
+  return s;
+}
+
 function projectWorkers(data) {
   const raw = data && typeof data === 'object' ? data : {};
   return {
@@ -830,6 +864,38 @@ function createKanbanClient(getBackendInfo) {
     },
 
     /**
+     * 人工拖列改状态（PATCH /tasks/{id}，body 只放 status）。
+     *
+     * 「把卡片从这一列拖到那一列」在 CLI 里是一个带语义的状态动词，不是裸 UPDATE：
+     *   - ready：父任务没做完会被 409 拒（消息里点名是哪几个）；
+     *   - blocked→ready / scheduled→ready：CLI 先 unblock_task 再放开；
+     *   - review：request_review(force)，会顺带清掉执行者；
+     *   - done：complete_task(force)，人类动作可以覆盖正在跑的 worker 的认领；
+     *   - triage/todo：直接落库。
+     * 因此这里只做「参数白名单 + 中文错误」，状态机本身一律交给 CLI，桌面端不复制规则。
+     */
+    async setTaskStatus(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const status = String(o.status || '');
+      if (status === 'running') {
+        return { ok: false, error: '运行中不能手动设置：它只能由调度器认领，或用 reclaim 结束这次运行' };
+      }
+      if (!SET_STATUSES.includes(status)) return { ok: false, error: `不支持把任务改成「${status || '空'}」` };
+      const body = { status };
+      // 原因 / 结果摘要都是可选的人话：CLI 把它们写进 task_events，抽屉里能看到
+      const reason = cleanText(o.reason, 200);
+      if (reason && (status === 'blocked' || status === 'scheduled')) body.block_reason = reason;
+      const summary = cleanText(o.summary, 500);
+      if (summary && (status === 'done' || status === 'review')) body.summary = summary;
+      const r = await write('setStatus', 'PATCH', { ...o, taskId: id }, body);
+      if (!r.ok) return { ok: false, error: kbStatusReason(r.error || '状态没改成'), status };
+      const raw = r.data && r.data.task;
+      return { ok: true, generation: info().generation || 0, status, task: raw ? projectTask(raw) : null };
+    },
+
+    /**
      * 改派受让人 —— 「把卡片拖给某个 worker」的写入口。assignee 就是 Hermes profile
      * 名，派发时调度器用 `hermes -p <assignee>` 拉起 worker。可选同时推进到 ready
      * （CLI 原生支持一次 PATCH 里改派 + 改状态，不必拆两次请求）。
@@ -985,5 +1051,5 @@ module.exports = {
   projectTree, projectTreeRow,
   COLUMNS, ALL_COLUMNS, PLUGIN_BASE, PROFILE_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
   TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE, PROJECT_RE,
-  CREATE_STATUSES, REASSIGN_STATUSES, ORCHESTRATION_KEYS,
+  CREATE_STATUSES, REASSIGN_STATUSES, SET_STATUSES, ORCHESTRATION_KEYS, kbStatusReason,
 };
