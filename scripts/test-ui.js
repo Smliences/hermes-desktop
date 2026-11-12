@@ -309,6 +309,65 @@ let CHROME_BIN = null;
   const s10f = await cdp.ev(`(() => { const open = !document.querySelector('#ui-select-pop').hidden; activeTab().cwd = '/tmp/demo-repo-2'; syncComposerProject(); return { open, popHidden: document.querySelector('#ui-select-pop').hidden, chipHidden: document.querySelector('#chip-project').hidden }; })()`);
   ok('隐藏时下拉面板一并收起，不留孤儿浮层', s10f.open && s10f.popHidden && s10f.chipHidden, JSON.stringify(s10f));
 
+  /* S11 预览页签按类型分流：网页 / PDF / 图片 / 文档 / 表格 */
+  console.log('\nS11 预览页签按类型分流');
+  const pvProbe = `(() => ({
+    type: pv.type, view: pv.view, kind: document.querySelector('#pv-kind').textContent,
+    viewsHidden: document.querySelector('#pv-views').hidden,
+    btns: [...document.querySelectorAll('.pv-vbtn')].map((b) => b.dataset.pvView),
+    shown: ['#pv-frame','#pv-image','#pv-doc','#pv-table','#pv-raw'].filter((s) => !document.querySelector(s).hidden)
+  }))()`;
+  await cdp.ev(`(() => { setView('chat'); toggleTerminal(true); setRailTab('preview'); return 1; })()`);
+  await sleep(200);
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/report.md'); return 1; })()`);
+  const s11a = await cdp.ev(pvProbe);
+  ok('Markdown 走文档面，视图条出现「渲染 / 源码」',
+    s11a.type === 'doc' && !s11a.viewsHidden && s11a.kind === '文档'
+      && s11a.btns.join(',') === 'render,source' && s11a.shown.join(',') === '#pv-doc', JSON.stringify(s11a));
+  const s11a2 = await cdp.ev(`document.querySelector('#pv-doc').textContent.includes('文档渲染视图')`);
+  ok('文档视图复用聊天流 Markdown 渲染（标题可见）', s11a2 === true, String(s11a2));
+  await cdp.ev(`document.querySelector('[data-pv-view="source"]').click()`); await sleep(140);
+  const s11b = await cdp.ev(pvProbe);
+  const s11b2 = await cdp.ev(`document.querySelector('#pv-raw').textContent.includes('# 文档渲染视图')`);
+  ok('切「源码」只显示原文（textContent，不解释 HTML）',
+    s11b.view === 'source' && s11b.shown.join(',') === '#pv-raw' && s11b2 === true, JSON.stringify(s11b));
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/data.csv'); return 1; })()`);
+  const s11c = await cdp.ev(pvProbe);
+  const s11c2 = await cdp.ev(`document.querySelectorAll('#pv-table tbody tr').length`);
+  ok('CSV 走表格面并解析出数据行（含引号内逗号）',
+    s11c.type === 'table' && s11c.shown.join(',') === '#pv-table' && s11c.kind === '表格' && s11c2 === 4,
+    JSON.stringify(s11c) + ' rows=' + s11c2);
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/chart.png'); return 1; })()`);
+  const s11d = await cdp.ev(pvProbe);
+  const s11d2 = await cdp.ev(`document.querySelector('#pv-img').getAttribute('src') || ''`);
+  ok('图片走 img 面，不读字节', s11d.type === 'image' && s11d.shown.join(',') === '#pv-image'
+    && String(s11d2).startsWith('data:image'), JSON.stringify(s11d));
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/manual.pdf'); return 1; })()`);
+  const s11e = await cdp.ev(pvProbe);
+  const s11e2 = await cdp.ev(`document.querySelector('#pv-frame').getAttribute('srcdoc') || ''`);
+  ok('PDF 走 iframe 面（真机 Chromium viewer，Demo 占位）',
+    s11e.type === 'pdf' && s11e.shown.join(',') === '#pv-frame' && String(s11e2).length > 0, JSON.stringify(s11e));
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/page.html'); return 1; })()`);
+  const s11f = await cdp.ev(pvProbe);
+  ok('网页保留「渲染 / 源码」双视图',
+    s11f.type === 'web' && s11f.btns.join(',') === 'render,source' && s11f.shown.join(',') === '#pv-frame',
+    JSON.stringify(s11f));
+  await cdp.ev(`document.querySelector('[data-pv-view="source"]').click()`); await sleep(140);
+  const s11f2 = await cdp.ev(`document.querySelector('#pv-raw').textContent.includes('<!doctype html>')`);
+  ok('网页源码视图读得到原文', s11f2 === true, String(s11f2));
+  await cdp.ev(`(async () => { await loadPreviewInput('http://127.0.0.1:9/x.html'); return 1; })()`);
+  const s11g = await cdp.ev(`(() => ({ type: pv.type, sandbox: document.querySelector('#pv-frame').getAttribute('sandbox') }))()`);
+  ok('远程页面 sandbox 收紧到 allow-scripts',
+    s11g.type === 'url' && s11g.sandbox === 'allow-scripts', JSON.stringify(s11g));
+  const railBefore = await cdp.ev(`document.querySelector('#rail').offsetWidth`);
+  await cdp.ev(`(async () => { document.documentElement.setAttribute('data-theme', 'dark'); await loadPreviewInput('/tmp/demo/report.md'); return 1; })()`);
+  const s11h = await cdp.ev(`(() => ({ bg: getComputedStyle(document.querySelector('#pv-doc')).backgroundColor,
+    rail: document.querySelector('#rail').offsetWidth, views: !document.querySelector('#pv-views').hidden }))()`);
+  ok('深色主题文档面跟随 --canvas，rail 定版宽度不变',
+    s11h.bg !== 'rgb(250, 249, 245)' && s11h.bg !== 'rgb(255, 255, 255)'
+      && s11h.rail === railBefore && s11h.views, JSON.stringify(s11h));
+  await cdp.ev(`document.documentElement.setAttribute('data-theme', 'light'); 'ok'`);
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);

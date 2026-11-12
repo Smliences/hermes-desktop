@@ -113,8 +113,9 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   reasoningDisplay: () => ipcRenderer.invoke('hermes-config:reasoning-display'),
   setReasoningDisplay: (on) => ipcRenderer.invoke('hermes-config:set-reasoning-display', on === true),
 
-  // 右侧栏 HTML 预览
+  // 右侧栏多类型预览（网页 / PDF / 图片 / 文档 / 表格）
   previewResolve: (input, baseDir) => ipcRenderer.invoke('preview:resolve', input, baseDir),
+  previewRead: (input, baseDir) => ipcRenderer.invoke('preview:read', input, baseDir),
   previewPick: () => ipcRenderer.invoke('preview:pick'),
   previewWatch: (filePath) => ipcRenderer.invoke('preview:watch', filePath),
   previewUnwatch: () => ipcRenderer.invoke('preview:unwatch'),

@@ -1,12 +1,15 @@
 'use strict';
 /**
- * hermes-preview.js — 右侧栏 HTML 预览的本地文件通道
+ * hermes-preview.js — 右侧栏多类型预览的本地文件通道
  *
- * 设计边界（用户已确认「放宽」）：
- *   - 允许打开本机任意目录下的 .html/.htm/.xhtml/.svg，不限工作区
- *   - 也允许手工输入 http(s) URL（含 localhost 开发服务器）
+ * 设计边界：
+ *   - 允许打开本机任意目录下白名单扩展名的文件，不限工作区；也允许 http(s) URL
+ *   - 按扩展名分流到 web / pdf / image / doc / table 五种渲染器（渲染层负责）
  *   - 主进程只做路径解析与存在性校验，不回写、不执行任何文件
- *   - 渲染层用 sandbox iframe 加载，脚本可运行但没有同源 / Node / 父窗口权限
+ *   - iframe 用 sandbox 加载，脚本可运行但没有同源 / Node / 父窗口权限；
+ *     远程页面进一步收紧到 allow-scripts
+ *   - readText 只对文本类（web/doc/table）开放且有 512KB 上限，
+ *     二进制 / PDF / 图片 / 可执行文件一律读不到内容
  *   - fs.watch 监听目标文件所在目录，写入保存后自动通知渲染层刷新
  */
 const fs = require('fs');
@@ -14,7 +17,24 @@ const path = require('path');
 const os = require('os');
 const { pathToFileURL, fileURLToPath } = require('url');
 
-const EXTS = new Set(['.html', '.htm', '.xhtml', '.svg']);
+/** 扩展名 → 渲染器类型。刻意不含 .env/.ini/.conf 等可能含凭据的文件。 */
+const TYPE_BY_EXT = Object.freeze({
+  '.html': 'web', '.htm': 'web', '.xhtml': 'web', '.svg': 'web',
+  '.pdf': 'pdf',
+  '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image',
+  '.webp': 'image', '.bmp': 'image', '.avif': 'image', '.ico': 'image',
+  '.md': 'doc', '.markdown': 'doc', '.txt': 'doc', '.log': 'doc',
+  '.json': 'doc', '.jsonl': 'doc', '.yaml': 'doc', '.yml': 'doc', '.xml': 'doc',
+  '.js': 'doc', '.mjs': 'doc', '.cjs': 'doc', '.ts': 'doc', '.tsx': 'doc', '.jsx': 'doc',
+  '.py': 'doc', '.css': 'doc', '.scss': 'doc', '.sh': 'doc', '.rb': 'doc',
+  '.go': 'doc', '.rs': 'doc', '.java': 'doc', '.c': 'doc', '.h': 'doc', '.cpp': 'doc',
+  '.sql': 'doc', '.toml': 'doc',
+  '.csv': 'table', '.tsv': 'table',
+});
+const EXTS = new Set(Object.keys(TYPE_BY_EXT));
+/** 只有这三类允许把内容读成文本交给渲染层；pdf / image 走 URL，不读字节。 */
+const TEXT_TYPES = new Set(['web', 'doc', 'table']);
+const MAX_TEXT_BYTES = 512 * 1024;
 let watcher = null;
 let watchedFile = '';
 let watchedDir = '';
@@ -30,7 +50,7 @@ function resolveLocal(input, baseDir) {
   raw = raw.replace(/[),;]+$/, '').trim();
   raw = raw.replace(/^["'`]+|["'`]+$/g, '').trim();
   raw = raw.replace(/[),;]+$/, '').trim();
-  if (/^https?:\/\//i.test(raw)) return { ok: true, url: raw, kind: 'url', label: raw };
+  if (/^https?:\/\//i.test(raw)) return { ok: true, url: raw, kind: 'url', type: 'url', label: raw };
   if (raw.startsWith('file://')) {
     try { raw = fileURLToPath(raw.split('#')[0]); }
     catch { return { ok: false, error: 'file:// 地址无法解析' }; }
@@ -43,13 +63,36 @@ function resolveLocal(input, baseDir) {
   try { st = fs.statSync(abs); }
   catch { return { ok: false, error: '文件不存在：' + abs }; }
   if (!st.isFile()) return { ok: false, error: '不是文件：' + abs };
-  if (!EXTS.has(path.extname(abs).toLowerCase())) {
-    return { ok: false, error: '仅支持 .html / .htm / .xhtml / .svg：' + path.basename(abs) };
+  const ext = path.extname(abs).toLowerCase();
+  if (!EXTS.has(ext)) {
+    return { ok: false, error: '不支持预览该类型：' + path.basename(abs) };
   }
   return {
-    ok: true, kind: 'file', filePath: abs, baseDir: path.dirname(abs),
+    ok: true, kind: 'file', type: TYPE_BY_EXT[ext], ext,
+    filePath: abs, baseDir: path.dirname(abs),
     url: pathToFileURL(abs).href, label: path.basename(abs), size: st.size,
   };
+}
+
+/** 读文本类文件的原文交给渲染层（Markdown / CSV / 源码视图）。
+ *  重新走一遍 resolveLocal 校验白名单，避免 IPC 被拿来读任意本地文件；
+ *  二进制、PDF、图片、非白名单扩展名、超大文件一律拒绝。 */
+function readText(input, baseDir) {
+  const r = resolveLocal(input, baseDir);
+  if (!r.ok) return r;
+  if (r.kind !== 'file' || !TEXT_TYPES.has(r.type)) {
+    return { ok: false, error: '该类型不提供文本视图：' + r.label };
+  }
+  let st;
+  try { st = fs.statSync(r.filePath); }
+  catch { return { ok: false, error: '文件不存在：' + r.filePath }; }
+  if (st.size > MAX_TEXT_BYTES) {
+    return { ok: false, error: '文件超过 512 KB，请用外部程序打开：' + r.label, size: st.size };
+  }
+  let text;
+  try { text = fs.readFileSync(r.filePath, 'utf8'); }
+  catch (err) { return { ok: false, error: '读取失败：' + String((err && err.message) || err) }; }
+  return { ok: true, text, size: st.size, type: r.type, filePath: r.filePath, label: r.label };
 }
 
 /** 监听文件所在目录；写入保存（含编辑器原子替换）后去抖通知渲染层 */
@@ -88,4 +131,7 @@ function unwatch() {
   return { ok: true };
 }
 
-module.exports = { resolveLocal, watch, unwatch, EXTS };
+module.exports = {
+  resolveLocal, readText, watch, unwatch,
+  EXTS, TYPE_BY_EXT, TEXT_TYPES, MAX_TEXT_BYTES,
+};

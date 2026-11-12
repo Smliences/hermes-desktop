@@ -979,6 +979,56 @@ body.rail-resizing iframe { pointer-events: none; }
 .pv-empty-ico { width: 44px; height: 44px; border-radius: var(--r-md); background: var(--fill-3); color: var(--text-3); font-size: 24px; display: grid; place-items: center; }
 .pv-empty-title { font-size: 13px; color: var(--text-2); }
 .pv-empty-hint { font-size: 11.5px; line-height: 1.65; color: var(--text-3); max-width: 250px; }
+/* 多类型预览：类型标签 + 视图切换条 + 五种渲染面。全部走双主题 token，
+   不改 --rail-w 等外层定版几何；网页 iframe 仍保持「被预览内容的白纸」。 */
+.pv-views {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 10px 8px; border-top: 1px solid var(--line);
+}
+.pv-kind {
+  flex-shrink: 0; font: 500 10px/1 var(--mono); letter-spacing: .04em;
+  color: var(--caption); background: var(--fill-2);
+  border: 1px solid var(--line-2); border-radius: var(--r-xs); padding: 4px 7px;
+}
+.pv-view-btns { display: flex; gap: 2px; background: var(--fill-2); padding: 2px; border-radius: var(--r-sm); }
+.pv-vbtn {
+  height: 22px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--r-xs);
+  background: transparent; color: var(--text-3); cursor: pointer;
+  font: 400 10.5px/1 var(--sans);
+}
+.pv-vbtn:hover { color: var(--text); background: var(--fill-3); }
+.pv-vbtn.active { border-color: var(--line-2); background: var(--canvas); color: var(--text); }
+.pv-vbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pv-surface {
+  position: absolute; inset: 0; box-sizing: border-box; overflow: auto;
+  background: var(--canvas); color: var(--text);
+  padding: 14px 16px; font: 400 12px/1.7 var(--sans);
+}
+.pv-image { display: grid; place-items: center; padding: 16px; background: var(--fill-2); }
+.pv-image img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-xs); }
+.pv-doc { font-size: 12.5px; }
+.pv-doc h1, .pv-doc h2, .pv-doc h3 { margin: 0 0 8px; color: var(--text); font-weight: 600; }
+.pv-doc p { margin: 0 0 9px; font-size: 12.5px; line-height: 1.7; }
+.pv-doc code { font-family: var(--mono); background: var(--fill-2); padding: 1px 4px; border-radius: var(--r-xs); }
+.pv-doc blockquote { margin: 0 0 9px; padding-left: 10px; border-left: 2px solid var(--line-2); color: var(--text-3); }
+.pv-doc hr { border: 0; border-top: 1px solid var(--line-2); margin: 12px 0; }
+.pv-doc a { color: var(--blue); }
+.pv-raw {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: 400 11.5px/1.65 var(--mono); tab-size: 2;
+}
+.pv-table { padding: 0; }
+.pv-table table { width: 100%; border-collapse: collapse; font: 400 11.5px/1.6 var(--mono); }
+.pv-table th, .pv-table td {
+  border: 1px solid var(--line-2); padding: 5px 8px; text-align: left;
+  white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+}
+.pv-table th { position: sticky; top: 0; background: var(--fill-2); color: var(--text-2); font-weight: 600; }
+.pv-table tbody tr:nth-child(even) { background: var(--fill-2); }
+.pv-table .pv-table-note {
+  padding: 8px 12px; font: 400 10.5px/1.6 var(--sans);
+  color: var(--caption); background: var(--fill-2); border-bottom: 1px solid var(--line-2);
+}
 
 .term-out {
   flex: 1; overflow-y: auto; padding: 8px 14px;

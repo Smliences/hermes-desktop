@@ -3645,6 +3645,87 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
   assert.ok(refresh.includes('syncComposerProject()'), '项目树冷启落地后未重新校准');
 });
 
+section('3aj. 右侧预览按类型分流：五视图、三层对齐、双主题与边界');
+const previewSvc = read('main/services/hermes-preview.js');
+const mockBridgeSrc = read('renderer/mock-bridge.js');
+const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 终端 ---------- */'),
+  appSrc.indexOf('/* ---------- 全局快捷键'));
+const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('.term-out {'));
+const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),
+  htmlSrc.indexOf('<div class="rail-pane" id="term-pane"'));
+
+t('六种来源各有视图定义，五个渲染面互斥且都有 DOM 节点', () => {
+  for (const ty of ['url', 'web', 'pdf', 'image', 'doc', 'table']) {
+    assert.ok(new RegExp('\\b' + ty + ':\\s*\\[\\[').test(pvApp), '缺少类型 ' + ty + ' 的视图定义');
+  }
+  for (const id of ['pv-frame', 'pv-image', 'pv-doc', 'pv-table', 'pv-raw', 'pv-views', 'pv-view-btns', 'pv-kind']) {
+    assert.ok(pvHtml.includes('id="' + id + '"'), 'HTML 缺少节点 #' + id);
+  }
+  assert.ok(pvApp.includes("for (const s of ['#pv-frame', '#pv-image', '#pv-doc', '#pv-table', '#pv-raw'])"),
+    '渲染面未互斥，iframe 会在背后继续跑脚本');
+  assert.ok(pvApp.includes('function renderPreviewViews(') && pvApp.includes('data-pv-view=')
+    && pvApp.includes('aria-selected='), '视图切换条缺少键盘 / 读屏语义');
+});
+t('文本视图走受限 IPC，iframe / img 类型完全不读内容', () => {
+  assert.ok(pvApp.includes('api.previewRead('), '文本视图未走 previewRead');
+  assert.ok(pvApp.includes('pv.textLoadedFor === pv.filePath'), '文本视图缺少缓存，切视图会反复读盘');
+  assert.ok(pvApp.includes("if (pv.type === 'image')"), '图片未走 img 渲染面');
+  assert.ok(pvApp.includes("pvShow('#pv-frame')"), 'iframe 视图缺失');
+  assert.ok(previewSvc.includes('TEXT_TYPES.has(r.type)') && previewSvc.includes('MAX_TEXT_BYTES'),
+    '服务层缺少文本类型 / 大小上限校验');
+  assert.ok(!previewSvc.includes("'.env':"), '白名单不该收进凭据类文件');
+  assert.ok(previewSvc.includes('function readText('), '缺少 readText');
+});
+t('IPC 三层对齐，文件对话框按类型分组且不再给「所有文件」', () => {
+  assert.ok(mainSrc.includes("handle('preview:read'"), '主进程未注册 preview:read');
+  assert.ok(preloadSrc.includes("previewRead: (input, baseDir) => ipcRenderer.invoke('preview:read'"),
+    'preload 未暴露 previewRead');
+  assert.ok(pvApp.includes('api.previewRead('), '渲染层未调用 previewRead');
+  const pick = mainSrc.slice(mainSrc.indexOf("handle('preview:pick'"), mainSrc.indexOf("handle('preview:watch'"));
+  for (const name of ["'网页'", "'PDF'", "'图片'", "'文档 / 源码'", "'表格'"]) {
+    assert.ok(pick.includes(name), '对话框缺少类型分组 ' + name);
+  }
+  assert.ok(!pick.includes("extensions: ['*']"), '「所有文件」会让选进来的文件又被 resolveLocal 拒掉');
+  assert.ok(previewSvc.includes("'.pdf': 'pdf'") && previewSvc.includes("'.csv': 'table'"),
+    '服务层白名单与对话框分组不一致');
+});
+t('CSP / sandbox 边界未被放宽，外层定版几何不动', () => {
+  const csp = (htmlSrc.match(/Content-Security-Policy[^>]*content="([^"]+)"/) || [])[1] || '';
+  assert.ok(csp.includes('img-src') && csp.includes('frame-src'), 'CSP 缺少 img / frame 指令');
+  assert.ok(csp.includes('data:') && csp.includes('file:'), 'CSP 未给图片 / 本地 iframe 留通道');
+  assert.ok(pvHtml.includes('sandbox="'), 'iframe 缺少 sandbox');
+  assert.ok(pvApp.includes("? 'allow-scripts'"), '远程页面 sandbox 未收紧');
+  assert.ok(pvApp.includes('allow-scripts allow-forms allow-modals allow-popups allow-downloads'),
+    '本地文件 sandbox 被改');
+  assert.ok(/width:\s*var\(--rail-w, 400px\)/.test(cssSrc), '外层 rail 默认宽度被改');
+});
+t('新样式全走双主题 token，无硬编码色，每个新 class 都有规则', () => {
+  for (const c of ['.pv-views', '.pv-kind', '.pv-view-btns', '.pv-vbtn', '.pv-vbtn.active',
+    '.pv-vbtn:focus-visible', '.pv-surface', '.pv-image', '.pv-image img', '.pv-doc',
+    '.pv-raw', '.pv-table', '.pv-table th', '.pv-table-note']) {
+    assert.ok(pvCss.includes(c), '缺少样式规则 ' + c);
+  }
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(pvCss), '出现硬编码色值，深色主题会失配');
+  assert.ok(pvCss.includes('var(--canvas)') && pvCss.includes('var(--fill-2)'), '未使用双主题 token');
+  assert.ok(pvCss.includes('position: absolute; inset: 0'), '渲染面未铺满预览舞台');
+});
+t('自动跟随覆盖新类型，Demo 桥不再被 hasNative 挡住', () => {
+  assert.ok(pvApp.includes('function extractPreviewPaths('), '自动跟随仍只认 html');
+  for (const ext of ['|md|markdown', '|csv|tsv', '|png|jpe?g', '|pdf|']) {
+    assert.ok(pvApp.includes(ext), '自动跟随缺少扩展名组 ' + ext);
+  }
+  assert.ok(pvApp.includes('const pvAvailable = () => typeof api.previewResolve'),
+    'Demo 桥被 hasNative 挡在门外，CDP / UI 冒烟测不到预览');
+  assert.ok(mockBridgeSrc.includes('DEMO_PREVIEW_FILES'));
+  for (const ty of ['web', 'pdf', 'image', 'doc', 'table']) {
+    assert.ok(mockBridgeSrc.includes("type: '" + ty + "'"), 'Demo 桥缺少 ' + ty + ' 样例');
+  }
+  for (const fn of ['async previewResolve(', 'async previewRead(', 'async previewPick(',
+    'async previewWatch(', 'async previewUnwatch(']) {
+    assert.ok(mockBridgeSrc.includes(fn), 'Demo 桥缺少 ' + fn);
+  }
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;

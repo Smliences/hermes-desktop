@@ -23,6 +23,29 @@
 
   const listener = { event: null, close: null };
 
+  /* Demo 预览样例：五种渲染器各一份内存数据，形状对齐 hermes-preview.resolveLocal 的返回。
+     网页 / PDF 用 srcdoc 喂 iframe（Demo 没有磁盘文件），图片用 data: URL（CSP 已允许）。 */
+  const DEMO_PREVIEW_FILES = [
+    { path: '/tmp/demo/page.html', type: 'web', ext: '.html', label: 'page.html', url: 'about:blank',
+      srcdoc: '<!doctype html><meta charset="utf-8"><style>body{font:14px/1.7 system-ui;padding:24px;color:#2b2620}h1{font-size:20px}code{background:#f3ede4;padding:2px 5px;border-radius:3px}</style><h1>网页渲染视图</h1><p>这是 Demo 桥用 <code>srcdoc</code> 注入的 HTML，真机走 <code>file://</code>。</p><p>右上角「源码」可切到原始文本。</p>',
+      text: '<!doctype html>\n<h1>网页渲染视图</h1>\n<p>这是 Demo 桥的样例页面。</p>' },
+    { path: '/tmp/demo/manual.pdf', type: 'pdf', ext: '.pdf', label: 'manual.pdf', url: 'about:blank',
+      srcdoc: '<!doctype html><meta charset="utf-8"><style>body{font:14px/1.7 system-ui;padding:24px;color:#2b2620}</style><h1>PDF 预览</h1><p>真机由 Chromium 内置 PDF viewer 渲染；Demo 只占位。可用 ↗ 交给系统默认程序。</p>',
+      text: '' },
+    { path: '/tmp/demo/chart.png', type: 'image', ext: '.png', label: 'chart.png',
+      url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" rx="10" fill="#f3ede4"/><rect x="30" y="120" width="42" height="50" rx="4" fill="#ad4c2a"/><rect x="90" y="86" width="42" height="84" rx="4" fill="#c2703f"/><rect x="150" y="52" width="42" height="118" rx="4" fill="#90612c"/><rect x="210" y="30" width="42" height="140" rx="4" fill="#4a7ebb"/><text x="30" y="24" font-family="system-ui" font-size="13" fill="#2b2620">图片渲染视图 · Demo</text></svg>'),
+      text: '' },
+    { path: '/tmp/demo/report.md', type: 'doc', ext: '.md', label: 'report.md', url: 'about:blank', srcdoc: '',
+      text: '# 文档渲染视图\n\n复用聊天流同一套 Markdown 渲染器：\n\n- **粗体**、*强调*、`行内代码`\n- 自动跟随 Agent 写出的文件\n\n| 类型 | 渲染器 |\n| --- | --- |\n| 网页 | iframe |\n| 图片 | img |\n\n> 右上角可切到「源码」看原文。' },
+    { path: '/tmp/demo/data.csv', type: 'table', ext: '.csv', label: 'data.csv', url: 'about:blank', srcdoc: '',
+      text: '任务,状态,负责人,耗时\nt_demo01,doing,alice,12.4\nt_demo02,review,bob,8.1\nt_demo03,done,carol,5.7\nt_demo04,"todo, 待拆解",dave,0' },
+  ];
+  const demoPreviewFile = (input) => {
+    const raw = String(input || '').trim();
+    const name = raw.split('/').pop();
+    return DEMO_PREVIEW_FILES.find((f) => raw === f.path || name === f.label) || null;
+  };
+
   window.__mockAPI = {
     async env() {
       return { hermesBin: '/demo/hermes', hermesFound: false, version: 'demo', dbOk: true, dbPath: '~/.hermes/state.db', pty: false, config: { model: '', reasoning: 'default', yolo: false } };
@@ -46,6 +69,26 @@
     onError(fn) { listener.close = fn; return () => {}; },
     onClose(fn) { listener.close = fn; return () => {}; },
     onTermData() { return () => {}; }, onTermExit() { return () => {}; },
+
+    /* Demo 预览通道：不读磁盘，只回内存样例；让 CDP / UI 冒烟能跑通五种视图 */
+    async previewResolve(input) {
+      const f = demoPreviewFile(input);
+      if (!f) return { ok: false, error: 'Demo 里没有这个文件：' + String(input || '') };
+      return { ok: true, kind: 'file', type: f.type, ext: f.ext, filePath: f.path,
+        baseDir: '/tmp/demo', url: f.url, srcdoc: f.srcdoc || '',
+        label: f.label, size: f.text.length };
+    },
+    async previewRead(input) {
+      const f = demoPreviewFile(input);
+      if (!f) return { ok: false, error: 'Demo 里没有这个文件' };
+      if (f.type === 'image' || f.type === 'pdf') return { ok: false, error: '该类型不提供文本视图：' + f.label };
+      return { ok: true, text: f.text, size: f.text.length, type: f.type, filePath: f.path, label: f.label };
+    },
+    async previewPick() { return this.previewResolve('/tmp/demo/report.md'); },
+    async previewWatch() { return { ok: true, watching: false }; },
+    async previewUnwatch() { return { ok: true }; },
+    async previewOpenExternal() { return { ok: true }; },
+    onPreviewChanged() { return () => {}; },
 
     /** Demo 发送：回放脚本化事件流 */
     async __sendDemo(payload, onEvent, onClose) {

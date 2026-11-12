@@ -554,22 +554,31 @@
 
       <div class="rail-pane" id="preview-pane">
         <div class="pv-bar">
-          <button class="pv-btn" id="pv-open" title="选择本机任意 HTML 文件">打开文件</button>
-          <input id="pv-path" type="text" placeholder="本地 .html 路径或 http(s) 地址，⏎ 加载" spellcheck="false" />
+          <button class="pv-btn" id="pv-open" title="选择本机网页 / PDF / 图片 / 文档 / 表格">打开文件</button>
+          <input id="pv-path" type="text" placeholder="本地文件路径或 http(s) 地址，⏎ 加载" spellcheck="false" />
           <button class="pv-icon" id="pv-reload" title="刷新预览">↻</button>
-          <button class="pv-icon" id="pv-external" title="在系统默认浏览器打开">↗</button>
+          <button class="pv-icon" id="pv-external" title="在系统默认程序打开">↗</button>
         </div>
         <div class="pv-sub">
-          <label class="pv-auto"><input type="checkbox" id="pv-auto" checked /> 自动跟随 Agent 生成的网页</label>
+          <label class="pv-auto"><input type="checkbox" id="pv-auto" checked /> 自动跟随 Agent 生成的文件</label>
           <span class="pv-state" id="pv-state">尚未加载</span>
         </div>
+        <!-- 视图切换条：按当前文件类型动态生成可用渲染器，避免一个 iframe 硬扛所有格式 -->
+        <div class="pv-views" id="pv-views" hidden>
+          <span class="pv-kind" id="pv-kind"></span>
+          <div class="pv-view-btns" id="pv-view-btns" role="tablist" aria-label="预览视图"></div>
+        </div>
         <div class="pv-stage">
-          <iframe id="pv-frame" title="HTML 预览" referrerpolicy="no-referrer"
+          <iframe id="pv-frame" title="内容预览" referrerpolicy="no-referrer"
             sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"></iframe>
+          <div class="pv-surface pv-image" id="pv-image" hidden><img id="pv-img" alt="预览图片" /></div>
+          <div class="pv-surface pv-doc" id="pv-doc" hidden></div>
+          <div class="pv-surface pv-table" id="pv-table" hidden></div>
+          <pre class="pv-surface pv-raw" id="pv-raw" hidden></pre>
           <div class="pv-empty" id="pv-empty">
             <div class="pv-empty-ico">◫</div>
-            <div class="pv-empty-title">预览 Agent 生成的网页</div>
-            <div class="pv-empty-hint">Agent 写入 .html 文件时会自动显示在这里，也可以点「打开文件」选择本机任意网页。</div>
+            <div class="pv-empty-title">预览 Agent 生成的文件</div>
+            <div class="pv-empty-hint">网页 / PDF / 图片 / 文档 / 表格都会自动显示在这里，也可以点「打开文件」选择本机文件。</div>
           </div>
         </div>
       </div>

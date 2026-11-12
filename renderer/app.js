@@ -2970,8 +2970,23 @@ let termMode = '';
 // pty 输出是带 ANSI 控制序列的原始字节流，先过字符屏幕再进 DOM
 const termScreen = new TermScreen();
 let railTab = 'preview';
-const pv = { url: '', filePath: '', label: '', kind: '', baseDir: '' };
-const pvAvailable = () => hasNative && typeof api.previewResolve === 'function';
+const pv = {
+  url: '', filePath: '', label: '', kind: '', type: '', view: '', ext: '',
+  baseDir: '', text: '', textLoadedFor: '', srcdoc: '',
+};
+// 只看通道是否存在：浏览器 Demo 桥也实现了预览，别用 hasNative 把它挡在门外
+const pvAvailable = () => typeof api.previewResolve === 'function';
+const PV_TYPE_LABEL = { url: '远程网页', web: '网页', pdf: 'PDF', image: '图片', doc: '文档', table: '表格' };
+/** 每种类型可用的视图：render=原生渲染，source=原始文本，table=表格解析。 */
+const PV_VIEWS = {
+  url: [['render', '网页']],
+  web: [['render', '渲染'], ['source', '源码']],
+  pdf: [['render', 'PDF']],
+  image: [['render', '图片']],
+  doc: [['render', '渲染'], ['source', '源码']],
+  table: [['table', '表格'], ['source', '源码']],
+};
+const pvViews = (type) => PV_VIEWS[type] || [['render', '渲染']];
 
 function setRailTab(tab) {
   railTab = tab === 'terminal' ? 'terminal' : 'preview';
@@ -3019,28 +3034,121 @@ function pvState(msg, isErr) {
   el.textContent = msg;
   el.classList.toggle('err', !!isErr);
 }
-function loadFrame(url) {
+function loadFrame(url, srcdoc) {
   const f = $('#pv-frame');
-  // 本地 HTML 保留完整能力（用户拍板的「任意本地 html 预览」）；
+  // 本地文件保留完整能力（用户拍板的「任意本地 html 预览」）；
   // 远程页面收紧：不允许弹窗 / 表单提交 / 模态 / 下载，避免钓鱼式 iframe。
   const remote = /^https?:\/\//i.test(String(url));
   f.setAttribute('sandbox', remote
     ? 'allow-scripts'
     : 'allow-scripts allow-forms allow-modals allow-popups allow-downloads');
+  // Demo 桥没有磁盘文件，用 srcdoc 喂一段内存 HTML；真机一律走 file:// / http(s)
+  if (srcdoc) f.setAttribute('srcdoc', srcdoc); else f.removeAttribute('srcdoc');
   // 后台窗口 rAF 会被节流，用定时器保证 file:// 变更一定触发重新导航
   f.src = 'about:blank';
   setTimeout(() => { f.src = url; }, 24);
+}
+/** 五个渲染面互斥：只显示当前视图，其余 hidden，避免 iframe 在背后继续跑脚本。 */
+function pvShow(sel) {
+  for (const s of ['#pv-frame', '#pv-image', '#pv-doc', '#pv-table', '#pv-raw']) {
+    const el = $(s); if (el) el.hidden = s !== sel;
+  }
+  $('#pv-empty').hidden = true;
+}
+/** 文本类才走 IPC 读原文；同一文件缓存，文件变更时由 reloadPreview 清掉。 */
+async function pvReadText() {
+  if (!pv.filePath || typeof api.previewRead !== 'function') return '';
+  if (pv.textLoadedFor === pv.filePath) return pv.text;
+  let r;
+  try { r = await api.previewRead(pv.filePath, pv.baseDir || undefined); }
+  catch (err) { pvState('读取失败：' + String((err && err.message) || err), true); return ''; }
+  if (!r || !r.ok) { pvState((r && r.error) || '读取失败', true); return ''; }
+  pv.text = String(r.text || ''); pv.textLoadedFor = pv.filePath;
+  return pv.text;
+}
+/** Markdown 复用聊天流的转义渲染器；其它文本套代码块，带语言标签与复制按钮。 */
+function pvDocHtml(text) {
+  const ext = String(pv.ext || '').toLowerCase();
+  if (ext === '.md' || ext === '.markdown') return renderMarkdown(text);
+  const lang = { '.json': 'json', '.jsonl': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.xml': 'xml',
+    '.js': 'js', '.mjs': 'js', '.cjs': 'js', '.ts': 'ts', '.tsx': 'tsx', '.jsx': 'jsx',
+    '.py': 'python', '.css': 'css', '.scss': 'scss', '.sh': 'bash', '.rb': 'ruby',
+    '.go': 'go', '.rs': 'rust', '.java': 'java', '.sql': 'sql', '.svg': 'xml', '.html': 'html' }[ext] || 'text';
+  return mdCodeBlock(lang, text);
+}
+/** CSV / TSV → 表格。引号内分隔符与转义双引号都按 RFC 4180 的最小子集处理。 */
+function pvTableHtml(text) {
+  const delim = String(pv.ext || '').toLowerCase() === '.tsv' ? '\t' : ',';
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n').filter((l) => l.length);
+  const parse = (line) => {
+    const out = []; let cur = '', quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (quoted && line[i + 1] === '"') { cur += '"'; i++; } else quoted = !quoted;
+      } else if (!quoted && c === delim) { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur); return out;
+  };
+  const MAX = 300;
+  const all = lines.map(parse);
+  const head = all[0] || [];
+  const body = all.slice(1, MAX + 1);
+  const note = `<div class="pv-table-note">${esc(pv.label || '表格')} · ${Math.max(0, all.length - 1)} 行 × ${head.length} 列` +
+    (all.length > MAX + 1 ? ` · 仅显示前 ${MAX} 行` : '') + '</div>';
+  const th = head.map((c) => `<th>${esc(c)}</th>`).join('');
+  const tr = body.map((r) => `<tr>${head.map((_, i) => {
+    const c = String(r[i] == null ? '' : r[i]);
+    return `<td title="${esc(c)}">${esc(c)}</td>`;
+  }).join('')}</tr>`).join('');
+  return note + `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+function renderPreviewViews() {
+  const views = pvViews(pv.type);
+  if (!views.some(([v]) => v === pv.view)) pv.view = views[0][0];
+  $('#pv-view-btns').innerHTML = views.map(([v, label]) =>
+    `<button class="pv-vbtn${v === pv.view ? ' active' : ''}" type="button" role="tab" ` +
+    `aria-selected="${v === pv.view}" data-pv-view="${v}">${esc(label)}</button>`).join('');
+  $('#pv-kind').textContent = PV_TYPE_LABEL[pv.type] || '预览';
+  $('#pv-views').hidden = false;
+}
+function setPvView(view) {
+  if (!pvViews(pv.type).some(([v]) => v === view)) return;
+  pv.view = view;
+  renderPreviewViews();
+  renderPreviewContent();
+}
+async function renderPreviewContent() {
+  // 文本视图要读原文；iframe / img 类型完全不碰内容，只给 URL
+  if (pv.view === 'source' || pv.view === 'table' || pv.type === 'doc') {
+    const text = await pvReadText();
+    if (pv.view === 'source') { pvShow('#pv-raw'); $('#pv-raw').textContent = text || '（无可显示的文本）'; }
+    else if (pv.view === 'table') { pvShow('#pv-table'); $('#pv-table').innerHTML = pvTableHtml(text); }
+    else { pvShow('#pv-doc'); $('#pv-doc').innerHTML = pvDocHtml(text); }
+    return;
+  }
+  if (pv.type === 'image') {
+    pvShow('#pv-image');
+    const img = $('#pv-img'); img.src = pv.url; img.alt = pv.label || '预览图片';
+    return;
+  }
+  pvShow('#pv-frame');
+  loadFrame(pv.url, pv.srcdoc);
 }
 async function setPreview(res) {
   if (!res || !res.ok) { pvState((res && res.error) || '加载失败', true); return false; }
   const isFile = res.kind === 'file';
   pv.url = res.url; pv.filePath = res.filePath || ''; pv.label = res.label || '';
-  pv.kind = res.kind; pv.baseDir = res.baseDir || pv.baseDir;
+  pv.kind = res.kind; pv.type = res.type || (isFile ? 'web' : 'url');
+  pv.ext = res.ext || ''; pv.baseDir = res.baseDir || pv.baseDir;
+  pv.srcdoc = res.srcdoc || '';
+  pv.text = ''; pv.textLoadedFor = ''; pv.view = '';
   $('#pv-path').value = isFile ? res.filePath : res.url;
-  $('#pv-empty').hidden = true;
   pvState(isFile ? '已加载' : '网页预览');
   setRailTab('preview');
-  loadFrame(res.url);
+  renderPreviewViews();
+  await renderPreviewContent();
   if (!pvAvailable()) return true;
   if (isFile) await api.previewWatch(res.filePath);
   else await api.previewUnwatch();
@@ -3052,28 +3160,37 @@ async function loadPreviewInput(raw) {
   if (/^https?:\/\//i.test(v)) {
     let host = v;
     try { host = new URL(v).host; } catch {}
-    await setPreview({ ok: true, kind: 'url', url: v, label: host });
+    await setPreview({ ok: true, kind: 'url', type: 'url', url: v, label: host });
     return;
   }
-  if (!pvAvailable()) { pvState('演示模式无本地预览', true); return; }
+  if (!pvAvailable()) { pvState('此环境无本地预览', true); return; }
   pvState('正在打开…');
   try {
     const res = await api.previewResolve(v, pv.baseDir || undefined);
     await setPreview(res);
-  } catch (err) { pvState('打开失败：' + String(err && err.message || err), true); }
+  } catch (err) { pvState('打开失败：' + String((err && err.message) || err), true); }
 }
-function reloadPreview() {
+async function reloadPreview() {
   if (!pv.url) { pvState('请先打开一个文件', true); return; }
-  const url = /^https?:\/\//i.test(pv.url)
-    ? pv.url + (pv.url.includes('?') ? '&' : '?') + '_hermes=' + Date.now() : pv.url;
-  loadFrame(url);
+  if (/^https?:\/\//i.test(pv.url)) {
+    loadFrame(pv.url + (pv.url.includes('?') ? '&' : '?') + '_hermes=' + Date.now(), pv.srcdoc);
+  } else {
+    pv.textLoadedFor = ''; // 文件可能被改写，文本视图必须重读
+    if (pv.type === 'image') { const img = $('#pv-img'); img.removeAttribute('src'); img.src = pv.url; }
+    else await renderPreviewContent();
+  }
   pvState('已刷新');
 }
 $('#btn-rail-toggle').onclick = () => toggleTerminal();
 $('#btn-term-close').onclick = () => toggleTerminal(false);
 document.querySelectorAll('#rail-tabs .rt').forEach((b) => { b.onclick = () => setRailTab(b.dataset.rail); });
+// 视图切换条是动态生成的，用委托；按钮带 role=tab 与 aria-selected 供读屏识别
+$('#pv-view-btns').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-pv-view]');
+  if (b) setPvView(b.dataset.pvView);
+});
 $('#pv-open').onclick = async () => {
-  if (!pvAvailable()) { toast('演示模式无法读取本地文件', 2000); return; }
+  if (!pvAvailable()) { toast('此环境无法读取本地文件', 2000); return; }
   const r = await api.previewPick();
   if (r && r.ok) await setPreview(r);
   else if (r && !r.canceled) pvState(r.error || '选择失败', true);
@@ -3112,17 +3229,18 @@ if (hasNative) {
   });
 }
 
-/** 从工具参数 / 结果里找 .html 路径，自动跟随 Agent 写出的网页。 */
+/** 从工具参数 / 结果里找可预览文件路径，自动跟随 Agent 写出的产物。
+ *  扩展名与 main/services/hermes-preview.js 的 TYPE_BY_EXT 保持一致。 */
 function collectStrings(v, out, depth) {
   if (depth > 3 || out.length > 40) return;
   if (typeof v === 'string') { out.push(v); return; }
   if (Array.isArray(v)) { v.forEach((x) => collectStrings(x, out, depth + 1)); return; }
   if (v && typeof v === 'object') { Object.values(v).forEach((x) => collectStrings(x, out, depth + 1)); }
 }
-function extractHtmlPaths(text) {
+function extractPreviewPaths(text) {
   const found = [];
-  const re1 = /["'`](~?\/[^"'`\n]*?\.(?:html?|xhtml|svg))["'`]/gi;
-  const re2 = /(?:^|[\s(\[])(~?\/[^\s"'<>\])},;]*\.(?:html?|xhtml|svg))(?=$|[\s"'<>\])},;])/gi;
+  const re1 = /["'`](~?\/[^"'`\n]*?\.(?:html?|xhtml|svg|pdf|png|jpe?g|gif|webp|bmp|avif|ico|md|markdown|txt|log|jsonl?|ya?ml|xml|csv|tsv|js|mjs|cjs|tsx?|jsx|py|css|scss|sh|rb|go|rs|java|c|h|cpp|sql|toml))["'`]/gi;
+  const re2 = /(?:^|[\s(\[])(~?\/[^\s"'<>\])},;]*\.(?:html?|xhtml|svg|pdf|png|jpe?g|gif|webp|bmp|avif|ico|md|markdown|txt|log|jsonl?|ya?ml|xml|csv|tsv|js|mjs|cjs|tsx?|jsx|py|css|scss|sh|rb|go|rs|java|c|h|cpp|sql|toml))(?=$|[\s"'<>\])},;])/gi;
   for (const re of [re1, re2]) {
     let m; while ((m = re.exec(text)) !== null) { if (!found.includes(m[1])) found.push(m[1]); }
   }
@@ -3135,7 +3253,7 @@ async function maybeAutoPreview(evt) {
   collectStrings(evt.input, parts, 0);
   if (typeof evt.output === 'string') parts.push(evt.output);
   if (typeof evt.preview === 'string') parts.push(evt.preview);
-  const paths = extractHtmlPaths(parts.join('\n'));
+  const paths = extractPreviewPaths(parts.join('\n'));
   if (!paths.length) return;
   for (const p of paths.slice(0, 3)) {
     let res;

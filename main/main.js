@@ -607,15 +607,21 @@ function boot() {
   handle('term:resize', (_e, args) => { const a = args || {}; terminals.get(a.id)?.resize(a.cols, a.rows); return true; });
   handle('term:kill', (_e, args) => { const a = args || {}; terminals.get(a.id)?.kill(); terminals.delete(a.id); return true; });
 
-  // 右侧栏 HTML 预览
+  // 右侧栏多类型预览（网页 / PDF / 图片 / 文档 / 表格）
   handle('preview:resolve', (_e, input, baseDir) => hermesPreview.resolveLocal(input, baseDir));
+  // 文本类才开放内容读取，白名单与 512KB 上限在 hermes-preview 里二次校验
+  handle('preview:read', (_e, input, baseDir) => hermesPreview.readText(input, baseDir));
   handle('preview:pick', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择要预览的 HTML 文件',
+      title: '选择要预览的文件',
       properties: ['openFile'],
+      // 不给「所有文件」：选进来也会被 resolveLocal 拒掉，不如在对话框里就收口
       filters: [
-        { name: '网页文件', extensions: ['html', 'htm', 'xhtml', 'svg'] },
-        { name: '所有文件', extensions: ['*'] },
+        { name: '网页', extensions: ['html', 'htm', 'xhtml', 'svg'] },
+        { name: 'PDF', extensions: ['pdf'] },
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'ico'] },
+        { name: '文档 / 源码', extensions: ['md', 'markdown', 'txt', 'log', 'json', 'jsonl', 'yaml', 'yml', 'xml', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'css', 'scss', 'sh', 'rb', 'go', 'rs', 'java', 'c', 'h', 'cpp', 'sql', 'toml'] },
+        { name: '表格', extensions: ['csv', 'tsv'] },
       ],
     });
     if (r.canceled || !r.filePaths?.length) return { ok: false, canceled: true };

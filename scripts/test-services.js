@@ -149,11 +149,43 @@ async function run() {
     assert.ok(r.ok && r.kind === 'url');
   });
   await t('拒绝非白名单扩展名 / 不存在 / 空 / 危险协议', () => {
-    const txt = path.join(tmp, 'note.txt');
-    fs.writeFileSync(txt, 'x');
-    for (const v of [txt, path.join(tmp, 'nope.html'), '', 'javascript:alert(1)', 'ftp://x/a.html']) {
+    const exe = path.join(tmp, 'payload.exe');
+    fs.writeFileSync(exe, 'x');
+    for (const v of [exe, path.join(tmp, 'nope.html'), '', 'javascript:alert(1)', 'ftp://x/a.html']) {
       assert.strictEqual(preview.resolveLocal(v, tmp).ok, false, '应拒绝：' + v);
     }
+  });
+  await t('五类扩展名分流到对应渲染器', () => {
+    const cases = { 'a.html': 'web', 'a.pdf': 'pdf', 'a.png': 'image', 'a.md': 'doc', 'a.csv': 'table' };
+    for (const [name, type] of Object.entries(cases)) {
+      const p = path.join(tmp, name);
+      fs.writeFileSync(p, 'x');
+      const r = preview.resolveLocal(p, tmp);
+      assert.ok(r.ok && r.type === type, name + ' → ' + JSON.stringify(r));
+      assert.strictEqual(r.kind, 'file');
+      assert.ok(r.url.startsWith('file://'));
+    }
+    assert.strictEqual(preview.resolveLocal('http://127.0.0.1:5173/', tmp).type, 'url');
+  });
+  await t('readText 只对文本类开放，且有 512KB 上限', () => {
+    const md = path.join(tmp, 'report.md');
+    fs.writeFileSync(md, '# 标题\n正文');
+    const r = preview.readText(md, tmp);
+    assert.ok(r.ok && r.text.includes('标题') && r.type === 'doc', JSON.stringify(r));
+    const bin = path.join(tmp, 'shot.png');
+    fs.writeFileSync(bin, 'not really a png');
+    assert.strictEqual(preview.readText(bin, tmp).ok, false, '图片不该读文本');
+    assert.strictEqual(preview.readText('https://example.com/a.md', tmp).ok, false, 'URL 不该读文本');
+    const big = path.join(tmp, 'big.md');
+    fs.writeFileSync(big, 'x'.repeat(preview.MAX_TEXT_BYTES + 1));
+    assert.strictEqual(preview.readText(big, tmp).ok, false, '超大文件必须拒绝');
+  });
+  await t('白名单不含凭据类文件，TEXT_TYPES 只含三类', () => {
+    for (const ext of ['.env', '.ini', '.conf', '.key', '.pem']) {
+      assert.ok(!preview.EXTS.has(ext), '不该允许读 ' + ext);
+    }
+    assert.deepStrictEqual([...preview.TEXT_TYPES].sort(), ['doc', 'table', 'web']);
+    assert.ok(preview.TYPE_BY_EXT['.html'] === 'web' && preview.TYPE_BY_EXT['.tsv'] === 'table');
   });
 
   section('6. 会话层在数据库缺失时安全降级');
