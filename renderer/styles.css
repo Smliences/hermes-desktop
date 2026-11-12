@@ -582,41 +582,107 @@ body.resizing #sidebar { transition: none; }
 .md-details summary { cursor: pointer; font: 400 11px/1 var(--mono); color: var(--caption); user-select: none; }
 .md-details-body { font-size: 12px; color: var(--text-3); padding: 6px 0 2px; white-space: pre-wrap; word-break: break-word; }
 
-/* 工具调用行（图标 + 动作 + 对象平铺，状态由图标颜色/动画表达） */
-.tool-stream { display: flex; flex-direction: column; margin: 2px 0; }
-.tool-item { font-size: 14px; }
+/* ══════════ 工具调用步骤区 ══════════
+   连续调用排成一张「步骤清单」：固定列宽让 图标 / 动作 / 对象 / 耗时 / 展开箭头
+   逐行对齐，长路径省略而不撑破列。空列也常驻占位，否则 grid 会在缺对象或耗时时串列。
+   状态由图标底色 + 文字色表达（running 呼吸、err 淡红、ok 绿），不靠彩色字符。
+   全部走设计 token，浅/深主题自动适配；只改聊天流内部，不动定版几何。 */
+.tool-stream { display: flex; flex-direction: column; gap: 1px; margin: 4px 0 6px; min-width: 0; }
+.tool-item { min-width: 0; }
 .tool-row {
-  display: flex; align-items: center; cursor: pointer; user-select: none;
-  color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.75; padding: 1px 0;
+  display: grid;
+  grid-template-columns: 18px 44px minmax(0, 1fr) 52px 14px;
+  align-items: center; column-gap: 8px;
+  min-width: 0; padding: 3px 6px; border-radius: var(--r-sm);
+  color: var(--text-3); font: 400 13px/1.7 var(--sans);
+  cursor: pointer; user-select: none;
+  transition: background-color .14s ease, color .14s ease;
 }
+.tool-row:hover { background: var(--hover); color: var(--text-2); }
+.tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tool-item.open > .tool-row { background: var(--fill-2); color: var(--text-2); }
 .tool-row .ticon {
-  width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 13px; line-height: 1; margin-right: 7px; color: var(--text-3);
+  box-sizing: border-box; width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-xs); background: var(--fill-2);
+  font: 400 12px/1 var(--mono); color: var(--text-3);
 }
-.tool-row.running .ticon { color: var(--blue); animation: spin 1.2s linear infinite; }
-.tool-row.err .ticon { color: var(--red); }
-.tool-row .tverb { white-space: nowrap; min-width: 0; }
+/* 三态都有行底色。坑：本项目的 --blue 是陶土橙，与 --red 同色系，
+   「运行中」用它看起来和「失败」一样；改用赭黄 --yellow 才能在暖色系里一眼分开。 */
+.tool-row.running { background: color-mix(in srgb, var(--yellow) 9%, transparent); }
+.tool-row.running .ticon {
+  color: var(--yellow); background: color-mix(in srgb, var(--yellow) 16%, transparent);
+  animation: tool-pulse 1.4s ease-in-out infinite;
+}
+.tool-row.err .ticon {
+  color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.tool-row.ok .ticon { color: var(--green); }
+.tool-row.err { background: color-mix(in srgb, var(--red) 6%, transparent); }
+.tool-row.err .tverb { color: var(--red); }
+.tool-row .tverb {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-2); font-weight: 500;
+}
 .tool-row .tobject {
-  color: var(--text-3); margin-left: 5px; min-width: 0; flex: 0 1 auto;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-3); font: 400 11.5px/1.7 var(--mono);
 }
-.tool-row .tdur { font-size: 11px; line-height: 18px; margin-left: 6px; flex-shrink: 0; color: var(--caption); font-variant-numeric: tabular-nums; }
-.tool-row .tchev { width: 16px; margin-left: 4px; flex-shrink: 0; opacity: 0; transition: transform .16s, opacity .16s; }
-.tool-row:hover .tverb, .tool-row:hover .ticon, .tool-row:hover .tobject, .tool-row:hover .tchev { color: var(--text); }
+.tool-row .tdur {
+  text-align: right; color: var(--caption); font: 400 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tool-row .tchev {
+  width: 14px; text-align: center; color: var(--caption);
+  opacity: 0; transition: transform .16s ease, opacity .16s ease;
+}
 .tool-row:hover .tchev, .tool-item.open .tchev { opacity: 1; }
 .tool-item.open .tchev { transform: rotate(90deg); }
-/* 展开详情：dsh kpre 规格（灰底 r8 等宽小字） */
+.tool-row:hover .tverb, .tool-row:hover .tobject, .tool-row:hover .tdur { color: var(--text); }
+@keyframes tool-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .48; } }
+
+/* 展开详情：与动作列左缘对齐（6+18+8=32px），有边界的等宽小字卡 */
 .tool-detail {
-  display: none; box-sizing: border-box; border-radius: var(--r-sm); background: var(--fill-2);
-  width: calc(100% - 22px); max-height: 420px; color: var(--text-2); white-space: pre-wrap; word-break: break-word;
-  margin: 6px 0 4px 22px; padding: 9px 11px;
-  font: 400 11.5px/17px var(--mono); overflow: auto;
+  display: none; box-sizing: border-box; min-width: 0; max-height: 420px;
+  margin: 3px 0 7px 32px; padding: 9px 11px 10px;
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--fill-2); color: var(--text-2);
+  font: 400 11.5px/17px var(--mono);
+  white-space: pre-wrap; word-break: break-word; overflow: auto;
 }
-.tool-item.open .tool-detail { display: block; }
-.tool-detail .sec-label { font: 500 10px/1 var(--mono); letter-spacing: .08em; color: var(--caption); margin-bottom: 4px; }
-.tool-detail pre { font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }
-.tool-detail pre + .sec-label { margin-top: 8px; }
+.tool-item.open .tool-detail { display: block; animation: tool-reveal .14s ease-out; }
+@keyframes tool-reveal { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+.tool-detail-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 8px; padding: 0 0 7px; border-bottom: 1px solid var(--line);
+  font: 400 10.5px/1.4 var(--sans); color: var(--caption);
+}
+.tool-detail-head .tdh-name { color: var(--text-2); font-family: var(--mono); overflow-wrap: anywhere; }
+.tool-detail-head .tdh-state { margin-left: auto; white-space: nowrap; }
+.tool-detail-head .tdh-state.ok { color: var(--green); }
+.tool-detail-head .tdh-state.err { color: var(--red); }
+.tool-detail-head .tdh-state.running { color: var(--blue); }
+.tool-detail .sec-label {
+  font: 500 10px/1 var(--mono); letter-spacing: .08em;
+  color: var(--caption); margin: 0 0 5px;
+}
+.tool-detail pre {
+  margin: 0; font-family: var(--mono);
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+}
+.tool-detail pre + .sec-label { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
 .tool-detail pre.err-text { color: var(--red); }
+
+/* 窄栏：让出耗时列，详情卡回到整宽 */
+@media (max-width: 720px) {
+  .tool-row { grid-template-columns: 18px 40px minmax(0, 1fr) 14px; }
+  .tool-row .tdur { display: none; }
+  .tool-detail { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-row, .tool-row .tchev { transition: none; }
+  .tool-row.running .ticon, .tool-item.open .tool-detail { animation: none; }
+}
 
 /* 错误卡 */
 .error-card {

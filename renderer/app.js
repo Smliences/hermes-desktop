@@ -173,20 +173,22 @@ function toolMeta(name, input) {
   }
   const table = [
     [/^(write_file|patch|edit|apply_layout|annotate_preview)/, '✏', '修改'],
-    [/^(terminal|read_terminal|close_terminal|execute_code|process_manage|cronjob_manage)/, '⊙', '运行'],
-    [/^(search_files|web_search|x_search|session_search)/, '⌕', '搜索'],
-    [/^(read_file|skill_view|skills_list|memory|drive_preview|desktop_preview)/, '◫', '查看'],
+    [/^(terminal|read_terminal|close_terminal|execute_code|process_manage|cronjob_manage|bash|shell|exec_command|run_command)/, '⊙', '运行'],
+    [/^(search_files|web_search|x_search|session_search|grep|glob|find_files|list_files)/, '⌕', '搜索'],
+    [/^(read_file|skill_view|skills_list|memory|drive_preview|desktop_preview|cat)/, '◫', '查看'],
     [/^browser_/, '◫', '浏览'],
-    [/^web_extract/, '↗', '抓取'],
+    [/^(web_extract|web_fetch|http_request|fetch_url)/, '↗', '抓取'],
     [/^(image_generate|video_generate|text_to_speech)/, '✦', '生成'],
     [/^(vision_analyze|video_analyze)/, '◫', '分析'],
     [/^feishu_/, '◫', '飞书'],
-    [/^delegate_task/, '⇗', '分发'],
-    [/^(todo_list)/, '☰', '清单'],
+    [/^(delegate_task|task)/, '⇗', '分发'],
+    [/^(todo_list|todo_write|update_plan)/, '☰', '清单'],
     [/^(skill_manage|desktop_project)/, '⚙', '管理'],
   ];
   for (const [re, icon, verb] of table) if (re.test(n)) return { icon, verb, obj };
-  return { icon: '⊙', verb: n.replace(/_/g, ' '), obj };
+  // 动作列是固定 44px：未知名的长英文名不能整段塞进去，否则会截成 "web ..."。
+  // 收敛成短动作词，原始工具名由行 title 与详情头完整保留。
+  return { icon: '⊙', verb: n.length <= 4 && !n.includes(' ') ? n : '调用', obj };
 }
 /** 从错误文本里提取 mono 状态胶囊（如 MISSING_CREDENTIAL / exit=1） */
 function errorCodeOf(text) {
@@ -1509,22 +1511,40 @@ function renderItem(item, header = false) {
       : '';
     el.innerHTML = `${meta}<div class="content md">${renderMarkdown(item.text)}${cursor}</div>${msgActionBar(item, false)}`;
   } else if (item.kind === 'tool') {
-    // WB 式工具行：动作图标 + 中文动作 + 对象名（状态由图标颜色/动画表达），点击展开灰底等宽详情
+    // 步骤清单：固定列（图标 / 动作 / 对象 / 耗时 / 箭头）逐行对齐。两个可空列必须
+    // 常驻占位，否则 grid 会把后续列往前挪，连续调用时就对不齐了。
     el.className = 'tool-item' + (item.open ? ' open' : '');
     const stateCls = item.state === 'running' ? 'running' : item.isError ? 'err' : 'ok';
+    const stateText = item.state === 'running' ? '执行中' : item.isError ? '失败' : '完成';
     const meta = toolMeta(item.name, item.input);
-    const dur = item.durationMs ? `<span class="tdur">${(item.durationMs / 1000).toFixed(1)}s</span>` : '';
-    el.innerHTML = `<div class="tool-row ${stateCls}">
-        <span class="ticon">${meta.icon}</span>
+    const dur = item.durationMs ? (item.durationMs / 1000).toFixed(1) + 's' : '';
+    el.innerHTML = `<div class="tool-row ${stateCls}" role="button" tabindex="0" aria-expanded="${!!item.open}" title="${esc(item.name || '')}">
+        <span class="ticon" aria-hidden="true">${meta.icon}</span>
         <span class="tverb">${esc(meta.verb)}</span>
-        ${meta.obj ? `<span class="tobject">${esc(meta.obj)}</span>` : ''}
-        ${dur}
-        <span class="tchev">›</span></div>
+        <span class="tobject">${esc(meta.obj || '')}</span>
+        <span class="tdur">${dur}</span>
+        <span class="tchev" aria-hidden="true">›</span></div>
       <div class="tool-detail">
+        <div class="tool-detail-head">
+          <span class="tdh-name">${esc(item.name || '工具')}</span>
+          <span class="tdh-state ${stateCls}">${stateText}${dur ? ' · ' + dur : ''}</span>
+        </div>
         ${item.input ? `<div class="sec-label">INPUT</div><pre>${esc(clip(safeStringify(item.input), 12000))}</pre>` : ''}
         ${item.output != null ? `<div class="sec-label">OUTPUT</div><pre class="${item.isError ? 'err-text' : ''}">${esc(clip(item.output, 20000))}</pre>` : ''}
+        ${item.input == null && item.output == null ? '<div class="sec-label">暂无详情</div>' : ''}
       </div>`;
-    el.querySelector('.tool-row').onclick = () => { item.open = !item.open; renderChat(); };
+    // 局部切 class 而不是整页 renderChat：详情是静态 HTML，不需要重绘；
+    // 更重要的是键盘展开时焦点能留在这条工具行上、展开动画也能正常触发。
+    const row = el.querySelector('.tool-row');
+    const toggle = () => {
+      item.open = !item.open;
+      el.classList.toggle('open', item.open);
+      row.setAttribute('aria-expanded', String(item.open));
+    };
+    row.onclick = toggle;
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    };
   } else if (item.kind === 'error') {
     el.className = 'msg msg-error';
     el.innerHTML = item.failure
