@@ -78,9 +78,15 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   projectsTree: (opts) => ipcRenderer.invoke('projects:tree', opts || {}),
   // 官方新建项目 / 打开文件夹为项目：原生目录选择器 + 既有项目维护（主进程拼 argv）
   pickProjectFolders: (opts) => ipcRenderer.invoke('project:pick-folders', opts || {}),
+  projectMkdir: (input) => ipcRenderer.invoke('project:mkdir', input || {}),
   projectAction: (input) => ipcRenderer.invoke('project:action', input || {}),
-  // 删除项目：官方 projects.delete RPC（只删项目记录，不动磁盘文件），必须二次确认
-  deleteProject: (id) => ipcRenderer.invoke('project:delete', String(id || '')),
+  // 项目设置：读完整项目（含描述与全部文件夹）、改名称/描述、维护文件夹
+  projectGet: (id) => ipcRenderer.invoke('project:get', String(id || '')),
+  projectUpdate: (input) => ipcRenderer.invoke('project:update', input || {}),
+  projectFolder: (input) => ipcRenderer.invoke('project:folder', input || {}),
+  // 删除项目：官方 projects.delete RPC；trash:true 时才把该项目自己的文件夹移到废纸篓
+  deleteProject: (payload) => ipcRenderer.invoke('project:delete',
+    typeof payload === 'string' ? { id: payload } : (payload || {})),
   copyText: (text) => ipcRenderer.invoke('app:copy', String(text || '')),
   // 编排模式：读回生效值；set 改 CLI config.yaml 的 kanban 段（UI 必须二次确认）
   kanbanOrchestration: () => ipcRenderer.invoke('kanban:orchestration'),

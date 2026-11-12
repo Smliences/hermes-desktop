@@ -10,6 +10,9 @@
     { id: '20261104_105611_ac8c50', title: '重构 sheet 解析模块', model: 'claude-sonnet-4', message_count: 59, input_tokens: 180220, output_tokens: 9800, started_at: Math.floor(Date.now() / 1000) - 7200 },
     { id: '20261104_100439_4de2ce', title: '排查 gateway 启动失败', model: 'deepseek-v4.1-flash', message_count: 226, input_tokens: 890100, output_tokens: 45000, started_at: Math.floor(Date.now() / 1000) - 14400 },
     { id: '20261103_231714_595bc4', title: '写 cron 报表任务', message_count: 118, started_at: Math.floor(Date.now() / 1000) - 86400 },
+    // 更早的会话：用来验证「其他会话」分组与折叠（项目分组会认领前两条演示会话）
+    { id: '20261031_090000_pin001', title: '整理 skills 目录约定', message_count: 12, pinned: 1, started_at: Math.floor(Date.now() / 1000) - 3 * 86400 },
+    { id: '20260920_140000_old002', title: '早期 CLI 参数调研', message_count: 44, started_at: Math.floor(Date.now() / 1000) - 40 * 86400 },
   ];
   const DEMO_HISTORY = {
     '20261104_121117_0c63b7': [
@@ -128,18 +131,60 @@
       return { ok: true, text: `[mock] created project ${name}`, ideaWarning: '' };
     },
     // Demo 没有原生目录选择器：给一条示例绝对路径，保证弹窗流程可完整走通
-    async pickProjectFolders() {
-      return { ok: true, folders: ['/Users/you/Work/demo'] };
+    async pickProjectFolders(input = {}) {
+      return { ok: true, folders: [String(input.multiple === false ? '/Users/you/Work/demo' : '/Users/you/Work/demo')] };
+    },
+    // Demo 里也在内存建目录（真机上由主进程非递归 mkdir），只在校验通过时返回拼接路径
+    async projectMkdir(input = {}) {
+      const parent = String(input.parent || '').replace(/\/+$/, '');
+      const name = String(input.name || '').trim();
+      if (!parent.startsWith('/')) return { ok: false, error: '父目录需为绝对路径' };
+      if (!name || name === '.' || name === '..' || /[/\\]/.test(name)) return { ok: false, error: '名称无效' };
+      DEMO_MKDIR.add(parent + '/' + name);
+      return { ok: true, path: parent + '/' + name };
     },
     async projectAction(input = {}) {
       return { ok: true, text: `[mock] project ${String(input.op || '')}` };
     },
-    // Demo 里真的把项目从内存树里摘掉，方便验证「删完侧栏即时消失」
-    async deleteProject(id) {
+    // 设置弹窗：返回与 projects.get 同形状的项目（含描述与全部文件夹）
+    async projectGet(id) {
       const pid = String(id || '');
+      if (!pid || DELETED_PROJECTS.has(pid)) return { ok: false, error: '项目不存在（Demo）' };
+      return { ok: true, project: demoProject(pid) };
+    },
+    async projectUpdate(input = {}) {
+      const pid = String(input.id || '');
       if (!pid) return { ok: false, error: '项目标识无效' };
+      const p = demoProject(pid);
+      if (typeof input.name === 'string' && input.name.trim()) p.name = input.name.trim();
+      if (typeof input.description === 'string') p.description = input.description;
+      DEMO_PROJECT_OVERRIDE.set(pid, p);
+      return { ok: true, project: p };
+    },
+    async projectFolder(input = {}) {
+      const pid = String(input.id || '');
+      const path0 = String(input.path || '');
+      if (!pid || !path0.startsWith('/')) return { ok: false, error: '参数无效' };
+      const p = demoProject(pid);
+      if (input.op === 'add' && !p.folders.some((f) => f.path === path0)) {
+        p.folders.push({ path: path0, label: '', isPrimary: false });
+      } else if (input.op === 'remove') {
+        p.folders = p.folders.filter((f) => f.path !== path0);
+      } else if (input.op === 'primary') {
+        p.folders = p.folders.map((f) => ({ ...f, isPrimary: f.path === path0 }));
+        p.primaryPath = path0;
+      }
+      DEMO_PROJECT_OVERRIDE.set(pid, p);
+      return { ok: true, project: p };
+    },
+    // Demo 里真的把项目从内存树里摘掉，方便验证「删完侧栏即时消失」
+    async deleteProject(input) {
+      const o = typeof input === 'string' ? { id: input } : (input || {});
+      const pid = String(o.id || '');
+      if (!pid) return { ok: false, error: '项目标识无效' };
+      if (o.trash === true && !Array.isArray(o.folders)) return { ok: false, error: '缺少文件夹列表' };
       DELETED_PROJECTS.add(pid);
-      return { ok: true, activeId: '' };
+      return { ok: true, activeId: '', trashed: o.trash === true ? (o.folders || []) : [] };
     },
     async copyText() { return true; },
     async kanbanDeleteTask(taskId) {
@@ -193,9 +238,12 @@
       const now = Math.floor(Date.now() / 1000);
       const mk = (i) => ({ id: 's_demo_' + i, title: KB_TASKS[i % KB_TASKS.length].title,
         preview: '演示会话 ' + i, started_at: now - i * 3600, last_active: now - i * 3600 });
-      const demo = { id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '', icon: '',
+      const demo = { id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '#c2703f', icon: '',
         isAuto: false, isNoProject: false, sessionCount: 2, lastActive: now,
         previewSessions: [mk(0), mk(1)], sessionIds: ['s_demo_0', 's_demo_1'] };
+      // 设置弹窗改过的名字要立刻反映到侧栏树
+      const ov = DEMO_PROJECT_OVERRIDE.get(demo.id);
+      if (ov && ov.name) demo.label = ov.name;
       const home = { id: '__no_project__', label: '未归类', path: null, color: '', icon: '',
         isAuto: true, isNoProject: true, sessionCount: 1, lastActive: now - 7200,
         previewSessions: [mk(2)], sessionIds: ['s_demo_2'] };
@@ -238,6 +286,19 @@
   ];
   // Demo 内删除过的项目 id：projectsTree 过滤掉，模拟真实后端删库后的树
   const DELETED_PROJECTS = new Set();
+  // Demo 内新建过的目录 / 设置弹窗改过的项目（projects.get·update 的返回源）
+  const DEMO_MKDIR = new Set();
+  const DEMO_PROJECT_OVERRIDE = new Map();
+  function demoProject(id) {
+    const pid = String(id || '');
+    const saved = DEMO_PROJECT_OVERRIDE.get(pid);
+    if (saved) return { ...saved, folders: saved.folders.map((f) => ({ ...f })) };
+    return {
+      id: pid, name: pid === 'pj_demo1' ? 'Hermes Agent' : pid, description: '',
+      primaryPath: '/tmp/demo-repo',
+      folders: [{ path: '/tmp/demo-repo', label: '', isPrimary: true }],
+    };
+  }
   const KB_MODE_STATE = {
     mode: 'auto', modeLabel: '全自动',
     dispatchInGateway: true, autoDecompose: true, autoPromoteChildren: true,

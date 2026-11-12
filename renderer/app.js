@@ -403,18 +403,86 @@ function ensureSidebarTree() {
     ensureSidebarTree();
   }, Math.min(1000 + n * 800, 3500));
 }
-/** Claude 式时间分组：置顶 / 今天 / 昨天 / 最近 7 天 / 更早 */
-function sessionGroup(s) {
-  if (Number(s.pinned) > 0 || s.pinned === true) return '置顶';
-  const t = Number(s.started_at) || 0;
-  if (!t) return '更早';
-  const d = new Date(t * 1000), now = new Date();
-  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diff = Math.round((day(now) - day(d)) / 86400000);
-  if (diff <= 0) return '今天';
-  if (diff === 1) return '昨天';
-  if (diff <= 7) return '最近 7 天';
-  return '更早';
+/* ---------- 时间分桶：置顶 / 今天 / 昨天 / 其他会话 ----------
+   官方 calendarBucket 的收敛版：只保留三档（用户侧只需要「今天 / 昨天 / 其余」），
+   时间取 last_active || started_at —— 与行上显示的日期同源，否则「昨天活跃、上月开始」
+   的会话会被分到「其他会话」却显示昨天的日期。
+   凌晨 0–4 点算前一天（官方 DAY_ROLLOVER_HOUR=4）：熬夜连着聊的会话不该被切开。 */
+const DAY_ROLLOVER_HOUR = 4;
+function nominalDayStart(ms) {
+  const d = new Date(ms - DAY_ROLLOVER_HOUR * 3600000);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+function sessionBucket(s) {
+  const o = s || {};
+  if (Number(o.pinned) > 0 || o.pinned === true) return 'pinned';
+  const t = Number(o.last_active || o.started_at) || 0;
+  if (!t) return 'older';
+  const diff = Math.round((nominalDayStart(Date.now()) - nominalDayStart(t * 1000)) / 86400000);
+  if (diff <= 0) return 'today';
+  if (diff === 1) return 'yesterday';
+  return 'older';
+}
+/** 分桶标题与默认强弱：越近的分组字重/对比越强，一眼能看出时间层次。 */
+const DATE_BUCKETS = {
+  pinned: { label: '置顶', rank: 0 },
+  today: { label: '今天', rank: 1 },
+  yesterday: { label: '昨天', rank: 2 },
+  older: { label: '其他会话', rank: 3 },
+};
+/** 日期分组的折叠状态（官方 $sidebarWorkspaceNodeOpen 的 list-group 前缀等价）：
+ *  存解析后的布尔，默认展开；用户显式折叠后重绘不会自己弹开。 */
+const SB_DATE_OPEN_KEY = 'sb-date-open';
+function sbDateOpenMap() {
+  try {
+    const o = JSON.parse(safeGet(SB_DATE_OPEN_KEY) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch { return {}; }
+}
+function dateGroupOpen(key) {
+  const v = sbDateOpenMap()[String(key || '')];
+  return typeof v === 'boolean' ? v : true;
+}
+function setDateGroupOpen(key, open) {
+  const k = String(key || '');
+  if (!k) return;
+  const m = sbDateOpenMap();
+  if (m[k] === open) return;
+  m[k] = open;
+  safeSet(SB_DATE_OPEN_KEY, JSON.stringify(m));
+}
+/** 折叠/展开后把焦点还给同一个分组标题（键盘操作不至于跳回页首）。 */
+function focusDateToggle(key) {
+  const btn = [...document.querySelectorAll('#session-list .s-div')]
+    .find((x) => x.dataset.bucket === key);
+  const el = btn && btn.querySelector('.s-dtoggle');
+  if (el) { try { el.focus({ preventScroll: true }); } catch {} }
+}
+/** 分组分隔条：小号大写感标题 + 细横线，与项目行（带底色、字更大）在视觉上分成两类。 */
+function dateDividerEl(bucket, open, count) {
+  const meta = DATE_BUCKETS[bucket] || DATE_BUCKETS.older;
+  const li = document.createElement('li');
+  li.className = 's-div';
+  li.dataset.bucket = bucket;
+  li.dataset.rank = String(meta.rank);
+  li.setAttribute('role', 'presentation');
+  const btn = document.createElement('button');
+  btn.className = 's-dtoggle';
+  btn.type = 'button';
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.setAttribute('aria-label', `${open ? '收起' : '展开'}${meta.label}的会话`);
+  btn.innerHTML = `<span class="s-dlabel">${esc(meta.label)}</span>` +
+    '<span class="s-dcaret" aria-hidden="true"></span><span class="s-drule" aria-hidden="true"></span>' +
+    (count ? `<span class="s-dcount">${count}</span>` : '');
+  btn.onclick = () => {
+    // 搜索态分组恒展开（命中不能被折叠藏起来），此时点标题不改状态，免得「点了没反应」
+    if (currentSearch()) return;
+    setDateGroupOpen(bucket, !open);
+    renderSessions(currentSearch());
+    focusDateToggle(bucket);
+  };
+  li.appendChild(btn);
+  return li;
 }
 /** 侧栏单个会话行（项目预览与时间分组共用）：返回 li，由调用方挂事件 */
 /** 会话显示名（官方 sessionTitle：title → preview → 'Untitled session'）。
@@ -568,6 +636,13 @@ function projectSessionRows(p, byId, liveIds) {
   return out;
 }
 
+/** 项目色点：只接受 #rgb / #rrggbb，其它值一律不渲染（项目色来自用户数据，不进 CSS 拼接）。 */
+function projectDotHtml(color) {
+  const c = String(color || '').trim();
+  if (!/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c)) return '';
+  return `<span class="s-pdot" style="background:${c}" aria-hidden="true"></span>`;
+}
+
 /** 折叠/展开会重建 DOM，把焦点还给同一个项目的开关（键盘操作不至于跳回页首）。 */
 function focusProjectToggle(pid) {
   const gl = [...document.querySelectorAll('#session-list .s-proj')].find((x) => x.dataset.pid === pid);
@@ -611,6 +686,7 @@ function renderSessions(q = '') {
     gl.innerHTML = `<button class="s-ptoggle" type="button" aria-expanded="${open ? 'true' : 'false'}" ` +
         `aria-label="${open ? '收起' : '展开'}${name}的会话" title="${name}">` +
         `<span class="s-pcaret" aria-hidden="true"></span>` +
+        projectDotHtml(p.color) +
         `<span class="s-pname">${name}<span class="s-pcount">${p.sessionCount || 0}</span></span></button>` +
       (p.path ? `<button class="s-pnew" data-cwd="${safePath}" title="在 ${safePath} 新建会话（会话将归属该项目）" aria-label="在此项目新建会话">+</button>` : '');
     const toggle = gl.querySelector('.s-ptoggle');
@@ -673,32 +749,26 @@ function renderSessions(q = '') {
       ul.appendChild(moreRow);
     }
   }
-  if (shownProject) {
-    const rest = document.createElement('li');
-    rest.className = 's-group';
-    rest.setAttribute('role', 'presentation');
-    rest.textContent = '其他会话';
-    ul.appendChild(rest);
+  // 项目之外剩下的会话按「今天 / 昨天 / 其他会话」分桶。分桶排序保证同名分隔条只出现一次
+  // （V8 的排序稳定，桶内保留原有时序），项目分组在上、时间分组在下，两类标题样式不同。
+  const restRows = state.sessions.filter((s) => searching || !claimedNoPin(s.id));
+  restRows.sort((a, b) => DATE_BUCKETS[sessionBucket(a)].rank - DATE_BUCKETS[sessionBucket(b)].rank);
+  const counts = new Map();
+  for (const s of restRows) {
+    const b = sessionBucket(s);
+    counts.set(b, (counts.get(b) || 0) + 1);
   }
-  let lastGroup = null;
-  for (const s of state.sessions) {
-    if (!searching && claimedNoPin(s.id)) continue; // 已在项目分组里，不重复出现
-    const group = sessionGroup(s);
-    if (group !== lastGroup) {
-      const gl = document.createElement('li');
-      gl.className = 's-group';
-      gl.setAttribute('role', 'presentation');
-      gl.textContent = group;
-      ul.appendChild(gl);
-      lastGroup = group;
+  let lastBucket = null;
+  for (const s of restRows) {
+    const bucket = sessionBucket(s);
+    if (bucket !== lastBucket) {
+      const open = searching ? true : dateGroupOpen(bucket); // 搜索时全部展开，命中不藏在折叠里
+      ul.appendChild(dateDividerEl(bucket, open, counts.get(bucket) || 0));
+      lastBucket = bucket;
     }
+    // 折叠的分组只留标题：会话行不渲染，计数徽标说明里面还有几条
+    if (!searching && !dateGroupOpen(bucket)) continue;
     ul.appendChild(sessionItemEl(s, { query, snippet: s.snippet }));
-  }
-  // 时间分组一条没出（全被项目认领）时撤掉「其他会话」标题；项目行以 DOM 顺序判断
-  if (shownProject) {
-    const kids = [...ul.children];
-    const restIdx = kids.findIndex((x) => x.textContent === '其他会话');
-    if (restIdx >= 0 && restIdx === kids.length - 1) kids[restIdx].remove();
   }
   if (!ul.children.length) {
     const li = document.createElement('li');
@@ -711,15 +781,21 @@ function closeSessionMenu() {
   const m = $('#session-menu');
   if (m) { m.hidden = true; m.innerHTML = ''; }
 }
-/** 官方 deleteProject：删除项目记录（`projects.delete` RPC），**不动磁盘上的文件 / 仓库 / 工作树**。
+/** 官方 deleteProject：删除项目记录（`projects.delete` RPC）。默认**不动磁盘上的文件 / 仓库 /
+ *  工作树**；弹窗里勾选「移到废纸篓」时由主进程按项目自己的文件夹逐个 trashItem（可恢复）。
  *  删完刷新侧栏树；当前页签的 cwd 若正落在被删项目里，回落到默认工作目录。 */
-async function deleteProjectFromSidebar(p) {
+async function deleteProjectFromSidebar(p, opts) {
+  const o = opts || {};
   const label = String(p.label || p.id || '');
-  if (typeof api.deleteProject !== 'function') { toast('当前环境不支持删除项目', 2600); return; }
-  toast('正在删除项目…', 1600);
+  if (typeof api.deleteProject !== 'function') { toast('当前环境不支持删除项目', 2600); return { ok: false, error: 'unsupported' }; }
+  toast(o.trash ? '正在移入废纸篓并删除项目…' : '正在删除项目…', 1800);
   let r = null;
-  try { r = await api.deleteProject(p.id); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
-  if (!r || !r.ok) { toast('删除失败：' + ((r && r.error) || '未知错误'), 3600); return; }
+  try { r = await api.deleteProject({ id: p.id, trash: o.trash === true, folders: o.folders || [] }); }
+  catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+  if (!r || !r.ok) {
+    toast('删除失败：' + ((r && r.error) || '未知错误'), 4200);
+    return r || { ok: false, error: 'unknown' };
+  }
   const tab = activeTab();
   const root = String(p.path || '').replace(/\/+$/, '');
   if (tab && tab.cwd && root && (String(tab.cwd) === root || String(tab.cwd).startsWith(root + '/'))) {
@@ -727,17 +803,20 @@ async function deleteProjectFromSidebar(p) {
   }
   await refreshSessions(currentSearch());
   syncComposerProject();
-  toast(`已删除项目「${label}」`, 2200);
+  const moved = Array.isArray(r.trashed) ? r.trashed.length : 0;
+  toast(moved ? `已删除项目「${label}」，${moved} 个文件夹已移到废纸篓` : `已删除项目「${label}」`, 2600);
+  return r;
 }
 
 /** 官方 project-menu.tsx：项目行 ⋯ / 右键共用的操作菜单。
- *  显式项目有重命名 / 加文件夹 / 设为活动 / 删除；后两项是本机路径动作，不写 CLI。 */
+ *  显式项目有重命名 / 设置 / 加文件夹 / 设为活动 / 删除；后两项是本机路径动作，不写 CLI。 */
 function openProjectMenu(p, anchor) {
   const m = $('#session-menu'); if (!m) return;
   const r = anchor.getBoundingClientRect();
   m.style.left = Math.max(8, Math.min(r.right - 156, window.innerWidth - 180)) + 'px';
-  m.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 300)) + 'px';
+  m.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 320)) + 'px';
   m.innerHTML = `<button data-pact="rename">✎ 重命名项目…</button>
+    <button data-pact="settings">⚙ 项目设置…</button>
     <button data-pact="add-folder">⊕ 添加文件夹…</button>
     <button data-pact="use">◎ 设为活动项目</button>
     <div class="sess-menu-sep"></div>
@@ -750,21 +829,16 @@ function openProjectMenu(p, anchor) {
     const b = e.target.closest && e.target.closest('button');
     if (!b || !b.dataset.pact) return;
     const act = b.dataset.pact;
-    // 删除是破坏性动作：第一次点击只把按钮切成确认态（复用会话删除的两次点击模式），
-    // 第二次才真正写。官方 deleteConfirm 文案：只移除项目记录，文件/仓库/工作树不变。
+    // 删除是破坏性动作：走确认弹窗（可勾选是否连磁盘文件一起移到废纸篓），不再就地两次点击
     if (act === 'delete') {
-      if (b.dataset.confirm !== '1') {
-        b.dataset.confirm = '1'; b.classList.add('confirm');
-        b.textContent = '⚠ 确认删除？只移除项目记录，不删磁盘文件';
-        return;
-      }
       closeSessionMenu();
-      await deleteProjectFromSidebar(p);
+      kbProjectDeleteDialog(p);
       return;
     }
     closeSessionMenu();
     try {
       if (act === 'rename' || act === 'add-folder') { kbProjectDialog(act, p); return; }
+      if (act === 'settings') { kbProjectDialog('settings', p); return; }
       if (act === 'use') {
         const res = await api.projectAction({ op: 'use', id: p.id });
         if (!res || !res.ok) { toast('操作失败：' + ((res && res.error) || '未知错误'), 3000); return; }
@@ -5631,7 +5705,7 @@ const KB = {
   mode: null,
   // 官方 project-dialog 的本地等价状态：一次选择可以带回多个文件夹，第一个为主；
   // projectDialog 记录 create / rename / add-folder 三种模式共用的目标项目。
-  projFolders: [], projectDialog: null,
+  projFolders: [], projectDialog: null, delProject: null,
 };
 let kbSelectSig = '';
 
@@ -6987,16 +7061,19 @@ function kbSyncStatusNote() {
     ? '就绪状态可能被运行中的调度器立即认领并派发给 agent 执行，请确认后再创建。'
     : '收集箱不会被派发器直接拉起，但 gateway 的自动分解（kanban.auto_decompose，默认开启）会补全 spec、填受让人并推进到 todo→ready，随后仍会被派发。';
 }
-/* 官方 project-dialog.tsx 的本地等价：一个弹窗三种模式（create / rename / add-folder）。
+/* 官方 project-dialog.tsx 的本地等价：一个弹窗四种模式
+   （create / rename / add-folder / settings）+ 一个删除确认弹窗。
    文件夹由主进程原生目录选择器给出，第一个为主；选完自动以 basename 命名项目。 */
-const KB_PROJECT_KINDS = ['project', 'project-rename', 'project-add-folder'];
+const KB_PROJECT_KINDS = ['project', 'project-rename', 'project-add-folder', 'project-settings', 'project-delete'];
 function kbProjectFolderBasename(dir) {
   return String(dir || '').replace(/[/\\]+$/, '').split(/[/\\]/).pop() || '';
 }
-/** 重绘文件夹列表：首条标「主」，逐条可移除；路径只走 textContent 落地。 */
+/** 重绘文件夹列表：首条标「主」，逐条可移除；设置模式还能「设为主」。
+ *  路径只走 textContent 落地，绝不拼进 HTML。 */
 function kbRenderProjectFolders() {
   const host = $('#kb-p-folders');
   if (!host) return;
+  const settings = !!KB.projectDialog && KB.projectDialog.mode === 'settings';
   host.innerHTML = '';
   if (!KB.projFolders.length) {
     const empty = document.createElement('div');
@@ -7011,10 +7088,18 @@ function kbRenderProjectFolders() {
     row.setAttribute('role', 'listitem');
     row.innerHTML = '<span class="kb-pfold-ico">📁</span><span class="kb-pfold-path"></span>' +
       (i === 0 ? '<span class="kb-pfold-primary">主</span>' : '') +
+      (settings && i > 0 ? '<button class="kb-pfold-pri" type="button" title="设为主文件夹">设为主</button>' : '') +
       '<button class="kb-pfold-rm" type="button" title="移除" aria-label="移除">×</button>';
     const label = row.querySelector('.kb-pfold-path');
     label.textContent = dir;
     label.title = dir;
+    const pri = row.querySelector('.kb-pfold-pri');
+    if (pri) {
+      pri.onclick = () => {
+        KB.projFolders = [dir, ...KB.projFolders.filter((x) => x !== dir)];
+        kbRenderProjectFolders();
+      };
+    }
     row.querySelector('.kb-pfold-rm').onclick = () => {
       KB.projFolders = KB.projFolders.filter((x) => x !== dir);
       kbRenderProjectFolders();
@@ -7023,9 +7108,10 @@ function kbRenderProjectFolders() {
     host.appendChild(row);
   });
 }
-/** 官方提交按钮条件：名称非空 + 至少一个文件夹（没有文件夹的项目无法认领会话）。 */
+/** 提交按钮条件：名称非空 + 至少一个文件夹（没有文件夹的项目无法认领会话）。
+ *  设置模式下文件夹也不能被删空，否则项目会变成谁也进不去的空壳。 */
 function kbSyncProjectSubmit() {
-  if (KB.modal !== 'project' || KB.modalBusy) return;
+  if ((KB.modal !== 'project' && KB.modal !== 'project-settings') || KB.modalBusy) return;
   const submit = $('#kb-modal-submit');
   if (!submit) return;
   submit.disabled = !((($('#kb-p-name')?.value || '').trim()) && KB.projFolders.length > 0);
@@ -7083,6 +7169,205 @@ async function kbSubmitAddFolders(folders) {
     kbSyncProjectSubmit();
   }
 }
+/** 设置弹窗预填：侧栏树只有名字与主路径，描述和全部文件夹要读一次 projects.get。 */
+async function kbFillProjectSettings() {
+  const d = KB.projectDialog || {};
+  const a = kbApi();
+  if (!d.projectId || !a || typeof a.projectGet !== 'function') {
+    kbModalErr('此页需要 Hermes 桌面端才能编辑项目'); return;
+  }
+  let r = null;
+  try { r = await a.projectGet(d.projectId); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+  // 期间关了弹窗或换了目标项目：旧响应不许写进新面板
+  if (!KB.projectDialog || KB.projectDialog.projectId !== d.projectId || KB.modal !== 'project-settings') return;
+  if (!r || !r.ok || !r.project) { kbModalErr((r && r.error) || '读取项目失败'); return; }
+  const pr = r.project;
+  const nameEl = $('#kb-p-name'), descEl = $('#kb-p-sdesc');
+  if (nameEl) nameEl.value = pr.name || d.projectName || '';
+  if (descEl) descEl.value = pr.description || '';
+  KB.projFolders = (Array.isArray(pr.folders) ? pr.folders : [])
+    .map((f) => String((f && f.path) || '')).filter((p) => p.startsWith('/')).slice(0, 8);
+  KB.projectDialog.snapshot = {
+    name: pr.name || d.projectName || '',
+    description: pr.description || '',
+    folders: KB.projFolders.slice(),
+    primary: pr.primaryPath || KB.projFolders[0] || '',
+  };
+  kbRenderProjectFolders();
+  kbSyncProjectSubmit();
+}
+/** 设置弹窗保存：按快照算差量，只写真正改过的部分（名称+描述一次 RPC，文件夹逐项增删/设主）。 */
+async function kbSubmitProjectSettings() {
+  const d = KB.projectDialog || {};
+  const a = kbApi();
+  const snap = d.snapshot || {};
+  const id = d.projectId;
+  if (!id) { kbModalErr('缺少目标项目'); return; }
+  if (!a || typeof a.projectUpdate !== 'function' || typeof a.projectFolder !== 'function') {
+    kbModalErr('此页需要 Hermes 桌面端才能保存项目设置'); return;
+  }
+  const name = ($('#kb-p-name')?.value || '').trim();
+  const desc = ($('#kb-p-sdesc')?.value || '').trim();
+  if (!name) { kbModalErr('请填写项目名称'); return; }
+  if (!KB.projFolders.length) { kbModalErr('至少保留一个文件夹'); return; }
+  const before = Array.isArray(snap.folders) ? snap.folders : [];
+  const removed = before.filter((f) => !KB.projFolders.includes(f));
+  const added = KB.projFolders.filter((f) => !before.includes(f));
+  const primary = KB.projFolders[0] || '';
+  const patch = {};
+  if (name !== (snap.name || '')) patch.name = name;
+  if (desc !== (snap.description || '')) patch.description = desc;
+  const submit = $('#kb-modal-submit');
+  KB.modalBusy = true;
+  if (submit) submit.disabled = true;
+  kbModalErr('');
+  try {
+    if (Object.keys(patch).length) {
+      const r = await a.projectUpdate({ id, ...patch });
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '保存名称/描述失败'); return; }
+    }
+    for (const folder of removed) {
+      const r = await a.projectFolder({ op: 'remove', id, path: folder });
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '移除文件夹失败'); return; }
+    }
+    for (const folder of added) {
+      const r = await a.projectFolder({ op: 'add', id, path: folder });
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '添加文件夹失败'); return; }
+    }
+    if (primary && (snap.primary || '') && primary !== snap.primary) {
+      const r = await a.projectFolder({ op: 'primary', id, path: primary });
+      if (!r || !r.ok) { kbModalErr((r && r.error) || '设为主文件夹失败'); return; }
+    }
+    kbModalClose();
+    toast('项目设置已保存', 1800);
+    await kbApplyProjectWrite();
+  } catch (e) {
+    kbModalErr((e && e.message) || '保存失败');
+  } finally {
+    KB.modalBusy = false;
+    if (submit) submit.disabled = false;
+    kbSyncProjectSubmit();
+  }
+}
+/** 「新建文件夹…」：在第一个（主）文件夹下建一层，成功后直接加入列表。
+ *  原生面板也能新建（createDirectory），这里给不想翻面板的用户一条捷径。 */
+function kbMkdirToggle(show) {
+  const row = $('#kb-p-mkdir'), hint = $('#kb-p-mkdir-hint'), input = $('#kb-p-mkdir-name');
+  if (!row) return;
+  if (!show) {
+    row.hidden = true;
+    if (hint) hint.hidden = true;
+    if (input) input.value = '';
+    return;
+  }
+  const parent = KB.projFolders[0] || '';
+  if (!parent) { kbModalErr('请先添加一个文件夹作为父目录'); return; }
+  const base = kbProjectFolderBasename(parent) || parent;
+  if (input) { input.value = ''; input.placeholder = `新文件夹名称（建在 ${base}/ 下）`; }
+  if (hint) { hint.hidden = false; hint.textContent = `将在 ${parent} 下新建一个空文件夹。`; }
+  row.hidden = false;
+  kbModalErr('');
+  try { if (input) { input.focus({ preventScroll: true }); input.select(); } } catch {}
+}
+async function kbMkdirSubmit() {
+  const a = kbApi();
+  const parent = KB.projFolders[0] || '';
+  const name = ($('#kb-p-mkdir-name')?.value || '').trim();
+  if (!a || typeof a.projectMkdir !== 'function') { kbModalErr('此页需要 Hermes 桌面端才能新建文件夹'); return; }
+  if (!parent) { kbModalErr('请先添加一个文件夹作为父目录'); return; }
+  if (!name) { kbModalErr('请填写文件夹名称'); return; }
+  const okBtn = $('#kb-p-mkdir-ok');
+  if (okBtn) okBtn.disabled = true;
+  kbModalErr('');
+  try {
+    const r = await a.projectMkdir({ parent, name });
+    if (!r || !r.ok) { kbModalErr((r && r.error) || '新建文件夹失败'); return; }
+    const dir = String(r.path || '');
+    if (dir.startsWith('/') && !KB.projFolders.includes(dir)) {
+      KB.projFolders = [...KB.projFolders, dir].slice(0, 8);
+      const nameEl = $('#kb-p-name');
+      if (nameEl && !nameEl.value.trim()) nameEl.value = kbProjectFolderBasename(dir);
+      kbRenderProjectFolders();
+      kbSyncProjectSubmit();
+    }
+    kbMkdirToggle(false);
+    toast('已新建文件夹 ' + dir, 2000);
+  } finally {
+    if (okBtn) okBtn.disabled = false;
+  }
+}
+/** 删除项目确认弹窗：默认只删记录；勾选「移到废纸篓」才由主进程按项目自己的文件夹清理磁盘。
+ *  文件夹列表读一次 projects.get（含附属文件夹），读不到就退回侧栏树里的主路径。 */
+function kbProjectDeleteDialog(p) {
+  KB.delProject = {
+    id: String((p && p.id) || ''), label: String((p && (p.label || p.id)) || ''),
+    folders: (p && p.path) ? [String(p.path)] : [],
+  };
+  kbModalOpen('project-delete');
+}
+async function kbFillProjectDelete() {
+  const d = KB.delProject || {};
+  const who = $('#kb-p-del-who'), list = $('#kb-p-del-folders'), trash = $('#kb-p-del-trash');
+  if (who) who.textContent = `将删除项目「${d.label || d.id}」及其文件夹关联。`;
+  if (trash) trash.checked = false;
+  kbRenderDeleteFolders();
+  const a = kbApi();
+  if (!d.id || !a || typeof a.projectGet !== 'function') return;
+  let r = null;
+  try { r = await a.projectGet(d.id); } catch {}
+  if (!KB.delProject || KB.delProject.id !== d.id || KB.modal !== 'project-delete') return;
+  if (r && r.ok && r.project && Array.isArray(r.project.folders) && r.project.folders.length) {
+    KB.delProject.folders = r.project.folders.map((f) => String((f && f.path) || '')).filter((x) => x.startsWith('/'));
+    kbRenderDeleteFolders();
+  }
+}
+function kbRenderDeleteFolders() {
+  const list = $('#kb-p-del-folders');
+  if (!list) return;
+  list.innerHTML = '';
+  const folders = (KB.delProject && KB.delProject.folders) || [];
+  const trash = $('#kb-p-del-trash');
+  // 没有文件夹可删时不让勾选，避免提交后才报错
+  if (trash) { trash.disabled = !folders.length; if (!folders.length) trash.checked = false; }
+  if (!folders.length) {
+    const d = document.createElement('div');
+    d.className = 'kb-pfold-empty';
+    d.textContent = '该项目没有文件夹记录。';
+    list.appendChild(d);
+    return;
+  }
+  for (const f of folders) {
+    const row = document.createElement('div');
+    row.className = 'kb-pfold';
+    row.innerHTML = '<span class="kb-pfold-ico">📁</span><span class="kb-pfold-path"></span>';
+    const label = row.querySelector('.kb-pfold-path');
+    label.textContent = f;
+    label.title = f;
+    list.appendChild(row);
+  }
+}
+async function kbSubmitProjectDelete() {
+  if (KB.modalBusy) return;
+  const d = KB.delProject || {};
+  const submit = $('#kb-modal-submit');
+  if (!d.id) { kbModalErr('缺少目标项目'); return; }
+  const trash = !!($('#kb-p-del-trash') && $('#kb-p-del-trash').checked);
+  if (trash && !(d.folders || []).length) { kbModalErr('该项目没有可删除的磁盘文件夹'); return; }
+  KB.modalBusy = true;
+  if (submit) submit.disabled = true;
+  kbModalErr('');
+  try {
+    const r = await deleteProjectFromSidebar(
+      { id: d.id, label: d.label, path: (d.folders || [])[0] || '' },
+      { trash, folders: trash ? d.folders : [] },
+    );
+    if (!r || !r.ok) { kbModalErr((r && r.error) || '删除失败'); return; }
+    kbModalClose();
+  } finally {
+    KB.modalBusy = false;
+    if (submit) submit.disabled = false;
+  }
+}
 /** 项目行 ⋯ / 侧栏入口统一走这里。弹窗是全局浮层，不切看板页也能开。 */
 function kbProjectDialog(mode, project) {
   setSidebar(true);
@@ -7090,9 +7375,13 @@ function kbProjectDialog(mode, project) {
     const p = project || {};
     KB.projectDialog = {
       mode, projectId: String(p.id || ''), projectName: String(p.label || p.id || ''),
+      snapshot: null,
     };
   }
-  kbModalOpen(mode === 'create' ? 'project' : (mode === 'rename' ? 'project-rename' : 'project-add-folder'));
+  const kind = mode === 'create' ? 'project'
+    : (mode === 'rename' ? 'project-rename'
+      : (mode === 'settings' ? 'project-settings' : 'project-add-folder'));
+  kbModalOpen(kind);
 }
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
@@ -7100,7 +7389,8 @@ function kbModalOpen(kind, presetStatus) {
   KB.modal = kind;
   KB.modalBusy = false;
   KB.modalKey = 'desktop-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind'), projForm = $('#kb-form-project');
+  const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind');
+  const projForm = $('#kb-form-project'), delForm = $('#kb-form-project-del');
   // 每次打开都从空白开始：上一次取消/创建留下的标题、受让人不能带进来
   if (taskForm) {
     taskForm.reset();
@@ -7117,30 +7407,49 @@ function kbModalOpen(kind, presetStatus) {
   if (bindForm) { bindForm.reset(); bindForm.hidden = kind !== 'bind'; }
   // 官方：每次打开都从空白开始，上一次取消/创建留下的名称与文件夹不能带进来
   const isProject = KB_PROJECT_KINDS.includes(kind);
-  const mode = kind === 'project-rename' ? 'rename' : (kind === 'project-add-folder' ? 'add-folder' : 'create');
-  if (kind === 'project') KB.projectDialog = { mode: 'create', projectId: '', projectName: '' };
-  if (projForm) { projForm.reset(); projForm.hidden = !isProject; }
+  const isDelete = kind === 'project-delete';
+  const mode = kind === 'project-rename' ? 'rename'
+    : (kind === 'project-add-folder' ? 'add-folder'
+      : (kind === 'project-settings' ? 'settings' : (isDelete ? 'delete' : 'create')));
+  if (kind === 'project') KB.projectDialog = { mode: 'create', projectId: '', projectName: '', snapshot: null };
+  if (projForm) { projForm.reset(); projForm.hidden = !isProject || isDelete; }
+  if (delForm) { delForm.reset(); delForm.hidden = !isDelete; }
   KB.projFolders = [];
   kbRenderProjectFolders();
   const nameRow = $('#kb-p-name-row'), foldersRow = $('#kb-p-folders-row');
   const addBtn = $('#kb-p-add'), createOnly = $('#kb-p-create-only'), addNote = $('#kb-p-addnote');
-  if (nameRow) nameRow.hidden = mode === 'add-folder';
-  if (foldersRow) foldersRow.hidden = mode !== 'create';
+  const settingsBlock = $('#kb-p-settings');
+  if (nameRow) nameRow.hidden = mode === 'add-folder' || mode === 'delete';
+  if (foldersRow) foldersRow.hidden = (mode !== 'create' && mode !== 'settings');
   if (addBtn) {
     addBtn.hidden = mode === 'rename';
     addBtn.textContent = mode === 'add-folder' ? '＋ 选择文件夹…' : '＋ 添加文件夹…';
   }
   if (createOnly) createOnly.hidden = mode !== 'create';
   if (addNote) addNote.hidden = mode !== 'add-folder';
+  if (settingsBlock) settingsBlock.hidden = mode !== 'settings';
+  // 新建文件夹的入口只在能改文件夹列表的模式里出现（重命名 / 删除都不需要）
+  const mkOpen = $('#kb-p-mkdir-open');
+  if (mkOpen) mkOpen.hidden = mode === 'rename' || mode === 'add-folder' || mode === 'delete';
+  kbMkdirToggle(false);
   if (mode === 'rename') {
     const nameEl = $('#kb-p-name');
     if (nameEl) nameEl.value = (KB.projectDialog && KB.projectDialog.projectName) || '';
+  }
+  if (isProject && !isDelete) {
+    // 绑定一次的点击入口：重开弹窗时重新赋值即可，不会叠加监听
+    if (mkOpen) mkOpen.onclick = () => kbMkdirToggle(true);
+    const mkOk = $('#kb-p-mkdir-ok'), mkCancel = $('#kb-p-mkdir-cancel'), mkInput = $('#kb-p-mkdir-name');
+    if (mkOk) mkOk.onclick = () => kbMkdirSubmit();
+    if (mkCancel) mkCancel.onclick = () => kbMkdirToggle(false);
+    if (mkInput) mkInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); kbMkdirSubmit(); } };
   }
   kbSyncStatusNote();
   kbSyncProjectSelects();
   const title = $('#kb-modal-title');
   const TITLES = { task: '新建任务', bind: '绑定项目', project: '新建项目', board: '新建看板',
-    'project-rename': '重命名项目', 'project-add-folder': '添加文件夹' };
+    'project-rename': '重命名项目', 'project-add-folder': '添加文件夹',
+    'project-settings': '项目设置', 'project-delete': '删除项目' };
   if (title) title.textContent = TITLES[kind] || '新建';
   kbModalErr('');
   const submit = $('#kb-modal-submit');
@@ -7148,16 +7457,23 @@ function kbModalOpen(kind, presetStatus) {
     submit.disabled = false;
     submit.textContent = kind === 'task' ? '创建任务' : (kind === 'bind' ? '保存绑定' :
       (kind === 'project' ? '创建项目' : (kind === 'project-rename' ? '保存名称' :
-        (kind === 'project-add-folder' ? '选择文件夹…' : '创建看板'))));
+        (kind === 'project-add-folder' ? '选择文件夹…'
+          : (kind === 'project-settings' ? '保存设置'
+            : (isDelete ? '删除项目' : '创建看板'))))));
     // 官方 add-folder 模式没有底部提交按钮：选完目录直接写入
     submit.hidden = kind === 'project-add-folder';
+    submit.classList.toggle('danger', isDelete);
   }
+  // 设置 / 删除的字段不随表单静态 HTML 带出来，打开后按项目补一次
+  if (kind === 'project-settings') kbFillProjectSettings();
+  if (isDelete) kbFillProjectDelete();
   kbSyncProjectSubmit();
   kbSyncSelects();
   modal.hidden = false; mask.hidden = false;
   kbSetBackgroundInert(true);
   const first = kind === 'task' ? $('#kb-f-title') : (kind === 'bind' ? $('#kb-b-project') :
-    (kind === 'project-add-folder' ? $('#kb-p-add') : (isProject ? $('#kb-p-name') : $('#kb-b-slug'))));
+    (kind === 'project-add-folder' ? $('#kb-p-add')
+      : (isDelete ? $('#kb-p-del-trash') : (isProject ? $('#kb-p-name') : $('#kb-b-slug')))));
   try { if (first) { first.focus({ preventScroll: true }); if (first.select) first.select(); } } catch {}
 }
 function kbModalClose() {
@@ -7168,8 +7484,9 @@ function kbModalClose() {
   KB.modalBusy = false;
   KB.projFolders = [];
   KB.projectDialog = null;
+  KB.delProject = null;
   const submit = $('#kb-modal-submit');
-  if (submit) submit.hidden = false;
+  if (submit) { submit.hidden = false; submit.classList.remove('danger'); }
   kbSetBackgroundInert(false);
   kbModalErr('');
   // 先解 inert 再 focus（inert 内元素会静默拒绝聚焦）
@@ -7178,6 +7495,9 @@ function kbModalClose() {
 }
 function kbModalSubmit() {
   if (KB.modalBusy || !KB.modal) return Promise.resolve();
+  // 设置 / 删除各有自己的写路径（差量保存、可选移废纸篓），不进看板那套 payload
+  if (KB.modal === 'project-settings') return kbSubmitProjectSettings();
+  if (KB.modal === 'project-delete') return kbSubmitProjectDelete();
   const a = kbApi();
   if (!a || !a.kanbanCreateTask || !a.kanbanCreateBoard) { kbModalErr('此页需要 Hermes 桌面端才能写入看板'); return Promise.resolve(); }
   const kind = KB.modal, key = KB.modalKey;

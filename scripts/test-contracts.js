@@ -1280,7 +1280,8 @@ t('侧栏项目树：数据只来自 /api/profiles/projects/tree 投影，时间
     '渲染与认领集合未共用同一份项目列表');
   assert.ok(appSrc.includes('const claimed = new Set()'), '缺少已归组会话排除集合');
   assert.ok(appSrc.includes('sessionItemEl('), '项目预览行未复用会话行渲染');
-  assert.ok(appSrc.includes("textContent = '其他会话'"), '缺少剩余会话分组标题');
+  assert.ok(appSrc.includes("older: { label: '其他会话'") && appSrc.includes('function dateDividerEl('),
+    '缺少剩余会话分组（今天 / 昨天 / 其他会话）与折叠分隔条');
   // 样式类必须在 styles.css 有规则（CSS class 契约）
   for (const cls of ['.s-proj', '.s-pname', '.s-pcount', '.s-pnew', '.s-pmore',
     '.s-ptoggle', '.s-pcaret', '.s-pempty', '.s-pshow', '.s-psess']) {
@@ -2859,8 +2860,8 @@ t('新建项目弹窗：原生文件夹列表 / 三模式 / 硬性校验 / 自�
     assert.ok(htmlSrc.includes('id="' + id + '"'), 'HTML 缺少 ' + id);
     assert.ok(appSrc.includes("$('#" + id + "')"), 'app.js 未接线 ' + id);
   }
-  assert.ok(/KB_PROJECT_KINDS = \[[^\]]*'project'[^\]]*'project-rename'[^\]]*'project-add-folder'/.test(appSrc),
-    '弹窗三模式定义不全');
+  assert.ok(/KB_PROJECT_KINDS = \[[^\]]*'project'[^\]]*'project-rename'[^\]]*'project-add-folder'[^\]]*'project-settings'[^\]]*'project-delete'/.test(appSrc),
+    '弹窗五种模式定义不全（create / rename / add-folder / settings / delete）');
   assert.ok(appSrc.includes("if (!KB.projFolders.length) { kbModalErr('请至少添加一个文件夹')"),
     '官方硬性校验（名称 + ≥1 文件夹）缺失');
   assert.ok(appSrc.includes('nameEl.value = kbProjectFolderBasename(picked[0])'), '选文件夹未自动命名');
@@ -2891,7 +2892,7 @@ t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', 
     '未以目录名建项目并设为活动');
   assert.ok(appSrc.includes('function openProjectMenu(') && appSrc.includes("more.className = 's-pmore'"),
     '项目行缺少 ⋯ 菜单');
-  for (const act of ['rename', 'add-folder', 'use', 'reveal', 'copy']) {
+  for (const act of ['rename', 'settings', 'add-folder', 'use', 'reveal', 'copy']) {
     assert.ok(appSrc.includes('data-pact="' + act + '"'), '菜单缺少动作 ' + act);
   }
   assert.ok(appSrc.includes("api.projectAction({ op: 'use', id: p.id })"), '设为活动未接写通道');
@@ -2899,7 +2900,7 @@ t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', 
     '本机路径动作缺失');
   assert.ok(appSrc.includes('kbProjectDialog(act, p)'), '重命名 / 加文件夹未复用同一弹窗');
 });
-t('删除项目：官方 projects.delete RPC、两次点击确认、不删磁盘文件', () => {
+t('删除项目：官方 projects.delete RPC、确认弹窗、可选移入废纸篓', () => {
   // CLI 没有 `project delete` 子命令 → 唯一官方写口是 serve 的 projects.delete RPC
   assert.ok(chatSrc.includes("rpc('projects.delete'") && chatSrc.includes('profile: profile.current()'),
     '删除项目未走官方 projects.delete RPC（且必须是 profile-scoped）');
@@ -2907,16 +2908,29 @@ t('删除项目：官方 projects.delete RPC、两次点击确认、不删磁盘
     '删除项目缺少 id 白名单校验');
   assert.ok(chatSrc.includes('async deleteProject(projectId)') && chatSrc.includes('{ ok: true, activeId'),
     '服务层缺少 deleteProject');
-  assert.ok(!chatSrc.includes("rpc(method"), '不得暴露可传任意方法名的通用 RPC 入口');
+  // 项目 RPC 只认冻结白名单里的常量，渲染层传不进任意方法名
+  assert.ok(chatSrc.includes('const PROJECT_RPC = Object.freeze('), '项目 RPC 方法名必须写死成白名单常量');
+  assert.ok(!/rpc\(\s*(String\(|params\.method|o\.method)/.test(chatSrc),
+    '不得把外部传入的方法名直接交给 RPC');
   // 通道：main ↔ preload ↔ renderer
   assert.ok(mainSrc.includes("handle('project:delete'"), '主进程缺少 project:delete');
   assert.ok(preloadSrc.includes("ipcRenderer.invoke('project:delete'"), 'preload 缺少 project:delete');
-  assert.ok(appSrc.includes('api.deleteProject(p.id)'), '删除项目未接通道');
-  // 菜单项 + 破坏性样式 + 二次确认（复用会话删除的 confirm 模式）
+  assert.ok(appSrc.includes('api.deleteProject({ id: p.id, trash:'), '删除项目未接通道（含 trash 开关）');
+  // 菜单项 + 破坏性样式 + 确认弹窗（默认只删记录，勾选才动磁盘）
   assert.ok(/data-pact="delete"[^>]*class="danger"[^>]*>✕ 删除项目…/.test(appSrc), '项目菜单缺少删除入口');
-  assert.ok(appSrc.includes("b.dataset.confirm !== '1'") && appSrc.includes('b.classList.add(\'confirm\')'),
-    '删除项目缺少二次确认');
-  assert.ok(appSrc.includes('只移除项目记录，不删磁盘文件'), '确认文案必须说明不动磁盘文件');
+  assert.ok(appSrc.includes('function kbProjectDeleteDialog(') && appSrc.includes("kbModalOpen('project-delete')"),
+    '删除项目缺少确认弹窗');
+  assert.ok(htmlSrc.includes('id="kb-p-del-trash"'), '缺少「同时移到废纸篓」开关');
+  assert.ok(appSrc.includes("$('#kb-p-del-trash')") && appSrc.includes('trash, folders: trash ? d.folders : []'),
+    '勾选状态没有传到写通道');
+  // 主进程：只移项目自己的文件夹，走 shell.trashItem（可恢复），不用 rm -rf
+  const delHandler = mainSrc.slice(mainSrc.indexOf("handle('project:delete'"),
+    mainSrc.indexOf("handle('app:copy'"));
+  assert.ok(delHandler.includes('shell.trashItem('), '磁盘删除必须走系统废纸篓');
+  assert.ok(!/rm -rf|unlinkSync\(|rmdirSync\(|rmSync\(/.test(delHandler), '项目删除不得直接删文件');
+  assert.ok(delHandler.includes('const allowed = new Set((cur.project.folders || [])'),
+    '移废纸篓前必须核对路径属于该项目');
+  assert.ok(appSrc.includes('默认**不动磁盘'), '确认文案必须说明默认不动磁盘文件');
   // 删完刷新侧栏树，并把落在被删项目里的 cwd 回落
   assert.ok(appSrc.includes('async function deleteProjectFromSidebar('), '缺少删除项目实现');
   assert.ok(appSrc.includes('await refreshSessions(currentSearch())') && appSrc.includes('syncComposerProject();'),
@@ -2970,6 +2984,87 @@ t('创建项目不再跳看板页：弹窗是全局浮层且任意页面可 Esc 
   assert.ok(/if \(kbModalEl && !kbModalEl\.hidden\) \{ kbModalClose\(\); return; \}/.test(esc),
     '非看板页下 Esc 收不掉全局弹窗');
 });
+
+t('侧栏时间分组：今天 / 昨天 / 其他会话，可折叠 + 与项目分组视觉分层', () => {
+  // 分桶：last_active || started_at（与行上日期同源），4 点滚夜；标签只留三档
+  assert.ok(appSrc.includes('const DAY_ROLLOVER_HOUR = 4'), '缺少官方 4 点滚夜规则');
+  assert.ok(appSrc.includes('Number(o.last_active || o.started_at)'), '分桶未按 last_active 优先');
+  for (const [k, label] of [["pinned", '置顶'], ["today", '今天'], ["yesterday", '昨天'], ["older", '其他会话']]) {
+    assert.ok(appSrc.includes(`${k}: { label: '${label}'`), `分桶缺少 ${label}`);
+  }
+  // 折叠：布尔持久化，默认展开；搜索时强制展开，命中不会被折叠藏起来
+  assert.ok(appSrc.includes("const SB_DATE_OPEN_KEY = 'sb-date-open'"), '缺少时间分组折叠状态键');
+  assert.ok(appSrc.includes('function dateGroupOpen(key)') && appSrc.includes('function setDateGroupOpen('),
+    '缺少时间分组折叠读写');
+  assert.ok(appSrc.includes('const open = searching ? true : dateGroupOpen(bucket)'),
+    '搜索时必须展开全部分组');
+  assert.ok(appSrc.includes('if (!searching && !dateGroupOpen(bucket)) continue;'), '折叠后仍在渲染会话行');
+  assert.ok(appSrc.includes('function focusDateToggle('), '折叠后焦点未归还分组标题');
+  // 分隔条结构：标题 + 箭头 + 横线 + 折叠态条数
+  for (const cls of ['s-dtoggle', 's-dlabel', 's-dcaret', 's-drule', 's-dcount']) {
+    assert.ok(appSrc.includes(cls) && cssSrc.includes('.' + cls), '缺少分隔条部件 ' + cls);
+  }
+  for (const cls of ['li.s-div', '[data-bucket="today"]', '[data-bucket="yesterday"]',
+    '[data-bucket="older"]', 'li.s-proj', '.s-pdot']) {
+    assert.ok(cssSrc.includes(cls), '缺少分层样式 ' + cls);
+  }
+  const divCss = cssSrc.slice(cssSrc.indexOf('#session-list li.s-div'), cssSrc.indexOf('li.s-div[data-bucket="older"] .s-drule'));
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(divCss), '时间分组样式出现硬编码色，深色主题会失配');
+  // 项目头升级：色点只接受 #rgb / #rrggbb
+  assert.ok(appSrc.includes('function projectDotHtml(') && appSrc.includes('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/'),
+    '项目色点缺少颜色白名单');
+  assert.ok(appSrc.includes('projectDotHtml(p.color)'), '项目头未渲染色点');
+});
+
+t('新建文件夹 + 项目设置：创建后可继续改，磁盘只做一层 mkdir', () => {
+  // 原生面板也能新建；弹窗里另有「新建文件夹…」入口
+  assert.ok(mainSrc.includes("'createDirectory'"), '原生目录面板未开启「新建文件夹」');
+  assert.ok(htmlSrc.includes('id="kb-p-mkdir-open"') && htmlSrc.includes('id="kb-p-mkdir-name"'),
+    '弹窗缺少新建文件夹入口');
+  assert.ok(appSrc.includes('function kbMkdirToggle(') && appSrc.includes('function kbMkdirSubmit('),
+    '缺少新建文件夹实现');
+  assert.ok(appSrc.includes('a.projectMkdir({ parent, name })'), '新建文件夹未接写通道');
+  assert.ok(appSrc.includes('if (!parent) { kbModalErr('), '没有父目录时未拦住');
+  // 主进程：非递归 mkdir + 名称/路径校验
+  assert.ok(mainSrc.includes("handle('project:mkdir'"), '主进程缺少 project:mkdir');
+  assert.ok(preloadSrc.includes("invoke('project:mkdir'"), 'preload 缺少 project:mkdir');
+  const cli = read('main/services/hermes-project-cli.js');
+  assert.ok(cli.includes('function validateNewFolder(') && cli.includes('fs.mkdirSync(target)'),
+    '缺少一层 mkdir 实现');
+  assert.ok(!cli.includes('recursive: true'), '新建文件夹不得递归造多级目录');
+  assert.ok(cli.includes("n === '.' || n === '..' || /[/\\\\]/.test(n)"), '名称未拦斜杠 / ..');
+  // 设置弹窗：projects.get 预填、projects.update 存名称+描述、文件夹增删/设主
+  assert.ok(htmlSrc.includes('id="kb-p-sdesc"'), '设置弹窗缺少描述字段');
+  assert.ok(appSrc.includes('function kbFillProjectSettings(') && appSrc.includes('a.projectGet(d.projectId)'),
+    '设置弹窗未按 projects.get 预填');
+  assert.ok(appSrc.includes('function kbSubmitProjectSettings('), '缺少设置保存实现');
+  assert.ok(appSrc.includes('a.projectUpdate({ id, ...patch })'), '名称/描述未走 projects.update');
+  for (const op of ['remove', 'add', 'primary']) {
+    assert.ok(appSrc.includes(`a.projectFolder({ op: '${op}', id, path:`), '文件夹维护缺少 op ' + op);
+  }
+  assert.ok(appSrc.includes('if (!KB.projFolders.length) { kbModalErr(\'至少保留一个文件夹\')'),
+    '设置里删空文件夹未拦住');
+  assert.ok(appSrc.includes("if (KB.modal === 'project-settings') return kbSubmitProjectSettings();"),
+    '设置弹窗的提交未分流');
+  // 两个新通道的 main / preload 对齐
+  for (const ch of ['project:get', 'project:update', 'project:folder']) {
+    assert.ok(mainSrc.includes("handle('" + ch + "'"), '主进程缺少 handler ' + ch);
+    assert.ok(preloadSrc.includes("invoke('" + ch + "'"), 'preload 缺少 invoke ' + ch);
+  }
+  assert.ok(chatSrc.includes("get: 'projects.get'") && chatSrc.includes("primary: 'projects.set_primary'"),
+    '项目 RPC 白名单缺方法');
+  assert.ok(chatSrc.includes('function projectInfo('), '缺少项目对象窄化投影');
+  // 样式
+  for (const cls of ['.kb-pactions', '.kb-pmkdir', '.kb-pfold-pri', '.kb-pcheck', '.kb-pdel-list', '.kb-btn.danger']) {
+    assert.ok(cssSrc.includes(cls), '缺少样式规则 ' + cls);
+  }
+  // Demo 桥要能走通新流程
+  const mock = read('renderer/mock-bridge.js');
+  for (const m of ['projectMkdir(', 'projectGet(', 'projectUpdate(', 'projectFolder(']) {
+    assert.ok(mock.includes(m), 'Demo 桥缺少 ' + m);
+  }
+});
+
 
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);

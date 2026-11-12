@@ -685,7 +685,8 @@ function boot() {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: multiple ? '添加文件夹' : '选择文件夹',
       buttonLabel: '添加',
-      properties: multiple ? ['openDirectory', 'multiSelections'] : ['openDirectory'],
+      // createDirectory：macOS 原生面板自带「新建文件夹」，用户不必先到访达里建好
+      properties: multiple ? ['openDirectory', 'multiSelections', 'createDirectory'] : ['openDirectory', 'createDirectory'],
     });
     if (r.canceled || !Array.isArray(r.filePaths) || !r.filePaths.length) return { ok: false, canceled: true };
     const folders = r.filePaths.filter((p) => {
@@ -694,13 +695,47 @@ function boot() {
     }).slice(0, 8);
     return folders.length ? { ok: true, folders } : { ok: false, canceled: true };
   });
+  // 在既有目录下新建空文件夹（弹窗里的「新建文件夹…」）；只建一层，父目录必须存在
+  handle('project:mkdir', (_e, input) => require('./services/hermes-project-cli').createFolder(input || {}));
   // 既有项目的重命名 / 加文件夹 / 设为活动：argv 由服务层白名单拼装，用户点击触发
   handle('project:action', async (_e, input) => {
     return require('./services/hermes-project-cli').projectAction(input || {});
   });
-  // 删除项目：CLI 没有 delete 子命令，官方桌面版走 `projects.delete` RPC。只删项目记录，
-  // 不动磁盘文件；复用常驻 serve 的 WS 连接，方法名在服务层写死。
-  handle('project:delete', (_e, id) => chat.deleteProject(id));
+  // 项目设置弹窗的读写：读完整项目、改名称/描述、维护文件夹（官方 projects.* RPC，方法名写死）
+  handle('project:get', (_e, id) => chat.getProject(id));
+  handle('project:update', (_e, input) => chat.updateProject(input || {}));
+  handle('project:folder', (_e, input) => chat.projectFolder(input || {}));
+  // 删除项目：CLI 没有 delete 子命令，官方桌面版走 `projects.delete` RPC。默认只删项目记录、
+  // 不动磁盘文件；勾选「同时移到废纸篓」时才把**该项目自己的文件夹**逐个 trashItem（可恢复），
+  // 且先读一次项目核对路径，免得渲染层传来任意目录。
+  handle('project:delete', async (_e, input) => {
+    const o = typeof input === 'string' ? { id: input } : (input || {});
+    const id = String(o.id || '');
+    const trash = o.trash === true;
+    if (!trash) return chat.deleteProject(id);
+    const cur = await chat.getProject(id);
+    if (!cur || !cur.ok) return cur || { ok: false, error: '读取项目失败' };
+    const allowed = new Set((cur.project.folders || []).map((f) => f.path));
+    const wanted = (Array.isArray(o.folders) ? o.folders : [])
+      .map((p) => String(p || '')).filter((p) => p.startsWith('/'));
+    if (!wanted.length) return { ok: false, error: '该项目没有可删除的磁盘文件夹' };
+    if (wanted.some((p) => !allowed.has(p))) return { ok: false, error: '文件夹不属于该项目，已取消删除' };
+    const trashed = []; const failed = [];
+    for (const dir of wanted.slice(0, 8)) {
+      try {
+        // 目录早就不在了：没什么可移的，跳过而不是把整个删除拦住
+        if (!fs.existsSync(dir)) continue;
+        if (!fs.statSync(dir).isDirectory()) { failed.push(dir + '（不是文件夹）'); continue; }
+        await shell.trashItem(dir); // 走系统废纸篓：可恢复，绝不做硬删除
+        trashed.push(dir);
+      } catch (e) { failed.push(dir + '：' + String((e && e.message) || e).slice(0, 120)); }
+    }
+    if (failed.length) {
+      return { ok: false, error: '未能全部移到废纸篓，项目记录已保留：' + failed.join('；').slice(0, 300), trashed };
+    }
+    const r = await chat.deleteProject(id);
+    return (r && r.ok) ? { ...r, trashed } : r;
+  });
   handle('app:copy', (_e, text) => {
     const s = String(text || '').slice(0, 512);
     if (!s) return false;

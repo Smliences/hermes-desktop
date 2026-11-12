@@ -25,6 +25,31 @@ const log = require('./logger');
 /** 树投影里的项目 id（slug / p_xxx / 绝对路径）只允许这些字符，且不许 .. 跳出。 */
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 
+/** 项目 RPC 方法名白名单：渲染层的 op/key 只能映射到这几个常量，永远传不进任意方法名。 */
+const PROJECT_RPC = Object.freeze({
+  get: 'projects.get',
+  update: 'projects.update',
+  add: 'projects.add_folder',
+  remove: 'projects.remove_folder',
+  primary: 'projects.set_primary',
+});
+
+/** `projects.get/update/add_folder/…` 回传的项目对象 → 渲染层要的窄形状。
+ *  只留设置弹窗用得到的字段：名称 / 描述 / 主文件夹 / 全部文件夹，别的也不许透出。 */
+function projectInfo(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const s = (v, n) => String(v == null ? '' : v).slice(0, n);
+  const folders = (Array.isArray(o.folders) ? o.folders : []).slice(0, 8).map((f) => {
+    const x = f && typeof f === 'object' ? f : {};
+    return { path: s(x.path, 512), label: s(x.label, 120), isPrimary: x.is_primary === true };
+  }).filter((f) => f.path);
+  return {
+    id: s(o.id, 128), name: s(o.name, 120), description: s(o.description, 400),
+    color: s(o.color, 16), primaryPath: s(o.primary_path, 512),
+    folders,
+  };
+}
+
 /** 附件走网关的三种 RPC：图片可多模态、PDF 解析成页、其余按文件引用。 */
 const ATTACH_LIMIT = 8;
 const RE_IMAGE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif)$/i;
@@ -398,6 +423,58 @@ class ChatChannel {
     } catch (err) {
       const msg = String((err && err.message) || err || '删除失败');
       log.warn('chat', `projects.delete: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /** 读单个项目（官方 `projects.get`）：设置弹窗需要完整字段——名称 / 描述 / 主文件夹 /
+   *  全部文件夹，侧栏树只投影了名字与路径，不够用。 */
+  async getProject(projectId) {
+    return this._projectRpc('get', { id: String(projectId || '').trim() }, '读取项目');
+  }
+
+  /** 改显示字段（官方 `projects.update`）：只放行 name / description / color 三个键，
+   *  空字符串表示清除（与 gateway 契约一致）。 */
+  async updateProject(input) {
+    const o = input || {};
+    const id = String(o.id || '').trim();
+    const patch = {};
+    if (typeof o.name === 'string' && o.name.trim()) patch.name = o.name.trim().slice(0, 80);
+    if (typeof o.description === 'string') patch.description = o.description.slice(0, 400);
+    if (typeof o.color === 'string') patch.color = o.color.slice(0, 16);
+    if (!Object.keys(patch).length) return { ok: false, error: '没有要更新的字段' };
+    return this._projectRpc('update', { id, ...patch }, '保存项目');
+  }
+
+  /** 项目文件夹维护（官方 projects.add_folder / remove_folder / set_primary）。
+   *  op 走白名单，方法名与参数拼装都在这里，渲染层传不进任意 RPC。 */
+  async projectFolder(input) {
+    const o = input || {};
+    const op = String(o.op || '');
+    const path0 = String(o.path || '').trim();
+    if (!path0.startsWith('/') || path0.length > 512) return { ok: false, error: '文件夹需为绝对路径' };
+    if (op === 'add') return this._projectRpc('add', { id: String(o.id || '').trim(), path: path0 }, '添加文件夹');
+    if (op === 'remove') return this._projectRpc('remove', { id: String(o.id || '').trim(), path: path0 }, '移除文件夹');
+    if (op === 'primary') return this._projectRpc('primary', { id: String(o.id || '').trim(), path: path0 }, '设为主文件夹');
+    return { ok: false, error: '不支持的项目文件夹操作' };
+  }
+
+  /** 项目类 RPC 的公共壳：key 只认 PROJECT_RPC 里的常量，id 先校验、补 profile，
+   *  返回的项目对象收敛成渲染层需要的窄形状。 */
+  async _projectRpc(key, params, label) {
+    const method = PROJECT_RPC[String(key || '')];
+    if (!method) return { ok: false, error: '不支持的项目操作' };
+    const id = String((params && params.id) || '').trim();
+    if (!PROJECT_ID_RE.test(id) || id.includes('..')) return { ok: false, error: '项目标识无效' };
+    try {
+      await this._ensureGateway();
+      const gw = this.gateway;
+      if (!gw) return { ok: false, error: 'gateway 连接已重置，请重试' };
+      const res = await gw.rpc(method, { ...params, id, profile: profile.current() }, 20000);
+      return { ok: true, project: projectInfo(res && res.project) };
+    } catch (err) {
+      const msg = String((err && err.message) || err || label || '操作失败');
+      log.warn('chat', `${method}: ${msg}`);
       return { ok: false, error: msg };
     }
   }

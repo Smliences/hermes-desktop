@@ -95,6 +95,38 @@ function projectActionArgv(op, args) {
   return { argv: profile.cliArgs(['project', cli, ...tail]) };
 }
 
+/** 纯函数：新建项目文件夹的入参校验（不碰磁盘）。
+ *  只建一层：父目录必须已存在，名称里不许出现分隔符，避免 '../x' 之类越界。 */
+function validateNewFolder(parent, name) {
+  const p = String(parent || '').trim();
+  const n = String(name || '').trim();
+  if (!p) return { error: '请先选择一个文件夹作为父目录' };
+  if (!p.startsWith('/') || p.length > 512) return { error: '父目录需为绝对路径' };
+  if (!n) return { error: '请填写文件夹名称' };
+  if (n === '.' || n === '..' || /[/\\]/.test(n)) return { error: '名称不能包含斜杠，也不能是 . 或 ..' };
+  if (n.length > 64) return { error: '名称过长（≤64 字符）' };
+  return { parent: p.replace(/\/+$/, ''), name: n };
+}
+
+/** 在既有目录下新建一个空文件夹（原生面板之外的补充入口）。
+ *  非递归 mkdir：父目录不存在直接报错，不在磁盘上乱造多级路径。 */
+function createFolder(input) {
+  const o = input || {};
+  const v = validateNewFolder(o.parent, o.name);
+  if (v.error) return { ok: false, error: v.error };
+  const target = path.join(v.parent, v.name);
+  try {
+    if (!fs.statSync(v.parent).isDirectory()) return { ok: false, error: '父目录不是文件夹' };
+  } catch { return { ok: false, error: '父目录不存在或不可读' }; }
+  try {
+    if (fs.existsSync(target)) return { ok: false, error: '同名文件夹已存在' };
+    fs.mkdirSync(target);
+    return { ok: true, path: target };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e).slice(0, 160) };
+  }
+}
+
 /** 官方 writeProjectIdea：只在文件不存在时写，失败不影响项目本身创建成功。 */
 function writeProjectIdea(dir, idea) {
   const text = String(idea || '').trim();
@@ -156,5 +188,6 @@ function projectAction(input) {
 
 module.exports = {
   createProject, createProjectArgv, projectAction, projectActionArgv,
+  createFolder, validateNewFolder,
   writeProjectIdea, SLUG_RE, MAX_FOLDERS, MAX_IDEA, IDENT_RE, ACTION_CLI,
 };

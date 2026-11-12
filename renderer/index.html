@@ -614,14 +614,23 @@
         <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
         <div class="kb-fnote">列表里没有想要的项目？用「更多操作 → 新建项目…」创建后再绑定。</div>
       </form>
-      <!-- 官方 project-dialog 的三种模式共用这一个弹窗：create / rename / add-folder -->
+      <!-- 官方 project-dialog 的三种模式共用这一个弹窗：create / rename / add-folder / settings -->
       <form id="kb-form-project" class="kb-form" autocomplete="off" hidden>
         <label class="kb-frow" id="kb-p-name-row"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如 Skunkworks" /></label>
         <div class="kb-frow" id="kb-p-folders-row">
           <span>文件夹 <i>必填</i></span>
           <div id="kb-p-folders" class="kb-pfolders" role="list"></div>
+          <div class="kb-pactions">
+            <button id="kb-p-add" class="kb-btn kb-p-add" type="button">＋ 添加文件夹…</button>
+            <button id="kb-p-mkdir-open" class="kb-btn kb-p-add" type="button">＋ 新建文件夹…</button>
+          </div>
+          <div class="kb-pmkdir" id="kb-p-mkdir" hidden>
+            <input id="kb-p-mkdir-name" type="text" maxlength="64" placeholder="文件夹名称" />
+            <button id="kb-p-mkdir-ok" class="kb-btn primary" type="button">创建</button>
+            <button id="kb-p-mkdir-cancel" class="kb-btn" type="button">取消</button>
+          </div>
+          <div class="kb-fnote" id="kb-p-mkdir-hint" hidden></div>
         </div>
-        <button id="kb-p-add" class="kb-btn kb-p-add" type="button">＋ 添加文件夹…</button>
         <div class="kb-p-addnote kb-fnote" id="kb-p-addnote" hidden>选择要加入该项目的文件夹（可多选，已存在的会自动跳过）。选完即写入项目。</div>
         <div id="kb-p-create-only" class="kb-p-create-only">
           <label class="kb-frow"><span>想法 <i>可选</i></span><textarea id="kb-p-idea" rows="2" maxlength="4000" placeholder="这个项目是关于什么的？（保存到主文件夹的 IDEA.md）"></textarea></label>
@@ -634,6 +643,18 @@
           <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
           <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）：第一个文件夹为主仓库，创建后设为活动项目并在此目录打开新会话。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
         </div>
+        <!-- settings 模式：只维护名称 / 描述 / 文件夹，不重建项目 -->
+        <div id="kb-p-settings" hidden>
+          <label class="kb-frow"><span>描述</span><textarea id="kb-p-sdesc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
+          <div class="kb-fnote" id="kb-p-snote">保存后直接写入项目库。第一个文件夹是主仓库，决定新会话与看板 worktree 的根目录；「设为主」只调整顺序与主路径，不动磁盘。</div>
+        </div>
+      </form>
+      <!-- 删除项目：默认只删项目记录；勾选后由主进程把该项目自己的文件夹移到废纸篓 -->
+      <form id="kb-form-project-del" class="kb-form" autocomplete="off" hidden>
+        <div class="kb-fnote" id="kb-p-del-who"></div>
+        <div class="kb-pdel-list" id="kb-p-del-folders"></div>
+        <label class="kb-pcheck"><input id="kb-p-del-trash" type="checkbox" /> 同时把磁盘上的文件夹移到废纸篓</label>
+        <div class="kb-fnote warn" id="kb-p-del-note">勾选后这些文件夹会连同里面的文件一起进废纸篓（可从废纸篓恢复）。不勾选只删除项目记录，磁盘文件、git 仓库与工作树都不动。</div>
       </form>
     </div>
     <div class="kb-modal-foot">

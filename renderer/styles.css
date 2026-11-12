@@ -3090,3 +3090,93 @@ body.kb-dragging * { cursor: grabbing !important; }
 }
 .kb-pchip:hover { background: var(--fill-2); color: var(--text); }
 .kb-p-addnote { margin-top: -4px; }
+
+/* ── 侧栏时间分组：今天 / 昨天 / 其他会话（可折叠分隔条） ─────────────────────
+   项目分组是「带底色的卡片头」，时间分组是「小写字 + 细横线」的扁平分隔条，
+   两者一眼能分开；越近的分组字重/对比越强，折叠后右侧显示条数。 */
+#session-list li.s-div {
+  min-height: 24px; margin: 6px 0 2px; padding: 0; cursor: default; background: transparent;
+}
+#session-list li.s-div:hover { background: transparent; }
+#session-list .s-dtoggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px;
+  padding: 0 4px; border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--caption); font: 500 10.5px/1.4 var(--sans); letter-spacing: .06em;
+  text-align: left; cursor: pointer;
+}
+#session-list .s-dtoggle:hover { color: var(--text-2); background: color-mix(in srgb, var(--fill-2) 60%, transparent); }
+#session-list .s-dtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#session-list .s-dlabel { flex-shrink: 0; }
+#session-list .s-drule { flex: 1; min-width: 12px; height: 1px; background: var(--line-2); opacity: .8; }
+#session-list .s-dcount {
+  display: none; flex-shrink: 0; min-width: 16px; text-align: right;
+  font-weight: 400; letter-spacing: 0; color: var(--caption);
+}
+#session-list .s-dtoggle[aria-expanded="false"] .s-dcount { display: inline; }
+#session-list li.s-div[data-bucket="pinned"] .s-dtoggle { color: var(--text-2); font-weight: 600; letter-spacing: .06em; }
+#session-list li.s-div[data-bucket="today"] .s-dtoggle { color: var(--text-2); font-weight: 600; letter-spacing: .04em; }
+#session-list li.s-div[data-bucket="yesterday"] .s-dtoggle { color: var(--caption); font-weight: 600; }
+#session-list li.s-div[data-bucket="older"] .s-dtoggle { color: var(--caption); font-weight: 500; letter-spacing: .08em; }
+#session-list li.s-div[data-bucket="older"] .s-drule { opacity: .5; }
+/* 折叠箭头：边框三角（不依赖字体字形），展开 90°；平时淡出，悬停/聚焦/折叠时显形 */
+#session-list .s-dcaret {
+  width: 10px; height: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .12s, transform .12s;
+}
+#session-list .s-dcaret::before {
+  content: ''; width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+#session-list .s-dtoggle[aria-expanded="true"] .s-dcaret { transform: rotate(90deg); }
+#session-list .s-dtoggle[aria-expanded="false"] .s-dcaret { opacity: .7; }
+#session-list li.s-div:hover .s-dcaret,
+#session-list .s-dtoggle:focus-visible .s-dcaret { opacity: .7; }
+/* 项目分组头：轻微底色的「卡片头」，与时间分隔条分属不同视觉层 */
+#session-list li.s-proj {
+  margin: 4px 0 2px; padding: 2px 4px 2px 6px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--fill-2) 55%, transparent);
+}
+#session-list li.s-proj:hover { background: color-mix(in srgb, var(--fill-2) 85%, transparent); color: var(--text); }
+#session-list .s-pname { font-size: 12.5px; font-weight: 600; color: var(--text); letter-spacing: 0; }
+#session-list .s-pcount { font-size: 10px; font-weight: 500; }
+#session-list .s-pdot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--line-2) 80%, transparent);
+}
+
+/* ── 项目设置 / 新建文件夹 / 删除项目（弹窗内的补充控件） ─────────────────── */
+.kb-pactions { display: flex; flex-wrap: wrap; gap: 8px; }
+.kb-pmkdir { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.kb-pmkdir[hidden] { display: none; }
+.kb-pmkdir input { flex: 1; min-width: 0; height: 30px; }
+.kb-pmkdir .kb-btn { height: 30px; padding: 0 10px; font-size: 11.5px; flex-shrink: 0; }
+.kb-pfold-pri {
+  flex-shrink: 0; padding: 2px 6px; border: 1px solid var(--line-2); border-radius: var(--r-xs);
+  background: transparent; color: var(--text-2); font: 400 10px/1.4 var(--sans); cursor: pointer;
+}
+.kb-pfold-pri:hover { color: var(--text); background: var(--fill-3); }
+.kb-pfold-pri:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kb-pcheck {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  color: var(--text-2); font: 400 12px/1.5 var(--sans);
+}
+/* 自绘复选框：accent-color 在无头/深色下容易画成实心方块，勾选态看不清 */
+.kb-pcheck input {
+  appearance: none; -webkit-appearance: none; margin: 0; position: relative;
+  width: 14px; height: 14px; flex-shrink: 0; border: 1px solid var(--line-2);
+  border-radius: var(--r-xs); background: var(--canvas); cursor: pointer;
+}
+.kb-pcheck input:checked { background: var(--red); border-color: var(--red); }
+.kb-pcheck input:checked::after {
+  content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+  border: solid var(--canvas); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.kb-pcheck input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kb-pdel-list { display: flex; flex-direction: column; gap: 6px; }
+.kb-btn.danger { border-color: color-mix(in srgb, var(--red) 45%, var(--line-2)); color: var(--red); }
+.kb-btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
+/* 危险主按钮：红底反白，绝不能沿用 .primary 的蓝底 + 红字（红压蓝几乎不可读） */
+.kb-btn.primary.danger { background: var(--red); border-color: var(--red); color: var(--canvas); }
+.kb-btn.primary.danger:hover { opacity: .9; background: var(--red); }

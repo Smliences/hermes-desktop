@@ -1647,6 +1647,88 @@ async function run() {
     assert.ok(String(r.error || '').length > 0);
   });
 
+  section('10c. 项目设置：projects.get / update / 文件夹维护走冻结白名单');
+  function projectGw() {
+    const calls = [];
+    return {
+      calls, connected: false, closed: false,
+      onRequest() {}, onEvent() {}, connect() { this.connected = true; }, close() {},
+      rpc(method, params) {
+        calls.push({ method, params });
+        return Promise.resolve({
+          project: {
+            id: params.id, name: 'Demo', slug: 'demo', description: 'd',
+            primary_path: '/tmp/a', folders: [{ path: '/tmp/a', is_primary: true }, { path: '/tmp/b' }],
+            secret: 'never',
+          },
+        });
+      },
+    };
+  }
+  await t('projects.get 返回窄形状：只留设置弹窗要的字段', async () => {
+    const gw = projectGw();
+    const h = makeChat({ gw });
+    const r = await h.chat.getProject('pj_1');
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(Object.keys(r.project).sort(),
+      ['color', 'description', 'folders', 'id', 'name', 'primaryPath']);
+    assert.strictEqual(r.project.folders.length, 2);
+    assert.strictEqual(r.project.folders[0].isPrimary, true);
+    assert.strictEqual(gw.calls[0].method, 'projects.get');
+    assert.ok(String(gw.calls[0].params.profile || '').length > 0, '项目 RPC 必须带 profile');
+  });
+  await t('projects.update 只放行 name / description / color，空 patch 不发 RPC', async () => {
+    const gw = projectGw();
+    const h = makeChat({ gw });
+    const empty = await h.chat.updateProject({ id: 'pj_1' });
+    assert.strictEqual(empty.ok, false);
+    assert.strictEqual(gw.calls.length, 0, '空 patch 不得发 RPC');
+    await h.chat.updateProject({ id: 'pj_1', name: '  New  ', description: 'x', evil: 'rm' });
+    const call = gw.calls[0];
+    assert.strictEqual(call.method, 'projects.update');
+    assert.strictEqual(call.params.name, 'New', '名称未 trim');
+    assert.ok(!('evil' in call.params), '未放行的字段泄漏进 RPC');
+  });
+  await t('文件夹维护：op 白名单 + 绝对路径 + id 校验', async () => {
+    const gw = projectGw();
+    const h = makeChat({ gw });
+    for (const [op, method] of [['add', 'projects.add_folder'], ['remove', 'projects.remove_folder'],
+      ['primary', 'projects.set_primary']]) {
+      const r = await h.chat.projectFolder({ op, id: 'pj_1', path: '/tmp/c' });
+      assert.strictEqual(r.ok, true, op + ' 失败');
+      assert.strictEqual(gw.calls[gw.calls.length - 1].method, method);
+    }
+    const before = gw.calls.length;
+    assert.strictEqual((await h.chat.projectFolder({ op: 'nuke', id: 'pj_1', path: '/tmp/c' })).ok, false);
+    assert.strictEqual((await h.chat.projectFolder({ op: 'add', id: 'pj_1', path: 'relative' })).ok, false);
+    assert.strictEqual((await h.chat.projectFolder({ op: 'add', id: '../x', path: '/tmp/c' })).ok, false);
+    assert.strictEqual(gw.calls.length, before, '非法入参不得发 RPC');
+  });
+
+  await t('新建项目文件夹：一层 mkdir、名称白名单、父目录必须存在', () => {
+    const p = require('../main/services/hermes-project-cli');
+    assert.strictEqual(p.validateNewFolder('', 'x').error, '请先选择一个文件夹作为父目录');
+    assert.ok(String(p.validateNewFolder('relative', 'x').error || '').includes('绝对路径'));
+    assert.ok(String(p.validateNewFolder('/tmp', '').error || '').includes('名称'));
+    for (const bad of ['.', '..', 'a/b', 'a\\b']) {
+      assert.ok(p.validateNewFolder('/tmp', bad).error, '名称未拦下 ' + bad);
+    }
+    assert.ok(String(p.validateNewFolder('/tmp', 'x'.repeat(65)).error || '').includes('过长'));
+    const ok = p.validateNewFolder('/tmp/', 'sub');
+    assert.strictEqual(ok.parent, '/tmp', '父目录尾部斜杠未去掉');
+    assert.ok(String(p.createFolder({ parent: path.join(tmp, 'nope'), name: 'x' }).error || '').includes('不存在'));
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-mkdir-'));
+    try {
+      const r1 = p.createFolder({ parent: base, name: 'made' });
+      assert.strictEqual(r1.ok, true);
+      assert.strictEqual(r1.path, path.join(base, 'made'));
+      assert.ok(fs.statSync(r1.path).isDirectory(), '目录未真的建出来');
+      assert.ok(String(p.createFolder({ parent: base, name: 'made' }).error || '').includes('已存在'));
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   // 清理：仅删除本测试自建的临时目录
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
