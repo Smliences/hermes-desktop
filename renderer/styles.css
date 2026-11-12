@@ -644,6 +644,21 @@ body.resizing #sidebar { transition: none; }
   border-color: color-mix(in srgb, var(--blue) 35%, var(--line-2));
   background: color-mix(in srgb, var(--blue) 7%, var(--canvas));
 }
+/* 项目选择：紧邻权限胶囊的同高 pill。host 只占位，描边 / 背景 / 焦点由内部 trigger 承载；
+   颜色全走双主题 token，字号跟随 --ui-fs 单一旋钮。 */
+.ui-select.cr-project {
+  flex: 0 1 auto; min-width: 108px; max-width: 168px; height: 32px;
+}
+.cr-project .us-trigger {
+  height: 32px; padding: 0 11px; gap: 5px; border-radius: 999px;
+  border-color: var(--line-2); background: var(--canvas); color: var(--text-2);
+  font-size: var(--fs-sm); line-height: 1;
+}
+.cr-project .us-trigger:hover { background: var(--fill-2); border-color: var(--n-300); color: var(--text); }
+.cr-project .us-trigger:focus-visible, .ui-select.cr-project:focus-within .us-trigger {
+  border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft);
+}
+.cr-project .us-value.is-placeholder { color: var(--caption); }
 .cr-spacer { flex: 1; }
 .chip { font-size: 11.5px; color: var(--text-2); background: var(--fill-2); border-radius: var(--r-xs); padding: 3px 8px; }
 /* ── chip 下拉菜单（dsh pop 规格：r12、menu-bg、elev 投影） ── */
@@ -2155,6 +2170,7 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 .compact #composer-row { flex-wrap: wrap; row-gap: 6px; }
 .compact #composer-row .cr-spacer { display: none; }
 .compact #composer-row .cr-btn { flex-shrink: 0; padding: 0 6px; font-size: 11.5px; }
+.compact #composer-row .ui-select.cr-project { flex-shrink: 0; max-width: 132px; }
 .compact #composer-row .send-btn { flex-shrink: 0; margin-left: auto; }
 
 /* 状态条：换行并收起次要计量，避免窄宽下被压成两截 */

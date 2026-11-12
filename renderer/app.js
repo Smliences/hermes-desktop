@@ -301,6 +301,7 @@ function setActiveTab(id, silent) {
   closeSubpages();
   document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   renderTabs(); renderChat(); renderSessions(); updateStatus();
+  syncComposerProject(); // 项目下拉按当前页签的 cwd 回填
   if (typeof restoreDraftFor === 'function') restoreDraftFor(state.tabs.find((x) => x.id === id));
   if (!silent && hasNative) api.tabState(id).then((st) => {
     // 必须按发起请求的 tabId 落地：A→B 快速切换时，A 的响应不能写进 B
@@ -376,6 +377,7 @@ async function refreshSessions(search = '') {
     } else {
       state.projectsTreeOk = false;
     }
+    syncComposerProject(); // 树刷新后同步候选（冷启自愈落地时也走这里）
     renderSessions(q);
   } catch (e) { state.projectsTreeOk = false; console.warn('sessions', e); }
 }
@@ -395,7 +397,7 @@ function ensureSidebarTree() {
       state.projectsTree = sidebarProjectNodes(r.projects);
       state.projectsTreeOk = true;
       sidebarTreeRetry = 0;
-      try { renderSessions(currentSearch()); } catch {}
+      try { renderSessions(currentSearch()); syncComposerProject(); } catch {}
       return;
     }
     ensureSidebarTree();
@@ -459,7 +461,45 @@ function newTabInProject(projectPath) {
   const p = String(projectPath || '');
   const t = newTab();
   if (p.startsWith('/')) t.cwd = p;
+  syncComposerProject();
   $('#input').focus();
+}
+/** composer 项目下拉：候选 = 侧栏项目树里的显式项目，value 用项目根绝对路径。 */
+function composerProjectOptions() {
+  return (Array.isArray(state.projectsTree) ? state.projectsTree : [])
+    .map((p) => ({ value: String((p && p.path) || ''), label: String((p && (p.label || p.id)) || '') }))
+    .filter((x) => x.value.startsWith('/') && x.label);
+}
+/** 下拉显示跟随当前页签：tab.cwd 精确命中项目根，或落在项目子目录时取最长前缀命中。 */
+function syncComposerProject() {
+  const el = $('#chip-project');
+  if (!el || typeof el.setOptions !== 'function') return;
+  const items = composerProjectOptions();
+  el.setOptions(items, '选择项目');
+  const cwd = String((activeTab() && activeTab().cwd) || '');
+  const exact = items.find((i) => i.value === cwd);
+  const nested = items.filter((i) => cwd.startsWith(i.value.replace(/\/+$/, '') + '/'))
+    .sort((a, b) => b.value.length - a.value.length)[0];
+  el.value = (exact || nested || {}).value || '';
+}
+/** 选中项目 = 设定本会话工作目录（首轮 session.create 的 cwd）。
+ *  CLI 没有改既有会话归属的写接口，已开始的会话只能在该项目另开一个页签。 */
+function applyComposerProject(value) {
+  const tab = activeTab();
+  if (!tab) return;
+  const path = String(value || '');
+  if (path && !composerProjectOptions().some((i) => i.value === path)) return;
+  if (!tab.sessionId) {
+    if (path) tab.cwd = path; else delete tab.cwd;
+    toast(path ? '已选择项目，本会话将在项目目录启动' : '已恢复默认工作目录', 1800);
+  } else if (path) {
+    newTabInProject(path);
+    toast('已在所选项目新建会话', 1800);
+  } else {
+    newTab();
+    toast('已新建默认目录会话', 1800);
+  }
+  syncComposerProject();
 }
 function renderSessions(q = '') {
   const ul = $('#session-list'); ul.innerHTML = '';
@@ -1776,6 +1816,8 @@ $('#chip-yolo').onclick = () => {
   toast(state.config.yolo ? '已开启：本会话跳过危险命令审批' : '已恢复审批模式', 1600);
   if (hasNative) api.setConfig({ yolo: state.config.yolo });
 };
+// 项目选择：与审批模式同组；change 由自绘下拉派发（ui-select.js 的 _pick）
+$('#chip-project').addEventListener('change', (e) => applyComposerProject(e.target.value));
 
 /* ---------- 对话/轨迹 视图切换 ---------- */
 document.querySelectorAll('.vt').forEach((b) => {
@@ -7336,6 +7378,7 @@ async function init() {
     // 菜单「消息平台」是整页入口，不再被 serve 状态文字覆盖
   }
   syncComposerState();
+  syncComposerProject(); // 首屏把项目下拉的候选与当前页签状态落地
   // 非阻断：启动即核对桌面端模型与 CLI 默认是否漂移；切 profile 会 reload 重跑
   syncModelDrift(true);
   // 球下拉里选了别的 profile 的会话：doSwitchProfile 重载后在这里补上打开动作。

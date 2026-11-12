@@ -2859,6 +2859,37 @@ t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', 
     '本机路径动作缺失');
   assert.ok(appSrc.includes('kbProjectDialog(act, p)'), '重命名 / 加文件夹未复用同一弹窗');
 });
+t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、cwd 写口', () => {
+  // 位置：权限胶囊之后、spacer 之前，属于左侧工具组
+  assert.ok(/id="chip-yolo"[\s\S]{0,400}?id="chip-project"[\s\S]{0,300}?class="cr-spacer"/.test(htmlSrc),
+    '项目下拉没有紧挨权限胶囊');
+  assert.ok(/<hm-select id="chip-project"[^>]*aria-label=/.test(htmlSrc), '项目下拉缺少无障碍名');
+  assert.ok(/id="chip-project"[^>]*placeholder="选择项目"/.test(htmlSrc), '缺少空值占位（默认工作目录）');
+  for (const cls of ['.ui-select.cr-project', '.cr-project .us-trigger', '.cr-project .us-trigger:hover',
+    '.cr-project .us-value.is-placeholder', '.compact #composer-row .ui-select.cr-project']) {
+    assert.ok(cssSrc.includes(cls), '缺少样式规则 ' + cls);
+  }
+  const start = cssSrc.indexOf('.ui-select.cr-project');
+  const end = cssSrc.indexOf('.cr-spacer { flex: 1; }', start);
+  const block = cssSrc.slice(start, end > start ? end : start + 1200);
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(block), '项目下拉出现硬编码色，深色主题会失配');
+  assert.ok(/font-size:\s*var\(--fs-sm\)/.test(block), '字号未跟随 --ui-fs 单一旋钮');
+  assert.ok(/height:\s*32px/.test(block) && /border-radius:\s*999px/.test(block), '未按权限胶囊的 32px pill 对齐');
+  // 数据 / 行为：候选来自侧栏项目树，选中写 tab.cwd，已开始的会话另开项目页签
+  for (const fn of ['composerProjectOptions(', 'syncComposerProject(', 'applyComposerProject(']) {
+    assert.ok(appSrc.includes('function ' + fn), '缺少函数 ' + fn);
+  }
+  assert.ok(appSrc.includes('state.projectsTree'), '候选未复用侧栏项目树');
+  assert.ok(appSrc.includes("$('#chip-project').addEventListener('change'"), 'change 未接线');
+  assert.ok(appSrc.includes('if (path) tab.cwd = path; else delete tab.cwd;'), '未把项目根写进 / 清出 tab.cwd');
+  assert.ok(appSrc.includes('if (!tab.sessionId)') && appSrc.includes('newTabInProject(path)'),
+    '已开始的会话未在该项目另开页签（CLI 无改归属的写接口）');
+  const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
+  assert.ok(setTab.includes('syncComposerProject()'), '切换页签未回填下拉显示');
+  const refresh = appSrc.slice(appSrc.indexOf('async function refreshSessions('), appSrc.indexOf('/** 后端冷启'));
+  assert.ok(refresh.includes('syncComposerProject()'), '项目树刷新后未同步候选');
+});
+
 t('创建项目不再跳看板页：弹窗是全局浮层且任意页面可 Esc 关闭', () => {
   const frameEnd = htmlSrc.indexOf('  </div>\n\n  <!-- ══════════ 新建弹窗');
   const mask = htmlSrc.indexOf('id="kb-modal-mask"');

@@ -167,6 +167,10 @@
           <div id="composer-row">
             <button id="btn-attach" class="cr-icon" title="附加图片、PDF 或文件" aria-label="添加附件"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2V14" stroke="currentColor"></path><path d="M2 8H14" stroke="currentColor"></path></svg></button>
             <button id="chip-yolo" class="cr-pill" title="绕过危险命令审批（仅本会话）" aria-pressed="false">⊙ 审批模式</button>
+            <!-- 项目选择：与权限胶囊同组的 pill 型自绘下拉，空值 = 默认工作目录 -->
+            <hm-select id="chip-project" class="ui-select cr-project" placeholder="选择项目"
+              aria-label="选择项目（决定本会话的工作目录）"
+              title="选择项目：本会话在该项目目录启动；已开始的会话会另开一个项目会话"><option value="">选择项目</option></hm-select>
             <div class="cr-spacer"></div>
             <button id="chip-model" class="cr-btn cr-model" title="切换模型 / 思考程度">请选择模型 ⌄</button>
             <button id="btn-stop" class="stop-btn" hidden title="停止" aria-label="停止生成"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1" fill="currentColor"></rect></svg></button>
