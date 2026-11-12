@@ -240,6 +240,27 @@
       t.status = 'running'; t.started_at = Math.floor(Date.now() / 1000); KB_EVT += 1;
       return { ok: true, dispatched: true, reason: '' };
     },
+    // 拆解：Demo 里不真的调模型，把收集箱卡片改成「根任务 + 2 个子任务」的可视结果，
+    // 让「确认卡 → 在途 → 根任务换列 → 子任务出现」这条链路能在浏览器里走完。
+    async kanbanDecompose(taskId, opts = {}) {
+      if (!opts || opts.confirm !== true) return { ok: false, error: '拆解会调用辅助模型并产生费用，需要先确认' };
+      const root = KB_TASKS.find((x) => x.id === taskId);
+      if (!root) return { ok: false, reason: '任务不存在（可能已被删除）' };
+      if (root.status !== 'triage') {
+        return { ok: false, reason: `只有收集箱里的任务能拆解；这张已经离开收集箱` };
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const kids = ['梳理现状并列出约束', '按方案实现并补测试'].map((title, i) => ({
+        ...root, id: `t_demo_${Math.random().toString(36).slice(2, 8)}${i}`,
+        title, status: 'todo', assignee: root.assignee || 'default',
+        created_at: now, started_at: 0, comment_count: 0, progress: 0,
+      }));
+      KB_TASKS.push(...kids);
+      root.status = 'todo';
+      KB_EVT += 1;
+      return { ok: true, generation: 1, taskId: root.id, fanout: true, single: false,
+        childIds: kids.map((k) => k.id), newTitle: root.title, reason: '' };
+    },
     async kanbanActiveWorkers() {
       const ws = KB_TASKS.filter((t) => t.status === 'running').map((t, i) => ({
         run_id: i + 1, task_id: t.id, task_title: t.title, task_status: 'running',

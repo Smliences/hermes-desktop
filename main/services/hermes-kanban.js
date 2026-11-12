@@ -20,8 +20,13 @@
  *     （并发请求直接拒绝）。派发结果里的 workspace 路径与 worker PID 一律不透出。
  *     「派发这一张」（dispatchTask）额外先在 dry_run 里确认它是队首，
  *     否则真派发会先唤醒更早的卡片 —— 那种情况一律不写库。
- *   - 明确不放行：decompose、specify、estimate、bulk、reclaim、terminate、
- *     任意其它状态推进、orchestration 配置写入、看板切换（switch 恒为 false）。
+ *   - 明确不放行：specify、estimate、bulk、reclaim、terminate、
+ *     任意其它状态推进、orchestration 配置写入（只读推导在 hermes-kanban-mode.js）、
+ *     看板切换（switch 恒为 false）。
+ *   - 唯一会花 LLM 钱的写路径是「拆解此任务」（POST /tasks/:id/decompose）。
+ *     它调用 CLI 的 auxiliary.kanban_decomposer，最长 180s：因此单独给它
+ *     200s 预算（不能套用 6s 的常规超时），并且**必须显式 confirm === true**
+ *     才发请求 —— 渲染层要过一次二次确认卡，任何顺手调用都写不进来。
  */
 const http = require('http');
 const log = require('./logger');
@@ -32,6 +37,8 @@ const PROFILE_BASE = '/api/profiles';
 /** 请求前缀白名单：requestJSON 只接受这两个值，渲染层无法指定任意路径前缀。 */
 const BASES = Object.freeze([PLUGIN_BASE, PROFILE_BASE]);
 const TIMEOUT_MS = 6000;
+/** 拆解走辅助模型（CLI 侧超时 180s），常规 6s 预算必然半路掐断。 */
+const DECOMPOSE_TIMEOUT_MS = 200000;
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_WRITE_BODY = 32 * 1024;
 const MAX_TEXT = 20000;
@@ -215,6 +222,10 @@ function buildWritePath(op, params = {}) {
       return '/boards/' + encodeURIComponent(String(p.slug)) + suffix;
     // 编排开关（config.yaml 的 kanban 段）：CLI 侧是 PUT，不是 POST。
     case 'orchestration': return '/orchestration';
+    // 拆解：CLI 侧 POST /tasks/{id}/decompose（body 只有可选 author，这里恒发 {}）。
+    case 'decompose':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/decompose' + suffix;
     default: return null;
   }
 }
@@ -317,10 +328,12 @@ function projectOrchestration(data) {
   };
 }
 
-/** 单次 loopback 请求（GET 读 / POST·PATCH·PUT·DELETE 白名单写）。永不 throw。 */
-function requestJSON(info, method, pathWithQuery, body, base) {
+/** 单次 loopback 请求（GET 读 / POST·PATCH·PUT·DELETE 白名单写）。永不 throw。
+ *  timeoutMs 只允许放大到本模块给出的常量，渲染层无法传任意超时。 */
+function requestJSON(info, method, pathWithQuery, body, base, timeoutMs) {
   // 前缀只允许两个白名单值；undefined 兼容旧调用 = 看板插件路由。
   const prefix = BASES.includes(base) ? base : PLUGIN_BASE;
+  const budget = timeoutMs === DECOMPOSE_TIMEOUT_MS ? DECOMPOSE_TIMEOUT_MS : TIMEOUT_MS;
   return new Promise((resolve) => {
     if (!validInfo(info) || typeof pathWithQuery !== 'string' || !pathWithQuery.startsWith('/')
         || (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE')) {
@@ -342,7 +355,7 @@ function requestJSON(info, method, pathWithQuery, body, base) {
     const hardTimer = setTimeout(() => {
       try { req && req.destroy(); } catch {}
       finish({ ok: false, error: '看板请求超时' });
-    }, TIMEOUT_MS + 1500);
+    }, budget + 1500);
     try {
       req = http.request({
         host: '127.0.0.1',
@@ -389,7 +402,7 @@ function requestJSON(info, method, pathWithQuery, body, base) {
           catch { finish({ ok: false, status, error: '看板返回的不是有效 JSON' }); }
         });
       });
-      req.setTimeout(TIMEOUT_MS, () => {
+      req.setTimeout(budget, () => {
         try { req.destroy(); } catch {}
         finish({ ok: false, error: '看板请求超时' });
       });
@@ -409,8 +422,8 @@ function requestJSON(info, method, pathWithQuery, body, base) {
 function getJSON(info, pathWithQuery, base) {
   return requestJSON(info, 'GET', pathWithQuery, null, base);
 }
-function postJSON(info, pathWithQuery, body) {
-  return requestJSON(info, 'POST', pathWithQuery, body);
+function postJSON(info, pathWithQuery, body, timeoutMs) {
+  return requestJSON(info, 'POST', pathWithQuery, body, undefined, timeoutMs);
 }
 function patchJSON(info, pathWithQuery, body) {
   return requestJSON(info, 'PATCH', pathWithQuery, body);
@@ -559,6 +572,43 @@ function projectDispatch(data) {
   }).filter((x) => x.taskId);
   return out;
 }
+/**
+ * 拆解结果的英文 reason → 中文。CLI 的「预期失败」走 HTTP 200 + ok:false，
+ * 原样把 `task is not in triage (status='ready')` 拍到界面上等于没解释。
+ * 未命中映射的一律保留原文（诊断信息不能被吞掉）。
+ */
+const DECOMPOSE_REASON = Object.freeze([
+  [/^unknown task id$/i, '任务不存在（可能已被删除）'],
+  [/^task is not in triage/i, '只有收集箱里的任务能拆解；这张已经离开收集箱'],
+  [/^auxiliary client unavailable$/i, '辅助模型未配置：先在 CLI 里配好 auxiliary.kanban_decomposer'],
+  [/^LLM returned malformed JSON$/i, '模型返回的不是合法 JSON，可以直接重试'],
+  [/^LLM error/i, '辅助模型调用失败'],
+]);
+function kbReason(text) {
+  const s = str(text, 200);
+  if (!s) return '';
+  for (const [re, zh] of DECOMPOSE_REASON) if (re.test(s)) return zh;
+  return s;
+}
+/** 拆解响应投影：只透出 UI 需要的字段，child_ids 过白名单 + 条数封顶。 */
+function projectDecompose(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const kids = Array.isArray(d.child_ids) ? d.child_ids : [];
+  // fanout=false 是「模型判断这已是单一任务」的正常结局，不是失败：
+  // 此时根任务被改写并留在原地，reason 是 'single task (no fanout)'。
+  const fanout = !!d.fanout;
+  return {
+    ok: !!d.ok,
+    taskId: str(d.task_id, 80),
+    reason: kbReason(d.reason),
+    // 单任务结局的 reason 是内部短语，界面上另有文案，这里不重复透出
+    single: !!d.ok && !fanout,
+    fanout,
+    childIds: kids.filter((x) => TASK_ID_RE.test(String(x || ''))).slice(0, 40),
+    newTitle: str(d.new_title, 300),
+  };
+}
+
 function projectWorkers(data) {
   const raw = data && typeof data === 'object' ? data : {};
   return {
@@ -586,14 +636,14 @@ function createKanbanClient(getBackendInfo) {
     // projectsTree 走 profiles 路由（/api/profiles/projects/tree），其余都在插件路由下
     return getJSON(snap, path, op === 'projectsTree' ? PROFILE_BASE : undefined);
   }
-  async function write(op, method, params, body) {
+  async function write(op, method, params, body, timeoutMs) {
     const path = buildWritePath(op, params);
     if (!path) return { ok: false, error: '非法的看板写请求' };
     const snap = info();
     if (!validInfo(snap)) return { ok: false, error: '看板服务尚未就绪（桌面端后端未启动）' };
     // 每个白名单方法都必须显式分发：落到 default 会被当成 DELETE 发出去
     // （编排开关 PUT /orchestration 曾因此 404，看起来就是「切换没用」）。
-    if (method === 'POST') return postJSON(snap, path, body);
+    if (method === 'POST') return postJSON(snap, path, body, timeoutMs);
     if (method === 'PATCH') return patchJSON(snap, path, body);
     if (method === 'PUT') return putJSON(snap, path, body);
     return deleteJSON(snap, path);
@@ -738,6 +788,28 @@ function createKanbanClient(getBackendInfo) {
         board: safeObject(b),
         current: str(r.data && r.data.current, 80),
       };
+    },
+
+    /**
+     * 拆解一张收集箱里的任务（POST /tasks/{id}/decompose）。
+     *
+     * 这是本模块**唯一会花 LLM 钱**的写路径：它调用 CLI 的 auxiliary.kanban_decomposer，
+     * 让模型把任务拆成一棵子任务图并按 profile 描述路由。因此：
+     *   - 必须显式 confirm === true 才发请求（渲染层要先过二次确认卡）；
+     *   - 超时单独给 200s（CLI 侧上限 180s），常规 6s 预算会把它半路掐断；
+     *   - CLI 的预期失败是 200 + ok:false，这里原样透出中文 reason 交给界面解释。
+     * 不做任何自动重试：失败一次可能已经计过一次费。
+     */
+    async decomposeTask(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      if (o.confirm !== true) {
+        return { ok: false, error: '拆解会调用辅助模型并产生费用，需要先确认' };
+      }
+      const r = await write('decompose', 'POST', { board: o.board, taskId: id }, {}, DECOMPOSE_TIMEOUT_MS);
+      if (!r.ok) return r;
+      return { ok: true, generation: info().generation || 0, ...projectDecompose(r.data) };
     },
 
     /** 删除任务（UI 侧必须先过二次确认卡）。CLI 会在有子任务等场景自行拒绝。 */

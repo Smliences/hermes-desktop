@@ -76,9 +76,10 @@ const jsIds = uniq([
   ...collect(appSrc, /\$\('#([A-Za-z0-9_-]+)'\)/g),
   ...collect(appSrc, /getElementById\('([A-Za-z0-9_-]+)'\)/g),
 ]);
-// 不算死绑定：前三处本来就有 null 保护；后两个是抽屉渲染时才生成的节点
+// 不算死绑定：前三处本来就有 null 保护；其余是抽屉渲染时才生成的节点
 // （renderKanbanDetail 拼进 #kb-drawer-body，静态 index.html 里查不到）
-const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee', 'kbd-reassign-note']);
+const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee',
+  'kbd-reassign-note', 'kbd-actions-decompose']);
 t(`HTML 有 ${htmlIds.length} 个 id，app.js 引用 ${jsIds.length} 个`, () => {
   assert.ok(htmlIds.length >= 100 && jsIds.length >= 80, 'id/引用数量异常，可能解析失败');
 });
@@ -1005,25 +1006,26 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!appSrc.includes('backend.token'), 'renderer 不应直接读后端 token');
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
-t('读写边界：读固定 GET，写只有八条白名单，危险端点一律不暴露', () => {
+t('读写边界：读固定 GET，写只有九条白名单，危险端点一律不暴露', () => {
   assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null, base)"), '读端点未固定 GET');
   assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
-  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration', 'bindBoard']) {
+  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration', 'bindBoard', 'decompose']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少写端点 ' + op);
   }
   assert.ok(kbSrc.includes('TASK_ID_RE.test(String(p.taskId'), '任务 id 未过正则');
   assert.ok(!kbSrc.includes('execFile') && !kbSrc.includes('child_process') && !kbSrc.includes('spawn('),
     '不得新起 CLI 子进程');
-  assert.ok(!kbSrc.includes('sqlite3') && !kbSrc.includes('kanban.db\''), '不得直读 kanban.db');
+  assert.ok(!kbSrc.includes('sqlite3') && !kbSrc.includes("kanban.db'"), '不得直读 kanban.db');
   for (const op of ['board', 'task', 'run', 'stats', 'assignees', 'boards', 'projects', 'config', 'diagnostics', 'workers']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少只读端点 ' + op);
   }
   assert.ok(kbSrc.includes('default: return null'), '白名单之外必须拒绝');
   // orchestration 是唯一一条带 body 白名单的写端点，body 必须经 cleanOrchestration 投影；
+  // decompose 是唯一一条会花 LLM 钱、且需要超长预算的端点（见下一条测试）；
   // 其余危险端点仍一律不暴露。
-  for (const bad of ["'/decompose'", "'/tasks/bulk'", "'/specify'", "'/estimate'", "'/links'",
+  for (const bad of ["'/tasks/bulk'", "'/specify'", "'/estimate'", "'/links'",
     "'/reclaim'", "'/terminate'"]) {
     assert.ok(!kbSrc.includes(bad), '不得暴露端点 ' + bad);
   }
@@ -1063,6 +1065,32 @@ t('派发边界：默认 dry-run、显式才真跑、上限 4、串行、提交�
   assert.ok(!pdf.includes('workspace_path'), '派发投影出现工作区路径字段');
   assert.ok(pdf.includes('taskId: str(x[0], 80), assignee: str(x[1], 80)'),
     'spawned 三元组必须截断成 id + 受让人');
+});
+t('拆解边界：唯一花 LLM 钱的写路径，必须显式确认 + 独立超长预算', () => {
+  // 这是本模块唯一会调用辅助模型（计费）的写操作，三道闸一道都不能少。
+  assert.ok(kbSrc.includes("case 'decompose':"), '缺少拆解写端点');
+  assert.ok(kbSrc.includes("'/decompose' + suffix"), '拆解路径不固定');
+  assert.ok(kbSrc.includes('const DECOMPOSE_TIMEOUT_MS = 200000'), '拆解必须有自己的超长超时（CLI 侧上限 180s）');
+  // 6s 的常规预算会把 180s 的模型调用半路掐断，且渲染层不能自己传超时
+  assert.ok(kbSrc.includes('timeoutMs === DECOMPOSE_TIMEOUT_MS ? DECOMPOSE_TIMEOUT_MS : TIMEOUT_MS'),
+    '超时预算必须只认模块常量，渲染层不得自选');
+  assert.ok(kbSrc.includes("if (o.confirm !== true)"), '缺少 confirm 闸门：任何顺手调用都能触发计费');
+  // body 恒为 {}：author 由 CLI 自己算，桌面端不往审计字段里写东西
+  assert.ok(kbSrc.includes("write('decompose', 'POST', { board: o.board, taskId: id }, {}, DECOMPOSE_TIMEOUT_MS)"),
+    '拆解请求体必须是空的，超时走常量');
+  // 失败一次可能已经计过一次费，绝不自动重试
+  const fn = kbSrc.slice(kbSrc.indexOf('async decomposeTask('), kbSrc.indexOf('/** 删除任务'));
+  assert.ok(!/retry|for\s*\(|while\s*\(/.test(fn), '拆解不得自动重试');
+  assert.ok(kbSrc.includes('function projectDecompose') && kbSrc.includes('function kbReason'),
+    '缺少拆解结果 / 失败原因的中文投影');
+  // 渲染层：按钮只在收集箱出现 + 必须带 confirm:true，并且全局只允许一次在途
+  assert.ok(appSrc.includes("const canDelete && isTriage") || appSrc.includes('canDelete && isTriage'),
+    '拆解按钮未按 triage 状态显示');
+  assert.ok(appSrc.includes("kanbanDecompose(id, { board: KB.filters.board || '', confirm: true })"),
+    '渲染层调用拆解必须显式 confirm:true');
+  assert.ok(appSrc.includes('KB.decomposeBusy'), '缺少拆解在途锁，连点会拆两次、计两份费');
+  assert.ok(appSrc.includes("cmd: `POST /api/plugins/kanban/tasks/${id}/decompose`"),
+    '确认卡里必须明示将要发出的请求');
 });
 t('新建边界：默认收集箱、幂等键、绝不改 CLI 当前看板指针', () => {
   assert.ok(kbSrc.includes("const CREATE_STATUSES = Object.freeze(['triage', 'ready'])"), '起始状态白名单缺失');
@@ -1258,7 +1286,7 @@ t('拖拽派发样式：幽灵卡穿透指针、投放目标高亮、双主题�
 t('侧栏项目树：数据只来自 /api/profiles/projects/tree 投影，时间分组不重复显示已归组会话', () => {
   // 服务层：唯一走 profiles 前缀的读端点；前缀白名单只放行两个值
   assert.ok(kbSrc.includes("const PROFILE_BASE = '/api/profiles'"), '缺少 profiles 前缀常量');
-  assert.ok(/function requestJSON\(info, method, pathWithQuery, body, base\)/.test(kbSrc),
+  assert.ok(/function requestJSON\(info, method, pathWithQuery, body, base(?:, timeoutMs)?\)/.test(kbSrc),
     'requestJSON 未开放前缀参数');
   assert.ok(kbSrc.includes('BASES.includes(base) ? base : PLUGIN_BASE'), '请求前缀未按白名单收敛');
   assert.ok(kbSrc.includes("case 'projectsTree':"), '缺少项目树读端点');

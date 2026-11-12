@@ -2850,6 +2850,8 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kbd-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 13px; }
 .kbd-actions .kb-btn { height: 28px; font-size: 11.5px; }
 .kbd-actions > span { color: var(--caption); font: 400 10.5px/1.5 var(--sans); }
+/* 拆解的状态行：在途时是进度提示，失败变红（复用同一行，不另开一个提示条） */
+.kbd-actions .kbd-act-note.warn { color: var(--red); }
 .kbd-actions .op-confirm { margin-top: 6px; flex: 1 1 100%; }
 /* 抽屉里的改派下拉：不靠鼠标拖拽也能换人 */
 .kbd-reassign { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

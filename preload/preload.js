@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanDeleteTask: (taskId, opts) => ipcRenderer.invoke('kanban:delete-task', taskId, opts || {}),
   kanbanSubmitTask: (taskId, opts) => ipcRenderer.invoke('kanban:submit-task', taskId, opts || {}),
   kanbanReassign: (taskId, opts) => ipcRenderer.invoke('kanban:reassign', taskId, opts || {}),
+  // 拆解（调辅助模型、会计费）：调用方必须传 { confirm: true }，服务层再独立校验一次
+  kanbanDecompose: (taskId, opts) => ipcRenderer.invoke('kanban:decompose', taskId, opts || {}),
   kanbanDispatchTask: (taskId, opts) => ipcRenderer.invoke('kanban:dispatch-task', taskId, opts || {}),
   kanbanDispatch: (opts) => ipcRenderer.invoke('kanban:dispatch', opts || {}),
   kanbanActiveWorkers: (opts) => ipcRenderer.invoke('kanban:workers', opts || {}),

@@ -1180,6 +1180,7 @@ async function run() {
   const seen = [];
   let force401 = false;
   let force400 = false;
+  let decomposeMode = 'fanout';
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => { raw += c.toString('utf8'); });
@@ -1207,6 +1208,23 @@ async function run() {
           skipped_unassigned: ['t_b'], reclaimed: dry ? 0 : 1, promoted: 0, worker_pid: 4242,
           workspace_path: '/secret', claim_lock: 'lock-x',
         })), 20);
+        return;
+      }
+      if (req.method === 'POST' && p === '/api/plugins/kanban/tasks/t_ab12/decompose') {
+        // CLI 的预期失败走 200 + ok:false，reason 是英文短语；三种结局各留一个夹具
+        if (decomposeMode === 'nottriage') {
+          res.end(JSON.stringify({ ok: false, task_id: 't_ab12', reason: "task is not in triage (status='ready')",
+            fanout: false, child_ids: [] }));
+          return;
+        }
+        if (decomposeMode === 'single') {
+          res.end(JSON.stringify({ ok: true, task_id: 't_ab12', reason: 'single task (no fanout)',
+            fanout: false, child_ids: [], new_title: '改写后的标题' }));
+          return;
+        }
+        // child_ids 里故意塞一个非法 id：投影必须过滤，不能原样回渲染层
+        res.end(JSON.stringify({ ok: true, task_id: 't_ab12', reason: '', fanout: true,
+          child_ids: ['t_c1', 't_c2', '../etc/passwd', 't_c3'], new_title: '根任务' }));
         return;
       }
       if (req.method === 'PATCH' && p === '/api/plugins/kanban/tasks/t_ab12') {
@@ -1311,6 +1329,38 @@ async function run() {
     const cold = kanban.createKanbanClient(() => ({ port: 0, token: '', generation: 0 }));
     const r = await cold.board();
     assert.ok(!r.ok && r.error.includes('未就绪'));
+  });
+  await t('拆解：没确认不发请求、确认后路径与空 body 固定、失败原因中文化', async () => {
+    // 这是唯一会花 LLM 钱的写操作：没有 confirm === true 时必须在本地就拦住，
+    // 连请求都不能发出去（发出去就是一次计费）。
+    const before = seen.length;
+    const no = await client.decomposeTask('t_ab12', {});
+    assert.ok(!no.ok && no.error.includes('需要先确认'), '未确认竟然放行：' + no.error);
+    const bad = await client.decomposeTask('../etc/passwd', { confirm: true });
+    assert.ok(!bad.ok, '非法 id 未拦下');
+    assert.strictEqual(seen.length, before, '未确认 / 非法 id 竟然发出了请求');
+
+    const ok = await client.decomposeTask('t_ab12', { board: 'default', confirm: true });
+    assert.ok(ok.ok, '拆解失败：' + ok.error);
+    assert.strictEqual(ok.fanout, true);
+    assert.strictEqual(ok.single, false);
+    // 非法 child id 必须被过滤，不能原样回渲染层
+    assert.deepStrictEqual(ok.childIds, ['t_c1', 't_c2', 't_c3'], 'child_ids 未过滤非法 id');
+    const req = seen[before];
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.path, '/api/plugins/kanban/tasks/t_ab12/decompose?board=default');
+    assert.strictEqual(req.body, '{}', '拆解 body 必须为空（author 由 CLI 自己算）');
+    assert.strictEqual(req.token, TOKEN, '拆解请求未注入会话 token');
+
+    decomposeMode = 'nottriage';
+    const nt = await client.decomposeTask('t_ab12', { confirm: true });
+    assert.ok(!nt.ok, '非收集箱任务被当成成功');
+    assert.ok(nt.reason.includes('收集箱'), '英文 reason 未中文化：' + nt.reason);
+    decomposeMode = 'single';
+    const one = await client.decomposeTask('t_ab12', { confirm: true });
+    assert.ok(one.ok && one.single === true && one.fanout === false, 'fanout=false 的正常结局被判成失败');
+    assert.strictEqual(one.newTitle, '改写后的标题');
+    decomposeMode = 'fanout';
   });
   await t('三个写操作：方法 / 路径 / header / body 白名单全部正确', async () => {
     const before = seen.length;

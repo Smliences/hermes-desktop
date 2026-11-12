@@ -761,6 +761,12 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.submitTask(taskId, opts || {});
   });
+  // 拆解收集箱任务（调用 CLI 的辅助模型，最长 180s）：渲染层必须先过确认卡，
+  // 服务层再要求显式 confirm === true 才发请求。
+  handle('kanban:decompose', async (_e, taskId, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.decomposeTask(taskId, opts || {});
+  });
   // 拖拽指派：改派受让人（可选同时推进到 ready），不启动任何进程
   handle('kanban:reassign', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };

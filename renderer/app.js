@@ -5836,6 +5836,8 @@ const KB = {
   // 默认列视图：5 组固定成列，一屏看清全貌；网格视图留给窄主区（⋯ 菜单里切）
   view: 'cols', status: '', modal: '', modalKey: '', modalBusy: false,
   dispatch: { open: false, busy: false, epoch: 0 },
+  // 拆解会调用辅助模型（计费、最长 3 分钟）：全局只允许一次在途，防重复计费
+  decomposeBusy: false,
   filters: { q: '', assignee: '', tenant: '', archived: false, board: '' },
   // 页头那枚只读模式标记的数据（null = 还没读到 / 读不到，此时不显示）
   mode: null,
@@ -6864,6 +6866,17 @@ function renderKanbanDetail(d) {
   const dispatchAct = canSubmit
     ? `<div class="kbd-actions" id="kbd-actions"><button class="kb-btn kb-btn-accent" type="button" data-kb-submit="${esc(t.id)}">⚡ 提交派发</button>
         <span>推进到 ready，等待调度器认领</span></div>` : '';
+  // 拆解此任务：CLI 只接受收集箱（triage）里的任务，别处的请求会被后端短路成 ok:false，
+  // 所以按钮也只在这里出现。它会调辅助模型（计费、最长 3 分钟），点击后还要过一次确认卡。
+  // 自动编排下调度器本来就会自己拆，这里给的是「我现在就要拆」的手动入口。
+  const isTriage = String(t.status || '') === 'triage';
+  const decomposeAct = canDelete && isTriage
+    ? `<div class="kbd-actions" id="kbd-actions-decompose">
+        <button class="kb-btn" type="button" data-kb-decompose="${esc(t.id)}"${KB.decomposeBusy ? ' disabled' : ''}>⚗ 拆解此任务</button>
+        <span class="kbd-act-note">${KB.decomposeBusy ? '拆解中…最长 3 分钟' : (KB.mode && KB.mode.mode === 'auto'
+          ? '让辅助模型把这张卡拆成子任务图并按 profile 分派（会产生费用；自动编排本来也会拆）'
+          : '让辅助模型把这张卡拆成子任务图并按 profile 分派（会产生费用）')}</span>
+      </div>` : '';
   // 改派：拖拽的等价入口（拖拽仍在，但抽屉里要有不靠鼠标的路径）。
   // done / archived 再改派没有意义，直接不显示。
   const canReassign = canDelete && !['done', 'archived'].includes(String(t.status || ''));
@@ -6880,6 +6893,7 @@ function renderKanbanDetail(d) {
     <div class="kbd-id">${esc(t.id || '')}</div>
     <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
     <div class="kbd-meta">${meta.join('')}</div>
+    ${decomposeAct}
     ${dispatchAct}
     ${reassignAct}
     ${wsHtml}
@@ -6910,6 +6924,72 @@ function renderKanbanDetail(d) {
     if (cur) sel.value = cur;
   }
 }
+/**
+ * 拆解此任务（抽屉里的 ⚗ 按钮）。
+ *
+ * 这条链路是桌面端唯一会花 LLM 钱的写操作，所以三道闸：
+ *   ① 只在收集箱（triage）任务上出现 —— 后端对其余状态直接 ok:false；
+ *   ② 点击先出确认卡，写清「调辅助模型 / 会计费 / 最长 3 分钟」；
+ *   ③ 服务层再独立校验 confirm === true，任何顺手调用都发不出请求。
+ * 在途期间按钮禁用 + 全局 KB.decomposeBusy，避免连点拆两次、计两份费。
+ */
+function kbDecomposeTask(taskId, host) {
+  const id = String(taskId || '');
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(id)) return;
+  if (KB.decomposeBusy) { toast('已经有一次拆解在进行中', 1600); return; }
+  const a = kbApi();
+  if (!host || !a || !a.kanbanDecompose) { toast('此页需要 Hermes 桌面端才能拆解任务', 1800); return; }
+  opConfirm(host, {
+    title: '拆解这张任务？',
+    cmd: `POST /api/plugins/kanban/tasks/${id}/decompose`,
+    note: '会调用 CLI 的辅助模型（auxiliary.kanban_decomposer）把这张卡拆成一棵子任务图，'
+      + '按各 profile 的描述分派。这一步会消耗 token 并计费，最长可能跑 3 分钟。'
+      + '拆完根任务会离开收集箱，子任务出现在各列；如果模型判断它本来就是单一任务，'
+      + '就只改写标题与规格、留在原地。',
+    confirmLabel: '开始拆解',
+    onGo: async () => {
+      const act = $('#kbd-actions-decompose');
+      const note = act && act.querySelector('.kbd-act-note');
+      const btn = act && act.querySelector('[data-kb-decompose]');
+      const say = (text, bad) => {
+        if (!note) return;
+        note.textContent = text;
+        note.classList.toggle('warn', !!bad);
+      };
+      KB.decomposeBusy = true;
+      if (btn) btn.disabled = true;
+      say('拆解中…最长 3 分钟，可以先去别的列看看', false);
+      try {
+        const r = await a.kanbanDecompose(id, { board: KB.filters.board || '', confirm: true });
+        if (!r || !r.ok) {
+          const why = (r && (r.reason || r.error)) || '未知原因';
+          say('拆解未完成：' + why, true);
+          toast('拆解未完成：' + why, 3200);
+          return;
+        }
+        if (r.fanout && r.childIds && r.childIds.length) {
+          toast(`已拆成 ${r.childIds.length} 个子任务：${r.childIds.join('、')}`, 3600);
+        } else if (r.single) {
+          toast(r.newTitle ? `模型判断这已是单一任务，标题改为「${r.newTitle}」` : '模型判断这已是单一任务，已改写规格', 3600);
+        } else {
+          toast('拆解完成，但模型没有给出子任务', 3000);
+        }
+        await kanbanLoad(true);       // 写后回读：根任务换列 + 子任务出现在各列
+        await openKanbanTask(id, true); // 抽屉保持打开，依赖区能看到新建的子任务
+      } catch (e) {
+        const why = (e && e.message) || '未知错误';
+        say('拆解失败：' + why, true);
+        toast('拆解失败：' + why, 3000);
+      } finally {
+        KB.decomposeBusy = false;
+        // 抽屉可能已被重绘（按钮是新的），禁用态由渲染时读 KB.decomposeBusy 决定，
+        // 这里只兜底恢复仍挂在 DOM 上的那个旧节点
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
+    },
+  });
+}
+
 /** 抽屉里的「保存改派」：只写 assignee，不推进状态（推进 ready 走「提交派发」）。 */
 async function kbReassignTask(taskId, host) {
   if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(String(taskId || ''))) return;
@@ -7935,6 +8015,8 @@ function setupKanban() {
   if (body) body.addEventListener('click', (e) => {
     const sub = e.target.closest && e.target.closest('[data-kb-submit]');
     if (sub) { kbSubmitTask(sub.getAttribute('data-kb-submit'), sub.closest('.kbd-actions') || body); return; }
+    const dec = e.target.closest && e.target.closest('[data-kb-decompose]');
+    if (dec) { kbDecomposeTask(dec.getAttribute('data-kb-decompose'), dec.closest('.kbd-actions') || body); return; }
     const del = e.target.closest && e.target.closest('[data-kb-delete]');
     if (del) { kbDeleteTask(del.getAttribute('data-kb-delete'), del.closest('.kbd-danger')); return; }
     const re = e.target.closest && e.target.closest('[data-kb-reassign]');
