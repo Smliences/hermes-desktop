@@ -130,8 +130,14 @@ class GatewayConnection {
       const p = this.pending.get(msg.id);
       clearTimeout(p.timer);
       this.pending.delete(msg.id);
-      if (msg.error) p.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-      else p.resolve(msg.result);
+      if (msg.error) {
+        // 保留 code / data：gateway 会把可判定的原因放在 data（如 reason=session_busy），
+        // 只扔 message 会让调用方被迫用英文子串去猜。
+        const err = new Error(msg.error.message || JSON.stringify(msg.error));
+        if (msg.error.code != null) err.code = msg.error.code;
+        if (msg.error.data != null) err.data = msg.error.data;
+        p.reject(err);
+      } else p.resolve(msg.result);
     }
   }
 

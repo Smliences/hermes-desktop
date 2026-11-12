@@ -25,6 +25,9 @@ const log = require('./logger');
 /** 树投影里的项目 id（slug / p_xxx / 绝对路径）只允许这些字符，且不许 .. 跳出。 */
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 
+/** 会话 id 与会话库同款白名单（见 hermes-sessions.js 的 delete/rename）。 */
+const SESSION_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
 /** 项目 RPC 方法名白名单：渲染层的 op/key 只能映射到这几个常量，永远传不进任意方法名。 */
 const PROJECT_RPC = Object.freeze({
   get: 'projects.get',
@@ -423,6 +426,40 @@ class ChatChannel {
     } catch (err) {
       const msg = String((err && err.message) || err || '删除失败');
       log.warn('chat', `projects.delete: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /**
+   * 把已存储的会话重新挂到另一个项目的根目录（官方 `session.workspace.move`）：后端换 cwd
+   * 并**替换** git 身份（留着旧 git_repo_root 会把会话锁在它已经离开的项目里），项目树的分组
+   * 随之跟过来。这是「会话建错目录」唯一的补救通道。
+   * 官方语义允许在 turn 运行中移动（live agent 跟着换目录），所以这里不预判 busy。
+   */
+  async moveSession(sessionId, cwd) {
+    const id = String(sessionId || '');
+    const dir = String(cwd || '').trim();
+    if (!SESSION_ID_RE.test(id)) return { ok: false, error: '会话 ID 不合法' };
+    if (!dir.startsWith('/') || dir.length > 512) return { ok: false, error: '目标项目缺少可用的文件夹' };
+    try {
+      await this._ensureGateway();
+      const gw = this.gateway;
+      if (!gw) return { ok: false, error: 'gateway 连接已重置，请重试' };
+      const res = await gw.rpc('session.workspace.move',
+        { session_key: id, cwd: dir, profile: profile.current() }, 30000);
+      return {
+        ok: true,
+        cwd: String((res && res.cwd) || dir),
+        branch: String((res && res.branch) || ''),
+        gitRepoRoot: String((res && res.git_repo_root) || ''),
+      };
+    } catch (err) {
+      const msg = String((err && err.message) || err || '移动失败');
+      log.warn('chat', `session.workspace.move: ${msg}`);
+      // gateway 的原始告警是英文短语，直接弹给用户看不懂
+      if (/does not exist/i.test(msg)) return { ok: false, error: '目标文件夹不存在（可能已被移动或删除）' };
+      if (/session not found/i.test(msg)) return { ok: false, error: '会话不存在（可能已被删除）' };
+      if (/session busy/i.test(msg)) return { ok: false, error: '会话正在生成中，等这一轮结束再移动' };
       return { ok: false, error: msg };
     }
   }

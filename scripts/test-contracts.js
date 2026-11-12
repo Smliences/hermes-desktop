@@ -3066,6 +3066,48 @@ t('新建文件夹 + 项目设置：创建后可继续改，磁盘只做一层 m
 });
 
 
+t('会话移到项目：官方 session.workspace.move + 二级菜单 + 候选过滤', () => {
+  // 服务层：方法名写死、session_key 契约、id / cwd 白名单
+  assert.ok(chatSrc.includes("rpc('session.workspace.move'"), '移动未走官方 session.workspace.move');
+  assert.ok(chatSrc.includes('session_key: id'), '参数必须是 session_key（session.workspace.move 契约）');
+  assert.ok(chatSrc.includes('const SESSION_ID_RE ='), '缺少会话 id 白名单');
+  assert.ok(chatSrc.includes('async moveSession(sessionId, cwd)'), '服务层缺少 moveSession');
+  assert.ok(chatSrc.includes('目标项目缺少可用的文件夹'), '相对路径 / 空 cwd 必须拦掉');
+  assert.ok(chatSrc.includes('目标文件夹不存在') && chatSrc.includes('会话不存在'), '缺少 gateway 英文告警的中文化');
+  // 通道对齐
+  assert.ok(mainSrc.includes("handle('sessions:move'"), '主进程缺少 sessions:move');
+  assert.ok(preloadSrc.includes("invoke('sessions:move'"), 'preload 缺少 sessions:move');
+  assert.ok(appSrc.includes('api.moveSession(s.id, p.path)'), '菜单未接移动通道');
+  // 菜单：一级项 + 二级页
+  assert.ok(appSrc.includes('data-act="move"') && appSrc.includes('⇢ 移到项目'), '会话菜单缺少移到项目入口');
+  assert.ok(appSrc.includes('function openMoveToProjectMenu('), '缺少二级页实现');
+  assert.ok(appSrc.includes("if (act === 'move') { e.stopPropagation(); openMoveToProjectMenu(s, () => openSessionMenu(s, anchor)); return; }"),
+    '二级页必须替换菜单内容并支持返回一级');
+  // 重绘后旧按钮已不在 #session-menu 里，document 的关闭监听器会把这次点击当成「点了外面」
+  assert.ok(appSrc.includes('e.stopPropagation();\n    const b = e.target.closest && e.target.closest(\'button\');'),
+    '二级页的点击必须拦住冒泡，否则菜单刚开就被关掉');
+  // 候选：剔除 Home 桶、当前所属项目、没有根目录的项目
+  assert.ok(appSrc.includes('function sessionProjectId(') && appSrc.includes('p.sessionIds.includes(sid)'),
+    '当前归属必须读树的 sessionIds');
+  assert.ok(appSrc.includes("String(p.id || '') !== cur") && appSrc.includes("String(p.path || '').startsWith('/')"),
+    '候选过滤不完整（当前项目 / 无根目录）');
+  // 移完：页签 cwd 跟着换 + 刷新树与项目下拉
+  assert.ok(appSrc.includes('if (t.sessionId === s.id) t.cwd = r.cwd || p.path;'), '页签 cwd 未跟随移动');
+  assert.ok(appSrc.includes('await refreshSessions(currentSearch());\n    syncComposerProject();'),
+    '移动后未刷新树的归属 / 未同步项目下拉');
+  // 项目对象只经索引回查，路径不进 DOM 属性
+  assert.ok(appSrc.includes('data-move="${i}"'), '项目对象应经索引回查，不得把 id / 路径写进属性');
+  // gateway 客户端保留 code / data（busy 等可判定原因不能被扔掉）
+  assert.ok(read('main/services/gateway-client.js').includes('err.data = msg.error.data'), 'RPC 错误丢了 data');
+  // Demo 桥：移动要让树跟着走，否则 Demo 里看起来「移了没反应」
+  const mockMove = read('renderer/mock-bridge.js');
+  assert.ok(mockMove.includes('async moveSession(sessionId, cwd)'), 'Demo 桥缺少 moveSession');
+  assert.ok(mockMove.includes('DEMO_MOVED_SESSIONS'), 'Demo 桥未让树跟随移动');
+  // 样式
+  assert.ok(cssSrc.includes('.sess-menu-label') && cssSrc.includes('.session-menu button[data-move]'),
+    '缺少二级页样式');
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;

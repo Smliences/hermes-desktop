@@ -351,7 +351,8 @@ async function refreshSessions(search = '') {
   const seq = ++sessionsSeq;
   const q = String(search || '').trim();
   // 项目树与列表并行：项目归组失败不拖累会话列表本身（只降级成纯时间分组）
-  const treeP = (hasNative && typeof api.projectsTree === 'function')
+  // 只看通道是否存在：浏览器 Demo 桥也实现了 projectsTree，别用 hasNative 把它挡在门外
+  const treeP = (typeof api.projectsTree === 'function')
     ? Promise.resolve(api.projectsTree({ previewLimit: 3 })).catch(() => null)
     : Promise.resolve(null);
   try {
@@ -385,7 +386,7 @@ async function refreshSessions(search = '') {
  *  独立拉树、成功即落地并重绘侧栏，不与会话列表的并发代次（sessionsSeq）互相拖累。 */
 let sidebarTreeRetry = 0;
 function ensureSidebarTree() {
-  if (!hasNative || typeof api.projectsTree !== 'function') return;
+  if (typeof api.projectsTree !== 'function') return;
   if (state.projectsTreeOk) { sidebarTreeRetry = 0; return; }
   if (sidebarTreeRetry >= 10) return;
   const n = ++sidebarTreeRetry;
@@ -885,6 +886,57 @@ async function openFolderAsProject() {
   toast(`项目「${name}」已创建并设为活动`, 1800);
   enter();
 }
+/** 会话当前归属的项目 id：树的 sessionIds 是权威来源（Home 桶 / 未被认领返回空）。 */
+function sessionProjectId(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid) return '';
+  const hit = (state.projectsTree || []).find((p) => !p.isNoProject &&
+    Array.isArray(p.sessionIds) && p.sessionIds.includes(sid));
+  return hit ? String(hit.id || '') : '';
+}
+/** 会话菜单的二级页：可移入的显式项目（官方 MoveToProjectItems 的等价）。
+ *  候选剔除当前所属项目、Home 桶与没有根目录的项目（没有 cwd 就无从移入）；
+ *  项目对象只经索引回查，路径不进 DOM 属性。 */
+function openMoveToProjectMenu(s, onBack) {
+  const m = $('#session-menu'); if (!m) return;
+  const cur = sessionProjectId(s.id);
+  const targets = (state.projectsTree || []).filter((p) => !p.isNoProject && !p.isAuto &&
+    String(p.id || '') !== cur && String(p.path || '').startsWith('/'));
+  const rows = targets.length
+    ? targets.map((p, i) => `<button data-move="${i}" title="${esc(p.path || '')}">📁 ${esc(p.label || p.id)}</button>`).join('')
+    : '<button disabled>没有其他可移入的项目</button>';
+  m.innerHTML = '<button data-act="move-back">‹ 返回</button>' +
+    '<div class="sess-menu-label" title="会换掉会话的工作目录，之后的消息在目标项目目录里跑">移到项目</div>' + rows;
+  // 二级页比一级高：往下溢出时整体上移，避免贴着窗口底边被裁
+  const h = m.offsetHeight;
+  const top = parseFloat(m.style.top) || 0;
+  if (top + h > window.innerHeight - 8) m.style.top = Math.max(8, window.innerHeight - 8 - h) + 'px';
+  m.hidden = false;
+  m.onclick = async (e) => {
+    // 本页会重绘菜单内容：不拦住冒泡的话，document 的关闭监听器拿到的 e.target
+    // 已经不在 #session-menu 里（旧按钮被 innerHTML 换掉），会把菜单当成「点了外面」关掉
+    e.stopPropagation();
+    const b = e.target.closest && e.target.closest('button');
+    if (!b || b.disabled) return;
+    if (b.dataset.act === 'move-back') { onBack(); return; }
+    if (b.dataset.move == null) return;
+    const p = targets[Number(b.dataset.move)];
+    if (!p) return;
+    closeSessionMenu();
+    toast(`正在移到「${p.label || p.id}」…`, 1800);
+    let r = null;
+    try { r = await api.moveSession(s.id, p.path); }
+    catch (err) { r = { ok: false, error: (err && err.message) || String(err) }; }
+    if (!r || !r.ok) { toast('移动失败：' + ((r && r.error) || '未知错误'), 3600); return; }
+    // 会话正开在页签里：页签 cwd 一起换，否则接着发消息还会跑回旧目录
+    for (const t of (state.tabs || [])) {
+      if (t.sessionId === s.id) t.cwd = r.cwd || p.path;
+    }
+    await refreshSessions(currentSearch());
+    syncComposerProject();
+    toast(`已移到「${p.label || p.id}」`, 2200);
+  };
+}
 function openSessionMenu(s, anchor) {
   const m = $('#session-menu'); if (!m) return;
   const r = anchor.getBoundingClientRect();
@@ -892,6 +944,7 @@ function openSessionMenu(s, anchor) {
   m.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 300)) + 'px';
   m.innerHTML = `<button data-act="rename">✎ 重命名</button>
     <button data-act="pin">${s.pinned ? '⤓ 取消置顶' : '⤒ 置顶会话'}</button>
+    <button data-act="move">⇢ 移到项目…</button>
     <div class="sess-menu-sep"></div>
     <button data-act="export" data-fmt="md">↧ 导出 Markdown</button>
     <button data-act="export" data-fmt="html">↧ 导出 HTML</button>
@@ -924,6 +977,9 @@ function openSessionMenu(s, anchor) {
       return;
     }
     if (act === 'rename') { closeSessionMenu(); startRename(s, anchor.closest('li')); return; }
+    // 二级页替换当前菜单内容，不关闭浮层；返回时按原锚点重开一级。
+    // stopPropagation 必须加：重绘后 document 的关闭监听器已认不出这个按钮是菜单内的。
+    if (act === 'move') { e.stopPropagation(); openMoveToProjectMenu(s, () => openSessionMenu(s, anchor)); return; }
     if (act === 'export') {
       const fmt = b.dataset.fmt;
       closeSessionMenu();

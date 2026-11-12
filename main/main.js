@@ -545,6 +545,8 @@ function boot() {
   handle('sessions:search', (_e, q) => sessions.searchMessages(q), []);
   handle('sessions:storage', () => sessions.storageStats());
   handle('sessions:delete', (_e, id) => sessions.deleteSession(id));
+  // 会话移到项目：官方 session.workspace.move（换 cwd + git 身份，树分组跟着走）
+  handle('sessions:move', (_e, id, cwd) => chat.moveSession(id, cwd));
   handle('sessions:rename', (_e, id, title) => sessions.renameSession(id, title));
   handle('sessions:pin', (_e, id, pinned) => sessions.setPinned(id, pinned));
   handle('sessions:usage', (_e, id) => sessions.sessionUsage(id), null);

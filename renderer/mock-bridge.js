@@ -186,6 +186,16 @@
       DELETED_PROJECTS.add(pid);
       return { ok: true, activeId: '', trashed: o.trash === true ? (o.folders || []) : [] };
     },
+    // Demo：移到内存覆盖表，projectsTree 随后按它重算 sessionIds（等价于后端换 cwd 后的树）
+    async moveSession(sessionId, cwd) {
+      const sid = String(sessionId || '');
+      const dir = String(cwd || '');
+      if (!sid) return { ok: false, error: '会话 ID 不合法' };
+      const hit = [...DEMO_PROJECTS.entries()].find(([, m]) => m.path === dir);
+      if (!hit) return { ok: false, error: '目标文件夹不存在（可能已被移动或删除）' };
+      DEMO_MOVED_SESSIONS.set(sid, hit[0]);
+      return { ok: true, cwd: dir, branch: '', gitRepoRoot: '' };
+    },
     async copyText() { return true; },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);
@@ -236,19 +246,44 @@
     /* 侧栏项目树 Demo：一个显式项目 + 未归类桶，形状对齐 hermes-kanban.js 的投影 */
     async projectsTree() {
       const now = Math.floor(Date.now() / 1000);
-      const mk = (i) => ({ id: 's_demo_' + i, title: KB_TASKS[i % KB_TASKS.length].title,
-        preview: '演示会话 ' + i, started_at: now - i * 3600, last_active: now - i * 3600 });
-      const demo = { id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '#c2703f', icon: '',
-        isAuto: false, isNoProject: false, sessionCount: 2, lastActive: now,
-        previewSessions: [mk(0), mk(1)], sessionIds: ['s_demo_0', 's_demo_1'] };
-      // 设置弹窗改过的名字要立刻反映到侧栏树
-      const ov = DEMO_PROJECT_OVERRIDE.get(demo.id);
-      if (ov && ov.name) demo.label = ov.name;
-      const home = { id: '__no_project__', label: '未归类', path: null, color: '', icon: '',
-        isAuto: true, isNoProject: true, sessionCount: 1, lastActive: now - 7200,
-        previewSessions: [mk(2)], sessionIds: ['s_demo_2'] };
+      const ids = ['s_demo_0', 's_demo_1', 's_demo_2', 's_demo_3'];
+      // 归属：移动过的以覆盖表为准，否则用默认分配（模拟后端按 cwd 推导的树）
+      const ownerOf = (sid) => DEMO_MOVED_SESSIONS.get(sid) || (sid === 's_demo_2' ? HOME_PROJECT_ID
+        : (sid === 's_demo_3' ? 'pj_demo2' : 'pj_demo1'));
+      // 演示会话用 KB_TASKS 编标题；真实会话（移动过来或被认领的）按本地列表还原
+      const mkRow = (sid, i) => {
+        const real = DEMO_SESSIONS.find((x) => x.id === sid);
+        return real
+          ? { id: real.id, title: real.title, preview: '', started_at: real.started_at, last_active: real.started_at }
+          : { id: sid, title: KB_TASKS[i % KB_TASKS.length].title, preview: '演示会话 ' + i,
+            started_at: now - i * 3600, last_active: now - i * 3600 };
+      };
+      const rowsFor = (pid) => {
+        const base = ids.map((sid, i) => ({ sid, i })).filter((x) => ownerOf(x.sid) === pid);
+        const seen = new Set(base.map((x) => x.sid));
+        // 移动表里指向本项目的真实会话也要出现在 sessionIds 里，侧栏才看得见归属变化
+        const moved = [...DEMO_MOVED_SESSIONS.entries()].filter(([, to]) => to === pid)
+          .map(([sid], k) => ({ sid, i: k })).filter((x) => !seen.has(x.sid));
+        return [...base, ...moved];
+      };
+      const nodeOf = (meta) => {
+        const rows = rowsFor(meta.id);
+        // 设置弹窗改过的名字要立刻反映到侧栏树
+        const ov = DEMO_PROJECT_OVERRIDE.get(meta.id);
+        return { ...meta, label: (ov && ov.name) || meta.label,
+          sessionCount: rows.length, sessionIds: rows.map((x) => x.sid),
+          previewSessions: rows.slice(0, 3).map((x) => mkRow(x.sid, x.i)) };
+      };
+      const tree = [
+        nodeOf({ id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '#c2703f', icon: '',
+          isAuto: false, isNoProject: false, lastActive: now }),
+        nodeOf({ id: 'pj_demo2', label: 'WorkBuddy 桌面端', path: '/tmp/demo-repo-2', color: '#4a7ebb', icon: '',
+          isAuto: false, isNoProject: false, lastActive: now - 1800 }),
+        nodeOf({ id: HOME_PROJECT_ID, label: '未归类', path: null, color: '', icon: '',
+          isAuto: true, isNoProject: true, lastActive: now - 7200 }),
+      ];
       return { ok: true, generation: 1,
-        projects: [demo, home].filter((p) => !DELETED_PROJECTS.has(p.id)), errors: [] };
+        projects: tree.filter((p) => !DELETED_PROJECTS.has(p.id)), errors: [] };
     },
     // 编排模式：Demo 里只是内存态，语义与真实一致（三档是两个布尔的派生值）
     async kanbanOrchestration() {
@@ -289,14 +324,23 @@
   // Demo 内新建过的目录 / 设置弹窗改过的项目（projects.get·update 的返回源）
   const DEMO_MKDIR = new Set();
   const DEMO_PROJECT_OVERRIDE = new Map();
+  // Demo 的显式项目：path 是项目根，「移到项目」按 path 反查目标项目
+  const DEMO_PROJECTS = new Map([
+    ['pj_demo1', { label: 'Hermes Agent', path: '/tmp/demo-repo' }],
+    ['pj_demo2', { label: 'WorkBuddy 桌面端', path: '/tmp/demo-repo-2' }],
+  ]);
+  const HOME_PROJECT_ID = '__no_project__';
+  // 会话 → 目标项目 id：模拟 session.workspace.move 之后后端树的归属变化
+  const DEMO_MOVED_SESSIONS = new Map();
   function demoProject(id) {
     const pid = String(id || '');
     const saved = DEMO_PROJECT_OVERRIDE.get(pid);
     if (saved) return { ...saved, folders: saved.folders.map((f) => ({ ...f })) };
+    const meta = DEMO_PROJECTS.get(pid) || { label: pid, path: '/tmp/demo-repo' };
     return {
-      id: pid, name: pid === 'pj_demo1' ? 'Hermes Agent' : pid, description: '',
-      primaryPath: '/tmp/demo-repo',
-      folders: [{ path: '/tmp/demo-repo', label: '', isPrimary: true }],
+      id: pid, name: meta.label, description: '',
+      primaryPath: meta.path,
+      folders: [{ path: meta.path, label: '', isPrimary: true }],
     };
   }
   const KB_MODE_STATE = {

@@ -3180,3 +3180,14 @@ body.kb-dragging * { cursor: grabbing !important; }
 /* 危险主按钮：红底反白，绝不能沿用 .primary 的蓝底 + 红字（红压蓝几乎不可读） */
 .kb-btn.primary.danger { background: var(--red); border-color: var(--red); color: var(--canvas); }
 .kb-btn.primary.danger:hover { opacity: .9; background: var(--red); }
+
+/* ── 会话菜单二级页：移到项目 ─────────────────────────────────────────── */
+.session-menu .sess-menu-label {
+  padding: 3px 9px 6px; color: var(--caption); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  font: 500 10.5px/1.4 var(--sans); letter-spacing: .04em;
+}
+.session-menu button[data-act="move-back"] { color: var(--text-3); }
+.session-menu button[data-move] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-menu button:disabled { color: var(--caption); cursor: default; }
+.session-menu button:disabled:hover { background: transparent; color: var(--caption); }

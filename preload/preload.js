@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   deleteSession: (id) => ipcRenderer.invoke('sessions:delete', id),
   renameSession: (id, title) => ipcRenderer.invoke('sessions:rename', id, title),
   pinSession: (id, pinned) => ipcRenderer.invoke('sessions:pin', id, pinned),
+  // 移到项目：官方 session.workspace.move，只传会话 id 与目标项目根，方法名在主进程写死
+  moveSession: (id, cwd) => ipcRenderer.invoke('sessions:move', String(id || ''), String(cwd || '')),
   sessionUsage: (id) => ipcRenderer.invoke('sessions:usage', id),
   exportSession: (args) => ipcRenderer.invoke('sessions:export', args),
   revealPath: (p) => ipcRenderer.invoke('app:reveal', p),

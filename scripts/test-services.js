@@ -1647,6 +1647,52 @@ async function run() {
     assert.ok(String(r.error || '').length > 0);
   });
 
+  section('10d. 会话移入项目：session.workspace.move 只换 cwd，方法名写死');
+  function moveGw(res) {
+    const calls = [];
+    return {
+      calls, connected: false, closed: false,
+      onRequest() {}, onEvent() {}, connect() { this.connected = true; }, close() {},
+      rpc(method, params) {
+        calls.push({ method, params });
+        if (res && res.error) return Promise.reject(new Error(res.error));
+        return Promise.resolve(res || { cwd: '/tmp/target', branch: 'main', git_repo_root: '/tmp/target' });
+      },
+    };
+  }
+  await t('移动只调 session.workspace.move，参数是 session_key + cwd + profile', async () => {
+    const gw = moveGw();
+    const h = makeChat({ gw });
+    const r = await h.chat.moveSession('20261104_121117_0c63b7', '/tmp/target');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.cwd, '/tmp/target');
+    assert.strictEqual(r.branch, 'main');
+    assert.strictEqual(r.gitRepoRoot, '/tmp/target');
+    const call = gw.calls.find((c) => c.method === 'session.workspace.move');
+    assert.ok(call, '未调用 session.workspace.move');
+    assert.strictEqual(call.params.session_key, '20261104_121117_0c63b7');
+    assert.strictEqual(call.params.cwd, '/tmp/target');
+    assert.ok(String(call.params.profile || '').length > 0, '移动必须 profile-scoped');
+    assert.ok(!('method' in call.params), '不得透出可传任意方法名的参数');
+  });
+  await t('非法会话 id / 相对 cwd 一律不发 RPC', async () => {
+    for (const [sid, cwd] of [['', '/tmp/x'], ['../evil', '/tmp/x'], ['ok_id', 'relative/dir'], ['ok_id', '']]) {
+      const gw = moveGw();
+      const h = makeChat({ gw });
+      const r = await h.chat.moveSession(sid, cwd);
+      assert.strictEqual(r.ok, false, `应拒绝 ${sid} / ${cwd}`);
+      assert.strictEqual(gw.calls.length, 0, '非法参数不得发起 RPC');
+    }
+  });
+  await t('gateway 的英文告警翻成可读中文（目录不存在 / 会话不存在 / busy）', async () => {
+    const h1 = makeChat({ gw: moveGw({ error: 'working directory does not exist: /tmp/x' }) });
+    assert.ok(/文件夹不存在/.test(String((await h1.chat.moveSession('ok_id', '/tmp/x')).error)));
+    const h2 = makeChat({ gw: moveGw({ error: 'session not found' }) });
+    assert.ok(/会话不存在/.test(String((await h2.chat.moveSession('ok_id', '/tmp/x')).error)));
+    const h3 = makeChat({ gw: moveGw({ error: 'session busy' }) });
+    assert.ok(/生成中/.test(String((await h3.chat.moveSession('ok_id', '/tmp/x')).error)));
+  });
+
   section('10c. 项目设置：projects.get / update / 文件夹维护走冻结白名单');
   function projectGw() {
     const calls = [];
