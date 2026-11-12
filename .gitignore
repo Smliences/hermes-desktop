@@ -10,6 +10,10 @@ build/*.iconset/
 /*.png
 /*.jpg
 
+# 工作区：截图归档与临时草稿不进仓库（notes/ 设计文档进仓库）
+docs/screenshots/
+scratch/
+
 # 系统 / 编辑器噪声
 .DS_Store
 *.log

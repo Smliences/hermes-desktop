@@ -14,6 +14,8 @@ npm run pack:check     # 只跑打包静态自检（图标 / asarUnpack / 依赖
 npm run dist:mac       # 打包 dmg（另有 dist:win / dist:linux；需在普通终端执行）
 ```
 
+> **工作区目录**：`docs/`（设计与截图归档）、`notes/`（过程笔记）、`scratch/`（临时草稿，不入库）、`release/`（打包产物，不入库），详见 `docs/WORKSPACE.md`。
+
 前置依赖是本机已安装的 `hermes` CLI；探测顺序为 `~/.local/bin/hermes` → `/usr/local/bin` → `/opt/homebrew/bin` → `~/bin` → PATH，统一由 `main/services/hermes-bin.js` 解析，**安装包不捆绑 CLI**。
 
 无原生 API 时（例如直接在浏览器打开 `renderer/index.html`），`renderer/mock-bridge.js` 提供 Demo 数据用于纯 UI 预览。
