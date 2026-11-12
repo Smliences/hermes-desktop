@@ -526,6 +526,10 @@ function renderConnStatus(st) {
   let mode = 'connecting';
   if (s.connected) mode = 'ready';
   else if (s.state === 'error' || s.state === 'idle' || s.state === 'stopped') mode = 'offline';
+  // serve 已就绪、但 WS 还没建立过（空闲启动后一条 RPC 都没发）＝ 正常待用，不是故障：
+  // 会话列表读 SQLite、项目树走短连 HTTP，首轮对话才会建 WS。这里若报「连接中」，
+  // 用户会在完全健康的空闲态看到一个永远转不完的蓝点。
+  else if (s.state === 'ready' && !s.linked) mode = 'ready';
   btn.dataset.state = mode;
   // 后端刚可用 = 首屏骨架该收起了：即使一条会话都没有，也已经是确定答案
   // （首次装机的空列表和「还没拉回来」在界面上必须是两种东西）
@@ -534,8 +538,9 @@ function renderConnStatus(st) {
   const label = CONN_TEXT[mode] || '未知';
   const txt = btn.querySelector('.sb-conn-text');
   if (txt) txt.textContent = label;
+  const portTxt = s.port ? `（端口 ${s.port}）` : '';
   btn.title = mode === 'ready'
-    ? `后端已连接${s.port ? '（端口 ' + s.port + '）' : ''}`
+    ? (s.connected ? `后端已连接${portTxt}` : `后端已就绪${portTxt || '，'}，对话时按需建立长连接`)
     : (mode === 'offline' ? '后端未连接，点击重连' : '正在连接后端…');
   btn.setAttribute('aria-label', '后端' + label);
 }
@@ -725,17 +730,27 @@ function composerProjectOptions() {
     .map((p) => ({ value: String((p && p.path) || ''), label: String((p && (p.label || p.id)) || '') }))
     .filter((x) => x.value.startsWith('/') && x.label);
 }
+/** 下拉末尾的动作行（不取值，选中即打开新建项目弹窗）。 */
+const COMPOSER_NEW_PROJECT = '__new_project__';
 /** 下拉显示跟随当前页签：tab.cwd 精确命中项目根，或落在项目子目录时取最长前缀命中。 */
 function syncComposerProject() {
   const el = $('#chip-project');
   if (!el || typeof el.setOptions !== 'function') return;
   const items = composerProjectOptions();
+  // 「＋ 新建项目…」挂在候选末尾：一个项目都没有时，这个下拉里除了占位项就只剩它，
+  // 不至于点开一片空白、还得回头去找侧栏的入口。它 action:true，选中不改变 value。
+  items.push({ value: COMPOSER_NEW_PROJECT, label: '＋ 新建项目…', action: true });
   el.setOptions(items, '选择项目');
   const cwd = String((activeTab() && activeTab().cwd) || '');
   const exact = items.find((i) => i.value === cwd);
-  const nested = items.filter((i) => cwd.startsWith(i.value.replace(/\/+$/, '') + '/'))
+  const nested = items.filter((i) => !i.action && cwd.startsWith(i.value.replace(/\/+$/, '') + '/'))
     .sort((a, b) => b.value.length - a.value.length)[0];
   el.value = (exact || nested || {}).value || '';
+}
+/** 选中动作行：建项目（官方 project-dialog），建完由创建流程自己进项目根开新会话。 */
+function onComposerNewProject() {
+  if (typeof kbProjectDialog !== 'function') { toast('当前环境不支持创建项目', 2200); return; }
+  kbProjectDialog('create');
 }
 /** 选中项目 = 设定本会话工作目录（首轮 session.create 的 cwd）。
  *  CLI 没有改既有会话归属的写接口，已开始的会话只能在该项目另开一个页签。 */
@@ -2273,6 +2288,8 @@ $('#chip-yolo').onclick = () => {
 };
 // 项目选择：与审批模式同组；change 由自绘下拉派发（ui-select.js 的 _pick）
 $('#chip-project').addEventListener('change', (e) => applyComposerProject(e.target.value));
+// 下拉末尾的「＋ 新建项目…」是动作行，不改 value，只派发 select-action
+$('#chip-project').addEventListener('select-action', () => onComposerNewProject());
 
 /* ---------- 对话/轨迹 视图切换 ---------- */
 document.querySelectorAll('.vt').forEach((b) => {

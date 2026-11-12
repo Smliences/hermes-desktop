@@ -598,7 +598,9 @@ class ChatChannel {
     this._emitStatus(!!(st && st.connected));
   }
 
-  /** 连接状态快照：不含 token，只给渲染层判断「能不能用 / 要不要重连」。 */
+  /** 连接状态快照：不含 token，只给渲染层判断「能不能用 / 要不要重连」。
+   *  `linked` = WS 是否**建立过**（现在断没断都算）。空闲启动时应用一条 RPC 都没发过，
+   *  WS 还没建、connected 必然是 false —— 这不是故障，别让状态点显示成「连接中」。 */
   statusSnapshot() {
     const info = this.backendInfo();
     return {
@@ -606,6 +608,7 @@ class ChatChannel {
       port: info.port,
       epoch: info.generation,
       connected: !!(this.gateway && this.gateway.connected),
+      linked: !!this.gateway,
     };
   }
 
@@ -613,7 +616,10 @@ class ChatChannel {
     const info = this.backendInfo();
     const connected = forceConnected === undefined ? !!(this.gateway && this.gateway.connected) : forceConnected;
     try {
-      this._onStatusCb({ state: info.state, port: info.port, epoch: info.generation, connected });
+      this._onStatusCb({
+        state: info.state, port: info.port, epoch: info.generation,
+        connected, linked: !!this.gateway || connected === true,
+      });
     } catch { /* 状态回调异常不影响主流程 */ }
   }
 

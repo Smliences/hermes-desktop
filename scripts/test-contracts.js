@@ -3015,6 +3015,15 @@ t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、
   }
   assert.ok(appSrc.includes('state.projectsTree'), '候选未复用侧栏项目树');
   assert.ok(appSrc.includes("$('#chip-project').addEventListener('change'"), 'change 未接线');
+  // 下拉末尾的「＋ 新建项目…」：动作行不改 value，只派发 select-action
+  assert.ok(appSrc.includes("items.push({ value: COMPOSER_NEW_PROJECT, label: '＋ 新建项目…', action: true })"),
+    '项目下拉缺少「新建项目」动作行');
+  assert.ok(appSrc.includes("$('#chip-project').addEventListener('select-action'"), '动作行未接线');
+  assert.ok(appSrc.includes('function onComposerNewProject(') && appSrc.includes("kbProjectDialog('create')"),
+    '动作行没有打开新建项目弹窗');
+  // 前缀命中要跳过动作行，否则 '__new_project__' 会被当成项目路径参与比较
+  assert.ok(appSrc.includes('const nested = items.filter((i) => !i.action && cwd.startsWith('),
+    '项目前缀匹配未排除动作行');
   assert.ok(appSrc.includes('if (path) tab.cwd = path; else delete tab.cwd;'), '未把项目根写进 / 清出 tab.cwd');
   assert.ok(appSrc.includes('if (!tab.sessionId)') && appSrc.includes('newTabInProject(path)'),
     '已开始的会话未在该项目另开页签（CLI 无改归属的写接口）');
@@ -3022,6 +3031,26 @@ t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、
   assert.ok(setTab.includes('syncComposerProject()'), '切换页签未回填下拉显示');
   const refresh = appSrc.slice(appSrc.indexOf('async function refreshSessions('), appSrc.indexOf('/** 后端冷启'));
   assert.ok(refresh.includes('syncComposerProject()'), '项目树刷新后未同步候选');
+});
+
+t('自绘下拉支持「动作行」：选中不取值，只派发 select-action', () => {
+  const ui = read('renderer/ui-select.js');
+  assert.ok(ui.includes('action: x.action === true'), 'setOptions 未解析 action 标记');
+  assert.ok(ui.includes("row.className = 'us-opt is-action'"), '动作行没有独立样式类');
+  // 动作行绝不能写进 _value：否则「＋ 新建项目…」会被当成当前项目
+  const pick = ui.slice(ui.indexOf('_pick(item) {'), ui.indexOf('_typeahead(ch) {'));
+  assert.ok(pick.indexOf('item.action') < pick.indexOf('this._value = String('),
+    '动作行分支必须在赋 value 之前返回');
+  assert.ok(pick.includes("new CustomEvent('select-action'"), '动作行未派发 select-action');
+  // 显示回填与占位都不能把动作行当成候选取值
+  assert.ok(ui.includes('const hit = this._items.find((i) => !i.group && !i.action && i.value === this._value);'),
+    '_labelFor 会把动作行当成当前选中值');
+  assert.ok(ui.includes("if (!this._items.some((i) => !i.group && !i.action && i.value === this._value)) this._value = '';"),
+    'setOptions 未把动作行排除在值匹配外');
+  // 键盘 Enter 走同一份 item（而不是回读 DOM 的 data-value 重建对象），动作行才点得动
+  assert.ok(ui.includes('else if (this._optItems && this._optItems[this._active]) this._pick(this._optItems[this._active]);'),
+    '键盘选择未复用 item，动作行回车会失效');
+  assert.ok(cssSrc.includes('.us-opt.is-action'), '缺少动作行样式');
 });
 
 t('创建项目不再跳看板页：弹窗是全局浮层且任意页面可 Esc 关闭', () => {
@@ -3171,8 +3200,12 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
   assert.ok(chatSrc.includes('async reconnect()'), '缺少手动重连');
   // gateway 的 onStatus 原本是空函数，断线只有超时才暴露
   assert.ok(chatSrc.includes('onStatus: (st) => this._onGatewayStatus(st)'), 'gateway 连接状态未接入');
-  assert.ok(chatSrc.includes('state: info.state, port: info.port, epoch: info.generation, connected'),
+  assert.ok(chatSrc.includes('state: info.state, port: info.port, epoch: info.generation, connected')
+    || (chatSrc.includes('state: info.state,') && chatSrc.includes('port: info.port,')
+      && chatSrc.includes('epoch: info.generation,') && chatSrc.includes('connected: !!')),
     '状态快照字段不全（不得含 token）');
+  // linked = WS 是否建立过。没有它，空闲启动（一条 RPC 都没发）会被判成「连接中」
+  assert.ok(/linked:\s*!!this\.gateway/.test(chatSrc), '状态快照缺少 linked（WS 是否建立过）');
   // 主进程：广播给所有窗口 + 两条通道
   assert.ok(mainSrc.includes("webContents.send('hermes:status'"), '主进程未广播连接状态');
   assert.ok(mainSrc.includes('BrowserWindow.getAllWindows()'), '广播应覆盖所有窗口');
@@ -3188,6 +3221,10 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
   assert.ok(appSrc.includes("let mode = 'connecting';") && appSrc.includes("if (s.connected) mode = 'ready';")
     && appSrc.includes("mode = 'offline';"),
     '状态映射不完整（ready / offline）');
+  // 空闲启动：serve 就绪但 WS 还没建 → 必须算就绪，不能显示「连接中」
+  assert.ok(appSrc.includes("else if (s.state === 'ready' && !s.linked) mode = 'ready';"),
+    '空闲态（WS 未建立）被误判成「连接中」');
+  assert.ok(appSrc.includes('对话时按需建立长连接'), '就绪但未建 WS 时缺少如实的 title 说明');
   assert.ok(!/function renderConnStatus\(st\) \{[^}]*let state = 'connecting'/.test(appSrc),
     'renderConnStatus 的局部量又变回 state，会遮蔽全局 state');
   assert.ok(appSrc.includes('api.onBackendStatus(renderConnStatus)'), '未订阅状态变化');

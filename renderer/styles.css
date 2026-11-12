@@ -3044,6 +3044,13 @@ body.kb-dragging * { cursor: grabbing !important; }
   border-radius: var(--r-sm); cursor: pointer; user-select: none;
 }
 .us-opt:hover, .us-opt.is-active { background: var(--hover); }
+/* 动作行（「＋ 新建项目…」）：不是候选取值，用一条细线与上面的候选分开，
+   文字走强调色，悬停时和普通行同一个底色（它就在列表末尾，位置本身就是提示） */
+.us-opt.is-action {
+  margin-top: 4px; padding-top: 8px; color: var(--blue);
+  border-top: 1px solid var(--line); border-radius: 0 0 var(--r-sm) var(--r-sm);
+}
+.us-opt.is-action:hover, .us-opt.is-action.is-active { color: var(--blue); }
 .us-opt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .us-check { flex-shrink: 0; font-size: 11px; color: var(--blue); opacity: 0; }
 .us-opt[aria-selected="true"] .us-check { opacity: 1; }

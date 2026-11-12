@@ -1754,6 +1754,20 @@ async function run() {
     assert.strictEqual(typeof st.state, 'string');
     assert.ok(!('token' in st), '状态快照不得带 token');
   });
+  await t('空闲启动：还没建过 WS 时 linked=false，别让状态点谎报「连接中」', async () => {
+    const h = makeChat({ gw: fakeGateway({ connected: true }) });
+    // 没调 _ensureGateway：会话列表读 SQLite、项目树走短连 HTTP，此时一条 WS 都不存在
+    h.backend.state = 'ready'; // serve 已就绪，但还没有任何 RPC 建过 WS
+    const idle = h.chat.statusSnapshot();
+    assert.strictEqual(idle.connected, false);
+    assert.strictEqual(idle.linked, false, '未建立过 WS 时 linked 必须是 false');
+    assert.strictEqual(idle.state, 'ready', '后端本身是就绪的');
+    await h.chat._ensureGateway();
+    const live = h.chat.statusSnapshot();
+    assert.strictEqual(live.connected, true);
+    assert.strictEqual(live.linked, true, '连上之后 linked 要跟着变 true');
+    for (const s of [idle, live]) assert.ok(!('token' in s), '状态快照不得带 token');
+  });
   await t('后端 / gateway 状态变化都会回调 onStatus，且不带 token', async () => {
     const seen = [];
     const h = makeChat({ gw: fakeGateway(), onStatus: (s) => seen.push(s) });

@@ -143,14 +143,17 @@
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(on) { if (on) this.setAttribute('disabled', ''); else this.removeAttribute('disabled'); }
 
-    /** 动态候选：items = [{value,label,group?}] 或字符串数组；placeholder 生成空值项。 */
+    /** 动态候选：items = [{value,label,group?,action?}] 或字符串数组；placeholder 生成空值项。
+     *  action:true 的行是「动作」而不是取值（如「＋ 新建项目…」）：选中它不改变 value，
+     *  只派发 select-action 事件，调用方自己接。 */
     setOptions(items, placeholder) {
       const ph = placeholder != null ? placeholder : (this.getAttribute('placeholder') || '');
       const list = (Array.isArray(items) ? items : []).map((x) => (typeof x === 'string'
         ? { value: x, label: x }
-        : { value: String(x.value == null ? '' : x.value), label: String(x.label == null ? x.value : x.label), group: x.group || '' }));
+        : { value: String(x.value == null ? '' : x.value), label: String(x.label == null ? x.value : x.label),
+          group: x.group || '', action: x.action === true }));
       this._items = (ph ? [{ value: '', label: ph }] : []).concat(list);
-      if (!this._items.some((i) => !i.group && i.value === this._value)) this._value = '';
+      if (!this._items.some((i) => !i.group && !i.action && i.value === this._value)) this._value = '';
       this._render();
       if (owner === this) this.open();
     }
@@ -161,10 +164,10 @@
     reset() { if (owner === this) this.close(); this._value = this._defaultValue || ''; this._render(); }
 
     _labelFor() {
-      const hit = this._items.find((i) => !i.group && i.value === this._value);
+      const hit = this._items.find((i) => !i.group && !i.action && i.value === this._value);
       if (hit) return hit.label;
       if (this._value) return this._value;       // 自由值（受让人允许手填）
-      const first = this._items.find((i) => !i.group);
+      const first = this._items.find((i) => !i.group && !i.action);
       return first ? first.label : '';
     }
 
@@ -185,6 +188,7 @@
       owner = this;
       p.replaceChildren();
       const opts = this._items.filter((i) => !i.group);
+      this._optItems = opts;
       this._active = Math.max(0, opts.findIndex((i) => i.value === this._value));
       const byValue = new Map();
       for (const it of this._items) {
@@ -193,6 +197,20 @@
           row.className = 'us-group';
           row.setAttribute('role', 'presentation');
           row.textContent = it.group || '';
+        } else if (it.action) {
+          // 动作行：不进 _value，也不显示勾选；视觉上跟候选分开一条线
+          row.className = 'us-opt is-action';
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', 'false');
+          row.dataset.value = it.value;
+          row.dataset.action = '1';
+          const txt = document.createElement('span');
+          txt.className = 'us-opt-label';
+          txt.textContent = it.label;
+          row.append(txt);
+          row.addEventListener('pointerdown', (e) => e.preventDefault());
+          row.addEventListener('click', () => this._pick(it));
+          byValue.set(it.value, row);
         } else {
           row.className = 'us-opt';
           row.setAttribute('role', 'option');
@@ -247,6 +265,14 @@
     _pick(item) {
       const prev = this._value;
       this.close();
+      // 动作行：只派发事件，绝不改 value —— 否则「新建项目」会被记成当前项目
+      if (item && item.action) {
+        if (this._trigger) this._trigger.focus();
+        this.dispatchEvent(new CustomEvent('select-action', {
+          bubbles: true, detail: { value: String(item.value == null ? '' : item.value) },
+        }));
+        return;
+      }
       this._value = String(item.value == null ? '' : item.value);
       this._render();
       if (this._trigger) this._trigger.focus();
@@ -279,7 +305,7 @@
         case ' ':
           e.preventDefault(); e.stopPropagation();
           if (!open) this.open();
-          else if (this._optRows && this._optRows[this._active]) this._pick({ value: this._optRows[this._active].dataset.value });
+          else if (this._optItems && this._optItems[this._active]) this._pick(this._optItems[this._active]);
           return;
         case 'Home':
         case 'End':
