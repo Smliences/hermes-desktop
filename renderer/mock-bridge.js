@@ -63,12 +63,9 @@
     onOrbUserMessage() { return () => {}; },
     onOrbApprovalResolved() { return () => {}; },
     async abort() {},
-    async termCreate() { return { ok: true, pty: false }; },
-    async termWrite() {}, async termResize() {}, async termKill() {},
     onEvent(fn) { listener.event = fn; return () => {}; },
     onError(fn) { listener.close = fn; return () => {}; },
     onClose(fn) { listener.close = fn; return () => {}; },
-    onTermData() { return () => {}; }, onTermExit() { return () => {}; },
 
     /* Demo 预览通道：不读磁盘，只回内存样例；让 CDP / UI 冒烟能跑通五种视图 */
     async previewResolve(input) {

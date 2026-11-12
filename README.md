@@ -2,7 +2,7 @@
 
 连接本机 **hermes CLI**（Nous Research Hermes Agent）的 Electron 桌面客户端。
 
-视觉语言为 Claude Code 风格的暖纸色系（Anthropic 暖中性 + 陶土橘强调、发丝描边、衬线标题）；功能对齐 hermes 官方桌面版核心场景：常驻后端流式对话、工具调用可视化、会话管理、多 profile、插件/技能与市场、右侧 HTML 预览。
+视觉语言为 Claude Code 风格的暖纸色系（Anthropic 暖中性 + 陶土橘强调、发丝描边、衬线标题）；功能对齐 hermes 官方桌面版核心场景：常驻后端流式对话、工具调用可视化、会话管理、多 profile、插件/技能与市场、右侧预览 / 看板双页签。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@ npm run dist:mac       # 打包 dmg（另有 dist:win / dist:linux；需在普�
 ┌──────────────────────────────────────────────────────────────┐
 │ Renderer（renderer/，vanilla JS，无框架）                     │
 │ 侧栏/多页签 · 流式消息与工具卡 · Composer · 状态条            │
-│ 插件/技能/市场/设置整页 · 右侧「预览 | 终端」双页签           │
+│ 插件/技能/市场/设置整页 · 右侧「预览 / 看板」双页签           │
 └────────────────────▲─────────────────────────────────────────┘
                      │ contextBridge 白名单（preload/preload.js）
 ┌────────────────────┴─────────────────────────────────────────┐
@@ -123,12 +123,11 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 打开设置页会顺手预取工具集与 MCP 两份列表（缓存命中时是毫秒级的空调用，不会起
 子进程），所以点进这两个分类通常是即时出结果。
 
-### 4. 终端与 HTML 预览（右侧 rail）
+### 4. 预览 / 看板双页签（右侧 rail）
 
-- 终端：`node-pty` 为 optionalDependency，编译失败时降级为管道 shell 并明确提示。
-- 预览：允许本机任意目录的 `.html/.htm/.xhtml/.svg` 或手工输入 http(s) URL；主进程只做路径解析与 `fs.watch`（去抖 180ms）通知刷新；渲染层用 **sandbox iframe**（无 `allow-same-origin`）加载。
-- 工具输出里出现 html 路径时自动跟随；双页签默认「预览」，终端按需创建。
-- **终端不再有乱码**：pty / 管道输出先经 `StringDecoder('utf8')` 分块解码（避免一个汉字跨两次 data 事件被切成 U+FFFD），再由 `renderer/term-screen.js` 的字符屏幕解释 SGR 颜色、清行、光标移动、OSC 标题、`\r` 重绘与退格，只把可打印字符写进 `<pre>`；转义序列可能跨 IPC 分片，未收齐的尾部留到下一片。颜色不做渲染（避免 `innerHTML` 与 CSP 风险），字体链补了中文 / emoji / 框线回退，长行改用 `overflow-wrap: anywhere`。
+- **预览**：网页 / PDF / 图片 / 文档 / 表格按扩展名分流到五个互斥渲染面，网页与文档可切「源码」；本地文件保留完整 sandbox，远程 URL 收紧到 `allow-scripts`；主进程只做路径解析、类型白名单、512KB 文本上限与 `fs.watch` 热刷新（去抖 160ms）。工具输出里出现可预览路径时自动跟随。
+- **看板**：右侧默认 400px 放不下整页看板的 5 列等分，所以页签里是**紧凑速览** —— 状态统计条 + 5 组纵向可折叠卡片，与整页共用同一份 `KB.board` 和同一个 5 秒轮询，不另开 REST；点卡片或「⤢」进完整看板页继续拖拽 / 改派 / 派发，新建任务复用全局弹窗。用户正在看看板时，Agent 写文件触发的预览不会抢走页签。
+- **终端页签已整体下线**：`term-screen.js`、`hermes-terminal.js`、`term:*` IPC 以及 preload / Demo 桥的桩全部移除；`node-pty` 的安装与打包配置（`asarUnpack` / `fix-pty-perm`）暂时保留，避免动到已验证过的打包链。
 - **宽度可调**：左缘 8px 手柄拖拽（向左变宽、向右变窄，范围 280–760px，**默认仍是定版 400px**），也支持键盘 `←/→`（Shift 加速到 48px）、`Home/End` 到边界、`Enter` 或双击复位；宽度记在 `localStorage('rail-width')`。上限按「主区至少留 420px」实时收紧，窗口变窄时自动回收但不覆盖用户偏好，再窄就交给既有 `.compact` 降级。手柄是 `role="separator"` + `aria-valuenow`，读屏可播报；拖拽期间禁用 iframe 命中，否则跨文档 iframe 会吞掉 `pointermove`。逻辑在独立零依赖的 `renderer/rail-resize.js`，只写 CSS 变量 `--rail-w`，不动主区几何与双主题 token。
 
 ### 5. Kanban 看板：复用 serve 的插件 REST（读 + 受控写 + 派发）
@@ -182,7 +181,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 | 多 profile 切换（两处入口） | ✅ |
 | 插件 / 技能：搜索、过滤、分组、卡片、启停、列表缓存预热 | ✅ |
 | 插件 / 技能市场：15 个来源、安装前能力声明与只读预览、默认最小权限确认、只读更新检查、进度 | ✅（2026-11-08 已实跑官方条目装后即卸，验证 UI→IPC→CLI 全链路） |
-| 右侧 HTML 预览 + 终端双页签 | ✅（左缘手柄可拖拽 / 键盘微调宽度，默认 400px 不变；ANSI 字符屏幕 + UTF-8 分块解码，终端不再出现控制符乱码） |
+| 右侧「预览 / 看板」双页签 | ✅（预览按类型分流五视图 + 源码；看板是复用整页数据的紧凑速览，点卡片回完整页做写操作；终端页签已整体下线。左缘手柄可拖拽 / 键盘微调宽度，默认 400px 不变） |
 | 思考程度收进模型菜单二级（`模型 ▾ → 思考程度 → none…ultra`），不再占一行独立 chip | ✅（二级菜单左右翻边、键盘可达、只写桌面端 `reasoning`） |
 | 全应用**自绘下拉框**（`hm-select`）：市场来源、看板筛选 / 新建表单、派发并发、设置页默认模型、看板受让人 | ✅（不再使用 macOS 原生 `<select>` / `<datalist>` 弹层；键盘可达、分组标题、双主题） |
 | 消息平台接入页（只读状态视图） | ✅（该线已冻结，不再扩展） |
@@ -226,7 +225,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 - 小窗草稿只留在主进程内存里：收起再点开不会把人写了一半的话弄丢，也不落盘、不进日志。
 - 右键菜单：打开聊天 / 打开 Hermes 窗口 / 常驻小圆球 / 仅快捷键唤起 / 全局快捷键开关 `⌥⇧H` / 隐藏小圆球 / 最小化到程序坞（原生最小化逃生口）/ 退出 Hermes。
 - **开窗即聚焦输入框**：点球 / 按 `⌥⇧H` 把面板亮出来后，光标直接落在输入框末尾（`orbchat:focus` 通道，渲染层 `input.focus()` + 插入点落在草稿末尾），不用再点一下鼠标才能打字；草稿保留，插入点不会全选覆盖。
-- 已知取舍：两个窗口的安全面与主窗口同等级（`sandbox` + `contextIsolation`，各自独立 preload）。球只暴露 `drag/dragEnd/click/restore/menu/onStatus`，小窗只暴露 `bootstrap/send/abort/approve/expand/close/draft` + 七个订阅；通道分别锁在 `orb:` 与 `orbchat:` 前缀，都没有 token、CLI、看板、终端或文件接口。
+- 已知取舍：两个窗口的安全面与主窗口同等级（`sandbox` + `contextIsolation`，各自独立 preload）。球只暴露 `drag/dragEnd/click/restore/menu/onStatus`，小窗只暴露 `bootstrap/send/abort/approve/expand/close/draft` + 七个订阅；通道分别锁在 `orb:` 与 `orbchat:` 前缀，都没有 token、CLI、看板或文件接口。
 
 ## 五、设计系统
 
@@ -253,7 +252,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 - **小球与迷你聊天窗与主窗口同等级沙箱**：各自独立 preload —— `preload/orb-preload.js` 只暴露 `drag / dragEnd / click / restore / menu / onStatus`，`preload/orb-chat-preload.js` 只暴露 `bootstrap / send / abort / approve / expand / close / draft` 与六个订阅；通道分别限定 `orb:` / `orbchat:` 前缀。`transparent + alwaysOnTop` 不影响 `sandbox: true` 与 `contextIsolation: true`，两个窗口都拿不到 token、CLI、看板、终端、文件接口。IPC 只接受本窗口 `webContents` 的 sender，球的位置写入前收进 `workArea`；小窗只推五条固定事件（`PUSHABLE` 白名单），草稿与会话上下文都只存主进程内存、不落盘。
 - **全局快捷键只在主进程**：`main/orb-access.js` 不注册任何 IPC、不暴露 `contextBridge`，两个小窗的 preload 暴露面一行未动；`main/orb-prefs.js` 是纯 fs 模块（可在零依赖单测里跑），只写 `userData/orb-prefs.json`。模式与快捷键开关都走主进程的菜单回调，renderer 拿不到 `globalShortcut` 能力；菜单栏 `Tray` 自 2026-11-11 起整体移除，`main.js` 里也查不到 `new Tray` / `setContextMenu`。
 - **CDP 调试口不再是后门**：仅 `HERMES_CDP_PORT` 显式环境变量开启，打包版还需 `HERMES_ALLOW_CDP=1` 或 `--dev`；旧实现只要 `/tmp/hermes_cdp_port` 存在即开放（`/tmp` 全局可写）。
-- 单实例锁避免多开拉起多个 serve 后端 / 并发写坏 config.yaml；`will-quit` 统一 dispose watcher / 终端 / 后端 / 预览。
+- 单实例锁避免多开拉起多个 serve 后端 / 并发写坏 config.yaml；`will-quit` 统一 dispose watcher / 后端 / 预览。
 
 ## 七、测试
 
@@ -314,7 +313,7 @@ v0.23.0 的架构改动是「**一台机器一个 gateway 拥有所有会话**�
 | 文件名 `-arm64.dmg`，里面却是 `x86_64` 二进制 | `electronDist` 只有一份架构的 Electron，builder 不下载也不报错，只改文件名 | `dist.js` 用 `lipo -archs` 核对，对不上直接退出并给修法；`mac.target` 不再写死 arch 列表 |
 | `ModuleNotFoundError: No module named 'distutils'` | Python ≥3.12 移除 distutils，node-gyp 9.x 仍 import 它 | 已用 `npmRebuild: false` + NAPI prebuilds 绕开；确需重编译时装 `setuptools` |
 | `Get https://github.com/.../electron-v33…-darwin-x64.zip: EOF` | 构建机访问不了 GitHub Releases | `electron-builder.yml` 写死 `electronDist: node_modules/electron/dist` 复用 devDependency 里的 Electron；删掉那行才回退到按 version 下载，也可设 `ELECTRON_MIRROR` |
-| 终端页空白 / 伪终端起不来 | `spawn-helper` 丢执行位（npm 解包时实测装成 644） | `npm run postinstall` 或 `node scripts/fix-pty-perm.js`；`pack:check` 也会拦下 |
+| `node-pty` 的 `spawn-helper` 丢执行位（npm 解包时实测装成 644） | 打包配置仍保留 `asarUnpack` / `fix-pty-perm`，虽然终端页签已下线 | `npm run postinstall` 或 `node scripts/fix-pty-perm.js`；`pack:check` 也会拦下 |
 
 双架构要显式准备：本机只装了 x64 的 Electron，想同时出 arm64 包需先 `npm i -D electron@33.4.11 --arch=arm64`，再 `npx electron-builder --mac --arm64`。未签名包（`identity: null`）在本机构建后能直接打开，拷到别的机器会被 Gatekeeper 判为「已损坏」——对外分发必须 Developer ID 签名 + 公证。
 

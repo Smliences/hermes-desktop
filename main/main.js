@@ -25,7 +25,6 @@ const isDev = process.argv.includes('--dev');
 
 const { ChatChannel, resolveHermesBin } = require('./services/hermes-chat');
 const sessions = require('./services/hermes-sessions');
-const { TerminalSession, ptyAvailable } = require('./services/hermes-terminal');
 const { serveStatus } = require('./services/gateway-client');
 const hermesGateway = require('./services/hermes-gateway');
 const hermesPreview = require('./services/hermes-preview');
@@ -59,7 +58,6 @@ function boot() {
     }
   };
   const chat = new ChatChannel('', { onStatus: pushConnStatus });
-  const terminals = new Map();
   const warmTimers = { plugins: null, skills: null };
 
   // 进程加载即预热常驻 `hermes serve` 后端（比窗口创建更早，对话零冷启动）
@@ -500,7 +498,7 @@ function boot() {
     const cfg = loadConfig();
     if (!cfg.model) cfg.model = hermesYamlModel();
     return { hermesBin: bin, hermesFound: fs.existsSync(bin) || bin === 'hermes', version,
-      dbOk, dbPath: sessions.getDB(), pty: ptyAvailable(), config: cfg, profile: profile.current() };
+      dbOk, dbPath: sessions.getDB(), config: cfg, profile: profile.current() };
   }, { config: { model: '', reasoning: 'none', yolo: false } });
 
   /* 提交一个回合。主窗口（hermes:send）与迷你聊天窗（orbchat:send）共用这一条，
@@ -589,23 +587,6 @@ function boot() {
     if (typeof p !== 'string' || !path.isAbsolute(p)) return false;
     try { shell.showItemInFolder(p); return true; } catch { return false; }
   });
-
-  // 终端 rail
-  handle('term:create', (e, args) => {
-    const { id, cwd } = args || {};
-    if (!id) return { ok: false, error: '缺少终端 id' };
-    if (terminals.has(id)) return { ok: true, pty: ptyAvailable() };
-    const wc = e.sender;
-    terminals.set(id, new TerminalSession(id, {
-      cwd,
-      ondata: (d) => safeSend('term:data', { id, data: d }, wc),
-      onexit: (code) => { safeSend('term:exit', { id, code }, wc); terminals.delete(id); },
-    }));
-    return { ok: true, pty: ptyAvailable() };
-  });
-  handle('term:write', (_e, args) => { const a = args || {}; terminals.get(a.id)?.write(a.data); return true; });
-  handle('term:resize', (_e, args) => { const a = args || {}; terminals.get(a.id)?.resize(a.cols, a.rows); return true; });
-  handle('term:kill', (_e, args) => { const a = args || {}; terminals.get(a.id)?.kill(); terminals.delete(a.id); return true; });
 
   // 右侧栏多类型预览（网页 / PDF / 图片 / 文档 / 表格）
   handle('preview:resolve', (_e, input, baseDir) => hermesPreview.resolveLocal(input, baseDir));
@@ -1041,8 +1022,6 @@ function boot() {
     if (orbAccess) { orbAccess.destroy(); orbAccess = null; }
     if (orb) { orb.destroy(); orb = null; }
     if (orbChat) { orbChat.destroy(); orbChat = null; }
-    for (const t of terminals.values()) { try { t.kill(); } catch {} }
-    terminals.clear();
     try { hermesPreview.unwatch(); } catch {}
     try { yamlCfg.dispose(); } catch {}
     Object.values(warmTimers).forEach((t) => clearTimeout(t));

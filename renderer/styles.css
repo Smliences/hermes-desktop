@@ -1030,17 +1030,80 @@ body.rail-resizing iframe { pointer-events: none; }
   color: var(--caption); background: var(--fill-2); border-bottom: 1px solid var(--line-2);
 }
 
-.term-out {
-  flex: 1; overflow-y: auto; padding: 8px 14px;
-  /* 等宽字体链补中文 / emoji / 框线字符回退：缺字会被画成豆腐块，
-     看起来和「乱码」一模一样。word-break:break-all 会把长行拆得碎，
-     改成只在必要时断行。 */
-  font: 400 11.5px/1.6 var(--mono), "PingFang SC", "Apple Color Emoji", monospace;
-  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2);
+/* 右侧 rail：看板紧凑视图（5 组纵向堆叠，全走双主题 token） */
+.rkb-bar {
+  display: flex; align-items: center; gap: 6px; padding: 9px 10px;
+  border-bottom: 1px solid var(--line); min-width: 0;
 }
-#term-in {
-  background: var(--canvas); border: none; border-top: 1px solid var(--line);
-  color: var(--text); font: 400 12.5px/1 var(--mono); padding: 12px 14px; outline: none;
+.rkb-board {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font: 600 12.5px/1.4 var(--sans);
+}
+.rkb-btn {
+  flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--fill-2);
+  color: var(--text-3); font: 400 13px/1 var(--sans); cursor: pointer;
+}
+.rkb-btn:hover { background: var(--fill-3); color: var(--text); }
+.rkb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rkb-summary {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.rkb-stat {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--fill-2);
+  color: var(--text-3); font: 400 11px/1 var(--sans); padding: 4px 7px; cursor: pointer;
+}
+.rkb-stat:hover { background: var(--fill-3); color: var(--text); }
+.rkb-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rkb-stat b { color: var(--text-2); font: 600 11px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.rkb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--caption); flex-shrink: 0; }
+.rkb-stat[data-dot="yellow"] .rkb-dot { background: var(--yellow); }
+.rkb-stat[data-dot="accent"] .rkb-dot { background: var(--accent); }
+.rkb-stat[data-dot="green"] .rkb-dot { background: var(--green); }
+.rkb-stat[data-dot="red"] .rkb-dot { background: var(--red); }
+.rkb-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px 12px; }
+.rkb-group { border-bottom: 1px solid var(--line); }
+.rkb-group:last-child { border-bottom: 0; }
+.rkb-group-head {
+  display: flex; align-items: center; gap: 7px; padding: 8px 2px;
+  cursor: pointer; user-select: none; list-style: none; color: var(--text-2);
+  font: 500 12px/1.4 var(--sans);
+}
+.rkb-group-head::-webkit-details-marker { display: none; }
+.rkb-group-head::before { content: '›'; color: var(--caption); font-size: 13px; transition: transform .14s ease; }
+.rkb-group[open] .rkb-group-head::before { transform: rotate(90deg); }
+.rkb-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rkb-group-name { color: var(--text); }
+.rkb-group-num { color: var(--caption); font-variant-numeric: tabular-nums; }
+.rkb-group-rule { flex: 1; height: 1px; background: var(--line); }
+.rkb-card {
+  display: block; width: 100%; box-sizing: border-box; text-align: left;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--canvas);
+  padding: 7px 9px; margin: 0 0 6px; cursor: pointer;
+}
+.rkb-card:hover { background: var(--fill-2); border-color: var(--line-2); }
+.rkb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rkb-title {
+  display: block; color: var(--text); font: 400 12.5px/1.5 var(--sans);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rkb-meta {
+  display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0;
+  color: var(--caption); font: 400 10.5px/1.4 var(--sans);
+}
+.rkb-st { color: var(--text-3); background: var(--fill-2); border-radius: var(--r-xs); padding: 1px 5px; flex-shrink: 0; }
+.rkb-asg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rkb-none, .rkb-empty { color: var(--text-3); font: 400 11.5px/1.7 var(--sans); padding: 6px 2px 10px; }
+.rkb-empty { text-align: center; padding: 28px 12px; }
+.rkb-foot {
+  flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px;
+  color: var(--caption); font: 400 10.5px/1.5 var(--sans);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rkb-group-head::before { transition: none; }
 }
 
 /* ══════════ 命令面板 / 快捷键帮助 / 设置页 共用遮罩 ══════════ */
@@ -1836,7 +1899,7 @@ button:active:not(:disabled) { filter: brightness(.96); }
 .pv-empty-ico { background: var(--fill-2); color: var(--blue); }
 .pv-state.err, .pv-state.err:hover { color: var(--red); }
 .pv-auto input, input[type="checkbox"] { accent-color: var(--blue); }
-#term-in { background: var(--canvas); border-top-color: var(--line); color: var(--text); }
+.rkb-card { background: var(--canvas); }
 
 /* ── 8. 浮层 / 遮罩 / Toast ── */
 /* 遮罩统一在此收口：不用 backdrop-filter（全屏模糊实测让关闭慢 220ms），

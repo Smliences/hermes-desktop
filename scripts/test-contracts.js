@@ -2444,10 +2444,8 @@ t('README 同步：方向、范围与主区留白都写清', () => {
   assert.ok(/280–760px/.test(readmeSrc) && /420px/.test(readmeSrc), 'README 未记录范围与主区留白');
 });
 
-section('3ac. 品牌行 / 自绘下拉 / 球 Profile 菜单 / 受让人 / 终端乱码');
+section('3ac. 品牌行 / 自绘下拉 / 球 Profile 菜单 / 受让人 / 终端已下线');
 const uiSelectSrc = read('renderer/ui-select.js');
-const termScreenSrc = read('renderer/term-screen.js');
-const termSvcSrc = read('main/services/hermes-terminal.js');
 
 t('品牌行左沿对齐菜单，profile 胶囊不再绝对定位 / 不再被裁名字', () => {
   const brand = cssSrc.slice(cssSrc.indexOf('.sb-brand {'), cssSrc.indexOf('.sb-logo'));
@@ -2545,41 +2543,20 @@ t('自绘下拉数值语义：占位项、value、change、reset、自由值', (
   assert.strictEqual(s.value, '', '换候选后旧值必须失效');
 });
 
-t('终端屏幕数值断言：ANSI 序列、回车重绘、跨 chunk 与中文 emoji', () => {
-  const sandbox = { module: { exports: {} }, window: undefined, console };
-  vm.createContext(sandbox);
-  vm.runInContext(termScreenSrc, sandbox, { filename: 'renderer/term-screen.js' });
-  const { TermScreen } = sandbox.module.exports;
-  const s = new TermScreen();
-  assert.strictEqual(s.push('\x1b[31m红\x1b[0m色'), '红色', 'SGR 颜色序列漏成可见乱码');
-  s.reset();
-  assert.strictEqual(s.push('旧提示\r\x1b[2K新提示'), '新提示', '回车 + 清行没有覆盖旧提示符');
-  s.reset();
-  assert.strictEqual(s.push('A\x1b[1;32'), 'A', '跨 chunk 的半截 CSI 被当成正文');
-  assert.strictEqual(s.push('mB'), 'AB', '下一片没接上未完成的 CSI');
-  s.reset();
-  assert.strictEqual(s.push('\x1b]0;窗口标题\x07OK'), 'OK', 'OSC 标题漏进正文');
-  s.reset();
-  assert.strictEqual(s.push('\x1b[?25lX\x1b[?25h'), 'X', '光标显隐序列漏进正文');
-  s.reset();
-  assert.strictEqual(s.push('ab\bc\r\n第二行'), 'ac\n第二行', '退格 / 换行语义不对');
-  s.reset();
-  assert.strictEqual(s.push('中文🙂'), '中文🙂', '代理对被拆成豆腐块');
-  s.reset();
-  assert.strictEqual(s.push('\x1b[2J干净'), '干净', '清屏没生效');
-  const small = new TermScreen({ maxLines: 3 });
-  for (let i = 0; i < 10; i += 1) small.push('L' + i + '\n');
-  assert.ok(small.lines.length <= 3, '长输出没有上限，终端会吃满内存');
-});
-
-t('终端接线：原始字节不再直接 += 进 DOM，主进程按 UTF-8 分块解码', () => {
-  assert.ok(/<script src="term-screen\.js">/.test(htmlSrc));
-  assert.ok(appSrc.includes('termScreen.push(data)'));
-  assert.ok(!/out\.textContent \+= data/.test(appSrc), '又回到直接追加原始 pty 字节');
-  assert.ok(termSvcSrc.includes("require('string_decoder')") && /new StringDecoder\('utf8'\)/.test(termSvcSrc),
-    '中文跨 data 事件会被切成 U+FFFD');
-  assert.ok(/var\(--mono\), "PingFang SC"/.test(cssSrc), '终端字体缺中文回退，缺字会显示成方块');
-  assert.ok(/overflow-wrap: anywhere/.test(cssSrc), 'word-break:break-all 会把长行拆碎');
+t('终端整条链已下线：无 DOM / 无脚本 / 无 IPC / 无渲染层接线', () => {
+  for (const s of ['id="term-pane"', 'id="term-out"', 'id="term-in"', 'id="term-mode"',
+    'term-screen.js', 'data-rail="terminal"', 'id="btn-term-close"']) {
+    assert.ok(!htmlSrc.includes(s), '终端 UI 残留：' + s);
+  }
+  for (const s of ['termCreate', 'termWrite', 'termResize', 'termKill', 'onTermData', 'onTermExit']) {
+    assert.ok(!preloadSrc.includes(s), 'preload 仍暴露 ' + s);
+    assert.ok(!appSrc.includes(s), '渲染层仍调用 ' + s);
+  }
+  for (const ch of ['term:create', 'term:write', 'term:resize', 'term:kill', 'term:data', 'term:exit']) {
+    assert.ok(!mainSrc.includes("'" + ch + "'"), '主进程仍有通道 ' + ch);
+  }
+  assert.ok(!read('renderer/mock-bridge.js').includes('termCreate'), 'Demo 桥仍留终端桩');
+  assert.ok(!cssSrc.includes('.term-out {') && !cssSrc.includes('#term-in {'), '终端样式没删干净');
 });
 
 t('看板新建任务：受让人是自绘下拉，候选只认磁盘上的真实 profile', () => {
@@ -2615,10 +2592,11 @@ t('球菜单的会话意图复用主窗口既有 profile 链路，不另造状�
   assert.strictEqual(collect(mainSrc, /chat\.submit\(/g).length, 1, '球菜单不得另开一条提交通道');
 });
 
-t('README 同步：自绘下拉、球菜单、终端解码、品牌行', () => {
+t('README 同步：自绘下拉、球菜单、右侧预览 / 看板双页签', () => {
   assert.ok(readmeSrc.includes('自绘下拉') || readmeSrc.includes('hm-select'));
   assert.ok(readmeSrc.includes('Profile 下拉') || readmeSrc.includes('最近会话'));
-  assert.ok(readmeSrc.includes('ANSI') || readmeSrc.includes('TermScreen'));
+  assert.ok(readmeSrc.includes('看板'), 'README 未写右侧看板页签');
+  assert.ok(!readmeSrc.includes('预览 | 终端'), 'README 仍写旧的双页签');
 });
 
 section('3ad. 看板拖拽：投放区几何恒定、幽灵不挡指针、边缘自动滚动');
@@ -3648,11 +3626,11 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
 section('3aj. 右侧预览按类型分流：五视图、三层对齐、双主题与边界');
 const previewSvc = read('main/services/hermes-preview.js');
 const mockBridgeSrc = read('renderer/mock-bridge.js');
-const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 终端 ---------- */'),
+const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
   appSrc.indexOf('/* ---------- 全局快捷键'));
-const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('.term-out {'));
+const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* 右侧 rail：看板紧凑视图'));
 const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),
-  htmlSrc.indexOf('<div class="rail-pane" id="term-pane"'));
+  htmlSrc.indexOf('<div class="rail-pane" id="kanban-pane"'));
 
 t('六种来源各有视图定义，五个渲染面互斥且都有 DOM 节点', () => {
   for (const ty of ['url', 'web', 'pdf', 'image', 'doc', 'table']) {
@@ -3724,6 +3702,85 @@ t('自动跟随覆盖新类型，Demo 桥不再被 hasNative 挡住', () => {
     'async previewWatch(', 'async previewUnwatch(']) {
     assert.ok(mockBridgeSrc.includes(fn), 'Demo 桥缺少 ' + fn);
   }
+});
+
+section('3ak. 右侧 rail 看板：双视图共享数据、写操作回整页、双主题与几何不变');
+const railHtml = htmlSrc.slice(htmlSrc.indexOf('<!-- ══════════ 右侧 rail'),
+  htmlSrc.indexOf('<!-- ══════════ 新建弹窗'));
+const railCss = cssSrc.slice(cssSrc.indexOf('/* 右侧 rail：看板紧凑视图'),
+  cssSrc.indexOf('/* ══════════ 命令面板'));
+const railApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
+  appSrc.indexOf('/* ---------- 全局快捷键'));
+const rkbApp = appSrc.slice(appSrc.indexOf('/* ---- 右侧 rail 紧凑看板'),
+  appSrc.indexOf('/* ---- 任务详情抽屉 ---- */'));
+
+t('页签只剩预览 / 看板，终端 DOM 与脚本全部移除', () => {
+  assert.ok(railHtml.includes('data-rail="preview"') && railHtml.includes('data-rail="kanban"'),
+    '页签不是预览 / 看板');
+  assert.ok(!railHtml.includes('data-rail="terminal"') && !railHtml.includes('id="term-pane"'),
+    '终端页签没删干净');
+  for (const id of ['kanban-pane', 'rkb-board', 'rkb-refresh', 'rkb-new', 'rkb-expand',
+    'rkb-summary', 'rkb-scroll', 'rkb-groups', 'rkb-foot-text', 'rail-hint', 'btn-rail-close']) {
+    assert.ok(railHtml.includes('id="' + id + '"'), '缺少节点 #' + id);
+  }
+  assert.ok(!htmlSrc.includes('term-screen.js'), '终端字符屏幕脚本仍在加载');
+});
+t('rail 与整页共用 KB.board，一个轮询，不另开 REST', () => {
+  assert.ok(railApp.includes('function railKanbanVisible(') && railApp.includes('function kanbanAnyVisible('),
+    '缺少双视图可见性判定');
+  assert.ok(railApp.includes("railTab = tab === 'kanban' ? 'kanban' : 'preview'"), '页签状态仍认 terminal');
+  assert.ok(railApp.includes("if (railTab === 'kanban')") && railApp.includes('kanbanLoad(true)')
+    && railApp.includes('kanbanStartPolling()'), '切到看板未加载 / 未起轮询');
+  assert.ok(railApp.includes("if (!railKanbanVisible()) setRailTab('preview')"),
+    '自动跟随预览会抢走看板页签');
+  assert.ok(appSrc.includes('renderRailKanban(); // 同一份数据'), '整页刷新未同步 rail');
+  assert.ok(appSrc.includes('if (!kanbanAnyVisible()) { kanbanStopPolling(); return; }'),
+    '轮询没按双视图可见性收停');
+  assert.ok(appSrc.includes('if (railKanbanVisible()) {\n    renderRailKanban();'),
+    '关整页看板时把 rail 的轮询也停了');
+  assert.ok(!rkbApp.includes('kanbanBoard('), '紧凑视图不得另开一条看板 REST');
+  assert.ok(rkbApp.includes('kbGroups()'), '紧凑视图必须复用分组计算');
+});
+t('紧凑视图只读，写操作一律回完整看板页', () => {
+  assert.ok(rkbApp.includes('data-rkb-task=') && railApp.includes('openKanbanTask(card.dataset.rkbTask)'),
+    '点卡片未打开详情抽屉');
+  assert.ok(railApp.includes('showKanban(true)') && railApp.includes("kbModalOpen('task')"),
+    '缺展开 / 新建入口');
+  assert.ok(railApp.includes('function openFullKanban(') && railApp.includes('toggleRail(false)'),
+    '进完整看板时未收起 rail，同一份数据会并排两份并挤窄 5 列');
+  assert.ok(rkbApp.includes('details.rkb-group') && rkbApp.includes('const opened = {}'),
+    '折叠状态会在轮询重渲染时被重置');
+  assert.ok(rkbApp.includes('const first = existing.length === 0'),
+    '「首次」按 host 是否为空判断会被加载态占位骗到，数据回来时五组全折叠');
+  assert.ok(rkbApp.includes('g.all.slice(0, RKB_MAX_CARDS)'), '未限制单组卡片数，长列表会吃满 rail');
+  assert.ok(railApp.includes("$('#rkb-refresh').onclick = () => kanbanLoad(false)"),
+    '刷新按钮未接同一条加载链');
+  assert.ok(!/kanban(SetStatus|Reassign|DeleteTask|Dispatch)/.test(rkbApp),
+    '紧凑视图不得自己写状态 / 改派 / 派发');
+});
+t('新样式全走双主题 token，无硬编码色，每个 class 都有规则', () => {
+  for (const c of ['.rkb-bar', '.rkb-board', '.rkb-btn', '.rkb-btn:hover', '.rkb-btn:focus-visible',
+    '.rkb-summary', '.rkb-stat', '.rkb-stat:hover', '.rkb-stat:focus-visible', '.rkb-stat b',
+    '.rkb-dot', '.rkb-stat[data-dot="yellow"] .rkb-dot', '.rkb-scroll', '.rkb-group',
+    '.rkb-group-head', '.rkb-group-head::before', '.rkb-group[open] .rkb-group-head::before',
+    '.rkb-group-head:focus-visible', '.rkb-group-name', '.rkb-group-num', '.rkb-group-rule',
+    '.rkb-card', '.rkb-card:hover', '.rkb-card:focus-visible', '.rkb-title', '.rkb-meta',
+    '.rkb-st', '.rkb-asg', '.rkb-none', '.rkb-empty', '.rkb-foot']) {
+    assert.ok(railCss.includes(c), '缺少样式规则 ' + c);
+  }
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(railCss), '出现硬编码色值，深色主题会失配');
+  assert.ok(railCss.includes('var(--canvas)') && railCss.includes('var(--fill-2)'), '未使用双主题 token');
+  assert.ok(railCss.includes('prefers-reduced-motion'), '动效未降级');
+  assert.ok(railCss.includes('flex-wrap: wrap'), '280px 窄栏统计条会溢出');
+});
+t('外层定版几何不动，命令 / 快捷键文案去终端化', () => {
+  assert.ok(/width:\s*var\(--rail-w, 400px\)/.test(cssSrc), 'rail 默认宽度被改');
+  assert.ok(htmlSrc.includes('aria-valuemin="280"') && htmlSrc.includes('aria-valuemax="760"'),
+    '手柄范围被改');
+  assert.ok(htmlSrc.includes('id="rail-resize"'), '宽度手柄被删');
+  assert.ok(appSrc.includes("{ cmd: '/rail'") && !appSrc.includes("'/terminal'"),
+    '命令面板仍留 /terminal');
+  assert.ok(appSrc.includes("label: '切换右侧面板'"), '快捷键标签仍写终端');
 });
 
 console.log('\n' + '─'.repeat(56));

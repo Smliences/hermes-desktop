@@ -31,11 +31,6 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   exportSession: (args) => ipcRenderer.invoke('sessions:export', args),
   revealPath: (p) => ipcRenderer.invoke('app:reveal', p),
 
-  termCreate: (args) => ipcRenderer.invoke('term:create', args),
-  termWrite: (args) => ipcRenderer.invoke('term:write', args),
-  termResize: (args) => ipcRenderer.invoke('term:resize', args),
-  termKill: (args) => ipcRenderer.invoke('term:kill', args),
-
   gwStatus: () => ipcRenderer.invoke('gw:status'),
   gwOverview: () => ipcRenderer.invoke('gw:overview'),
   gwAction: (op) => ipcRenderer.invoke('gw:action', op),
@@ -147,8 +142,6 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   onEvent: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('hermes:event', h); return () => ipcRenderer.removeListener('hermes:event', h); },
   onError: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('hermes:error', h); return () => ipcRenderer.removeListener('hermes:error', h); },
   onClose: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('hermes:close', h); return () => ipcRenderer.removeListener('hermes:close', h); },
-  onTermData: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('term:data', h); return () => ipcRenderer.removeListener('term:data', h); },
-  onTermExit: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('term:exit', h); return () => ipcRenderer.removeListener('term:exit', h); },
   onPreviewChanged: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('preview:changed', h); return () => ipcRenderer.removeListener('preview:changed', h); },
   onMarketProgress: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('market:progress', h); return () => ipcRenderer.removeListener('market:progress', h); },
   // 插件/技能列表后台刷新完成（p = { kind:'plugins'|'skills', at, count }）

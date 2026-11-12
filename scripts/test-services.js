@@ -39,7 +39,7 @@ const MODULES = [
   'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-gateway.js', 'hermes-kanban.js',
   'hermes-kanban-mode.js', 'hermes-market.js',
   'hermes-plugins.js', 'hermes-preview.js', 'hermes-profile.js', 'hermes-sessions.js',
-  'hermes-skills.js', 'hermes-terminal.js', 'logger.js',
+  'hermes-skills.js', 'logger.js',
 ];
 const loaded = {};
 
@@ -266,7 +266,6 @@ async function run() {
   const cfgYaml = loaded['hermes-config-yaml.js'];
   const gw = loaded['hermes-gateway.js'];
   const market = loaded['hermes-market.js'];
-  const term = loaded['hermes-terminal.js'];
   await t('cfgPath 返回字符串', () => assert.ok(typeof cfgYaml.cfgPath() === 'string' && cfgYaml.cfgPath().length));
   await t('消息平台清单非空（只读常量）', () => assert.ok(Array.isArray(gw.PLATFORMS) && gw.PLATFORMS.length > 0));
   await t('市场来源配置存在且覆盖 CLI 全部来源', () => {
@@ -297,10 +296,6 @@ async function run() {
   await t('checkUpdates 是只读查询且不接受任意 op', () => {
     assert.strictEqual(typeof market.checkUpdates, 'function');
     assert.strictEqual(typeof market.action, 'function');
-  });
-  await t('ptyAvailable() 返回布尔值（可选依赖降级）', () => {
-    assert.strictEqual(typeof term.ptyAvailable, 'function');
-    assert.strictEqual(typeof term.ptyAvailable(), 'boolean');
   });
 
   section('8. 模型状态只读解析（CLI 默认 ≠ models.json 列表）');

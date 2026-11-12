@@ -107,7 +107,7 @@
         <button class="main-ibtn" id="btn-find" title="在会话中查找 ⌘F" aria-label="在会话中查找" hidden>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg>
         </button>
-        <button class="main-ibtn" id="btn-rail-toggle" title="预览 / 终端面板 ⌘`">
+        <button class="main-ibtn" id="btn-rail-toggle" title="预览 / 看板面板 ⌘`">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M4.5 6.5l2.2 1.5-2.2 1.5M8.3 10h3.2"/></svg>
         </button>
       </header>
@@ -536,20 +536,20 @@
       </section>
     </main>
 
-    <!-- ══════════ 右侧 rail：预览 | 终端 ══════════ -->
+    <!-- ══════════ 右侧 rail：预览 | 看板 ══════════ -->
     <aside id="rail" hidden>
       <!-- 左缘拖拽调宽手柄：鼠标 / 键盘（← → Home End Enter）/ 双击复位，宽度记忆在 localStorage。
            role=separator + aria-valuenow 让读屏用户也能调整，不只是鼠标能用。 -->
       <div id="rail-resize" role="separator" aria-orientation="vertical"
-        aria-label="调整预览 / 终端面板宽度" aria-valuemin="280" aria-valuemax="760" aria-valuenow="400"
+        aria-label="调整预览 / 看板面板宽度" aria-valuemin="280" aria-valuemax="760" aria-valuenow="400"
         tabindex="0" title="拖拽调整宽度 · ← / → 微调 · 双击复位 400px"></div>
       <div class="rail-head">
         <nav class="rail-tabs" id="rail-tabs">
           <button class="rt active" data-rail="preview">预览</button>
-          <button class="rt" data-rail="terminal">终端</button>
+          <button class="rt" data-rail="kanban">看板</button>
         </nav>
-        <span class="rail-hint" id="term-mode"></span>
-        <button id="btn-term-close" class="ir-btn" title="关闭">✕</button>
+        <span class="rail-hint" id="rail-hint"></span>
+        <button id="btn-rail-close" class="ir-btn" title="关闭">✕</button>
       </div>
 
       <div class="rail-pane" id="preview-pane">
@@ -583,9 +583,18 @@
         </div>
       </div>
 
-      <div class="rail-pane" id="term-pane" hidden>
-        <pre id="term-out" class="term-out"></pre>
-        <input id="term-in" type="text" placeholder="输入命令（⏎ 执行；输入 exit 关闭）" spellcheck="false" />
+      <!-- 紧凑看板：与整页共用 KB.board 与同一个轮询，不另开一条 REST。
+           400px 里放不下 5 列等分，所以按状态纵向分组；点卡片 / ⤢ 才进完整看板页。 -->
+      <div class="rail-pane" id="kanban-pane" hidden>
+        <div class="rkb-bar">
+          <span class="rkb-board" id="rkb-board">当前看板</span>
+          <button class="rkb-btn" id="rkb-refresh" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
+          <button class="rkb-btn" id="rkb-new" type="button" title="新建任务" aria-label="新建任务">＋</button>
+          <button class="rkb-btn" id="rkb-expand" type="button" title="打开完整看板" aria-label="打开完整看板">⤢</button>
+        </div>
+        <div class="rkb-summary" id="rkb-summary" aria-label="任务状态概览"></div>
+        <div class="rkb-scroll" id="rkb-scroll"><div id="rkb-groups"></div></div>
+        <div class="rkb-foot"><span id="rkb-foot-text">等待数据</span></div>
       </div>
     </aside>
   </div>
@@ -735,7 +744,6 @@
   <input type="file" id="file-input" multiple hidden />
   <script src="mock-bridge.js"></script>
   <script src="ui-select.js"></script>
-  <script src="term-screen.js"></script>
   <script src="app.js"></script>
   <!-- 右侧面板宽度增强层：独立、零依赖，只操作 --rail-w 与手柄 aria -->
   <script src="rail-resize.js"></script>

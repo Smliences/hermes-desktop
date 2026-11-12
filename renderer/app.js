@@ -2398,7 +2398,7 @@ const COMMANDS = [
   { cmd: '/model', desc: '切换模型', run: () => openModelPicker() },
   { cmd: '/effort', desc: '推理力度 (none…ultra)', run: () => openEffortPicker() },
   { cmd: '/yolo', desc: '切换审批模式', run: () => $('#chip-yolo').click() },
-  { cmd: '/terminal', desc: '开关终端 rail', run: () => toggleTerminal() },
+  { cmd: '/rail', desc: '开关右侧预览 / 看板面板', run: () => toggleRail() },
   { cmd: '/sessions', desc: '搜索会话', run: () => { setSidebar(true); $('#session-search').focus(); } },
   { cmd: '/export', desc: '导出会话记录为 Markdown 文件', run: exportTranscript },
   { cmd: '/copy', desc: '复制会话记录到剪贴板', run: () => copyTranscript() },
@@ -2964,11 +2964,7 @@ $('#gateway-page').addEventListener('click', async (e) => {
   }
 });
 
-/* ---------- 右侧 rail：预览 | 终端 ---------- */
-let termId = null;
-let termMode = '';
-// pty 输出是带 ANSI 控制序列的原始字节流，先过字符屏幕再进 DOM
-const termScreen = new TermScreen();
+/* ---------- 右侧 rail：预览 | 看板 ---------- */
 let railTab = 'preview';
 const pv = {
   url: '', filePath: '', label: '', kind: '', type: '', view: '', ext: '',
@@ -2988,40 +2984,40 @@ const PV_VIEWS = {
 };
 const pvViews = (type) => PV_VIEWS[type] || [['render', '渲染']];
 
+/** 看板页签是否被看见。整页看板与 rail 看板共用一份 KB.board、一个轮询，
+ *  谁可见谁就驱动刷新；两个都不可见时轮询彻底停掉，不空转打 REST。 */
+function railKanbanVisible() {
+  const rail = $('#rail');
+  return !!rail && !rail.hidden && railTab === 'kanban';
+}
+function kanbanAnyVisible() {
+  const page = $('#kanban-page');
+  return (!!page && !page.hidden) || railKanbanVisible();
+}
 function setRailTab(tab) {
-  railTab = tab === 'terminal' ? 'terminal' : 'preview';
+  railTab = tab === 'kanban' ? 'kanban' : 'preview';
   document.querySelectorAll('#rail-tabs .rt').forEach((b) => b.classList.toggle('active', b.dataset.rail === railTab));
   $('#preview-pane').hidden = railTab !== 'preview';
-  $('#term-pane').hidden = railTab !== 'terminal';
-  $('#term-mode').textContent = railTab === 'terminal' ? termMode : (pv.kind === 'url' ? '远程网页' : '本地文件');
-  if (railTab === 'terminal') ensureTerminal();
-}
-
-/** 终端按需创建：默认打开的是预览，只有切到「终端」页签才拉起 pty。 */
-async function ensureTerminal() {
-  if (termId) { $('#term-in').focus(); return; }
-  if (!hasNative) {
-    $('#term-out').textContent = '（浏览器 Demo 模式无终端）';
-    termMode = 'demo'; $('#term-mode').textContent = 'demo'; return;
+  $('#kanban-pane').hidden = railTab !== 'kanban';
+  $('#rail-hint').textContent = railTab === 'kanban'
+    ? (KB.error ? '同步失败' : '实时同步')
+    : (pv.kind === 'url' ? '远程网页' : (PV_TYPE_LABEL[pv.type] || '本地文件'));
+  if (railTab === 'kanban') {
+    renderRailKanban();
+    kanbanLoad(true);
+    kanbanStartPolling();
+  } else if (!kanbanAnyVisible()) {
+    kanbanStopPolling();
   }
-  termId = 'term_' + uid();
-  $('#term-out').textContent = '';
-  termScreen.reset();
-  const home = await api.getPath('home');
-  const res = await api.termCreate({ id: termId, cwd: home });
-  termMode = res.pty ? 'pty' : 'pipe（node-pty 未编译）';
-  $('#term-mode').textContent = termMode;
-  $('#term-in').focus();
 }
 
-function toggleTerminal(force) {
+function toggleRail(force) {
   const rail = $('#rail');
   const show = force !== undefined ? force : rail.hidden;
   $('#btn-rail-toggle').classList.toggle('on', show);
   if (!show) {
     rail.hidden = true;
-    if (termId && hasNative) api.termKill({ id: termId });
-    termId = null;
+    if (!kanbanAnyVisible()) kanbanStopPolling();
     if (pvAvailable()) api.previewUnwatch();
     return;
   }
@@ -3146,7 +3142,9 @@ async function setPreview(res) {
   pv.text = ''; pv.textLoadedFor = ''; pv.view = '';
   $('#pv-path').value = isFile ? res.filePath : res.url;
   pvState(isFile ? '已加载' : '网页预览');
-  setRailTab('preview');
+  // 用户正在 rail 里看看板时，别把页签抢回预览：内容照常备好，切回来就是最新的
+  if (!railKanbanVisible()) setRailTab('preview');
+  else $('#rail-hint').textContent = '预览已更新 · 看板';
   renderPreviewViews();
   await renderPreviewContent();
   if (!pvAvailable()) return true;
@@ -3181,9 +3179,30 @@ async function reloadPreview() {
   }
   pvState('已刷新');
 }
-$('#btn-rail-toggle').onclick = () => toggleTerminal();
-$('#btn-term-close').onclick = () => toggleTerminal(false);
+$('#btn-rail-toggle').onclick = () => toggleRail();
+$('#btn-rail-close').onclick = () => toggleRail(false);
 document.querySelectorAll('#rail-tabs .rt').forEach((b) => { b.onclick = () => setRailTab(b.dataset.rail); });
+// rail 看板：写操作一律回完整看板页（任务详情抽屉挂在整页里），这里只留新建弹窗这个全局入口
+/** 进完整看板前收起 rail：同一份 KB.board 不该并排显示两份，也把 400px 还给 5 列。 */
+function openFullKanban(status) {
+  toggleRail(false);
+  if (status !== undefined) KB.status = status;
+  showKanban(true);
+}
+$('#rkb-refresh').onclick = () => kanbanLoad(false);
+$('#rkb-new').onclick = () => kbModalOpen('task');
+$('#rkb-expand').onclick = () => openFullKanban();
+$('#rkb-summary').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-rkb-group]');
+  if (!b) return;
+  openFullKanban(b.dataset.rkbGroup);
+});
+$('#rkb-groups').addEventListener('click', (e) => {
+  const card = e.target.closest && e.target.closest('[data-rkb-task]');
+  if (!card || !card.dataset.rkbTask) return;
+  openFullKanban();
+  openKanbanTask(card.dataset.rkbTask);
+});
 // 视图切换条是动态生成的，用委托；按钮带 role=tab 与 aria-selected 供读屏识别
 $('#pv-view-btns').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('[data-pv-view]');
@@ -3204,23 +3223,9 @@ $('#pv-external').onclick = async () => {
   const r = await api.previewOpenExternal(target);
   if (r && !r.ok) toast(r.error || '打开失败', 2400);
 };
-$('#term-in').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && termId) {
-    const cmd = $('#term-in').value; $('#term-in').value = '';
-    if (cmd.trim() === 'exit') { toggleTerminal(false); return; }
-    if (hasNative) api.termWrite({ id: termId, data: cmd + '\n' });
-  }
-});
 let pvReloadTimer = null;
-if (hasNative) {
-  api.onTermData(({ id, data }) => {
-    if (id !== termId) return;
-    const out = $('#term-out');
-    // 整屏替换而不是 += ：\r 重绘、清行、光标回退都需要改写已有行
-    out.textContent = termScreen.push(data);
-    out.scrollTop = out.scrollHeight;
-  });
-  if (api.onPreviewChanged) api.onPreviewChanged(({ filePath }) => {
+if (hasNative && api.onPreviewChanged) {
+  api.onPreviewChanged(({ filePath }) => {
     if (!pv.filePath || filePath !== pv.filePath || $('#rail').hidden) return;
     if (!$('#pv-auto').checked) { pvState('文件已变更 · 自动跟随已关闭'); return; }
     // 一次保存常触发多条 watch 事件，去抖合并，避免 iframe 反复重建闪烁
@@ -3261,7 +3266,7 @@ async function maybeAutoPreview(evt) {
     if (!res.ok) continue;
     if (res.filePath === pv.filePath && Date.now() - pvAutoAt < 1200) continue;
     pvAutoAt = Date.now();
-    if ($('#rail').hidden) toggleTerminal(true);
+    if ($('#rail').hidden) toggleRail(true);
     await setPreview(res);
     pvState('已跟随 Agent 写入');
     break;
@@ -3465,7 +3470,8 @@ const SHORTCUT_DEFS = [
   { id: 'send', label: '发送（任意焦点）', group: '输入', def: 'mod+enter' },
   { id: 'copyLast', label: '复制上一条回复', group: '消息', def: 'mod+shift+c' },
   { id: 'help', label: '打开快捷键帮助', group: '其他', def: 'mod+/' },
-  { id: 'terminal', label: '切换右侧终端栏', group: '其他', def: 'mod+`' },
+  // id 沿用 terminal：用户 localStorage 里已存的 mod+` 绑定不能因为改名失效
+  { id: 'terminal', label: '切换右侧面板', group: '其他', def: 'mod+`' },
 ];
 const SHORTCUT_STORE_KEY = 'hermes.shortcuts';
 const FIXED_COMBOS = Object.freeze({ escape: 'Escape', helpAlias: '?' });
@@ -3540,7 +3546,7 @@ const SHORTCUT_ACTIONS = {
   send: () => send($('#input').value),
   copyLast: () => copyLastReply(),
   help: () => toggleHelp(),
-  terminal: () => toggleTerminal(),
+  terminal: () => toggleRail(),
 };
 
 /** 录制态：点击设置页某个键位按钮后，下一次按键被这里优先捕获。 */
@@ -6100,7 +6106,7 @@ function helpGroups() {
       ['↑ / ↓', '复用上一条 / 下一条提问'], ['/help', '斜杠命令列表']]],
     ['消息', [[k('copyLast'), '复制上一条回复'], ['悬停消息', '复制单条 / 重试'],
       ['代码块右上', '复制代码'], ['点击工具行', '展开输入输出详情']]],
-    ['其他', [[k('help') + ' 或 ?', '打开本帮助'], [k('terminal'), '切换右侧终端栏'],
+    ['其他', [[k('help') + ' 或 ?', '打开本帮助'], [k('terminal'), '切换右侧面板'],
       ['点击图标栏 logo', '展开侧栏']]],
   ];
 }
@@ -6339,15 +6345,15 @@ function kanbanStopPolling() { if (KB.timer) { clearInterval(KB.timer); KB.timer
 function kanbanStartPolling() {
   kanbanStopPolling();
   KB.timer = setInterval(async () => {
-    const page = $('#kanban-page');
-    if (!page || page.hidden) { kanbanStopPolling(); return; }
+    // 整页或 rail 看板任一可见就继续同步；两个都收起时停表，不空转打 REST
+    if (!kanbanAnyVisible()) { kanbanStopPolling(); return; }
     if (document.hidden || KB.busy || KbDrag.on) return;
     const a = kbApi();
     if (!a || !a.kanbanBoard) return;
     const my = KB.epoch;
     try {
       const r = await a.kanbanBoard(kbParams());
-      if (my !== KB.epoch || page.hidden) return;
+      if (my !== KB.epoch || !kanbanAnyVisible()) return;
       if (!r || !r.ok) { kbSetLive((r && r.error) || '同步失败', 'err'); return; }
       const ev = Number(r.latestEventId) || 0;
       const genChanged = KB.board && r.generation !== KB.board.generation;
@@ -6444,8 +6450,12 @@ function closeKanbanPage() {
   if (dockCard) dockCard.innerHTML = '';
   page.hidden = true;
   closeKanbanDrawer();
-  kanbanStopPolling();
-  KB.epoch += 1; // 作废所有在途响应
+  if (railKanbanVisible()) {
+    renderRailKanban(); // rail 还在看：保留轮询，也别作废在途响应
+  } else {
+    kanbanStopPolling();
+    KB.epoch += 1; // 作废所有在途响应
+  }
   KB.detailEpoch += 1;
 }
 
@@ -7294,6 +7304,64 @@ function renderKanban() {
   // 再挂一条横幅等于把首屏又挤掉一行（五列的计数已经说得很清楚）。
   const msg = $('#kb-message');
   if (msg) { msg.hidden = !KB.error; if (KB.error) msg.textContent = KB.error; }
+  renderRailKanban(); // 同一份数据，整页刷新时顺带把 rail 速览带新
+}
+
+/* ---- 右侧 rail 紧凑看板 -------------------------------------------------
+   与整页共用 KB.board / kbGroups()，不另开 REST、不另起轮询。400px 放不下
+   五列等分，所以按状态纵向分组；写操作一律回完整看板页（详情抽屉挂在整页里），
+   这里只提供「新建任务」这个全局弹窗入口，避免两处状态机各写一份。 */
+const RKB_MAX_CARDS = 12;
+function renderRailKanban() {
+  const host = $('#rkb-groups');
+  if (!host) return;
+  // 折叠状态存在 DOM 里：重渲染前读一次，避免每 5 秒同步把用户收起的组又打开。
+  // 「首次」按有没有分组节点判断，不能按 host 是否为空 —— 加载态 / 空态占位会让
+  // 数据回来时误判成非首次，五个组全被折叠。
+  const opened = {};
+  const existing = host.querySelectorAll('details.rkb-group');
+  const first = existing.length === 0;
+  existing.forEach((d) => { opened[d.dataset.rkbGroup] = d.open; });
+  const groups = kbGroups();
+  const total = groups.reduce((n, g) => n + g.all.length, 0);
+  const name = String(KB.filters.board || (KB.overview && KB.overview.currentBoard) || '当前看板');
+  const boardEl = $('#rkb-board');
+  if (boardEl) boardEl.textContent = name;
+  const sum = $('#rkb-summary');
+  if (sum) sum.innerHTML = groups.map((g) =>
+    `<button class="rkb-stat" type="button" data-rkb-group="${esc(g.key)}" data-dot="${esc(g.dot)}" ` +
+    `title="${esc(g.hint)} · 点开完整看板并只看这一组"><span class="rkb-dot"></span>${esc(g.label)} <b>${g.all.length}</b></button>`).join('');
+  if (KB.error) {
+    host.innerHTML = `<div class="rkb-empty">${esc(KB.error)}</div>`;
+  } else if (!KB.board) {
+    host.innerHTML = '<div class="rkb-empty">正在读取看板…</div>';
+  } else {
+    host.innerHTML = groups.map((g) => {
+      // 速览用 g.all：整页的搜索 / 受让人筛选不该悄悄改变这边的全局感
+      const tasks = g.all.slice(0, RKB_MAX_CARDS);
+      const cards = tasks.map((t) => {
+        const st = String((t && t.status) || '');
+        const asg = String((t && t.assignee) || '').trim();
+        const ago = kbAgo(t && t.created_at);
+        const title = String((t && t.title) || '未命名任务');
+        return `<button class="rkb-card" type="button" data-rkb-task="${esc((t && t.id) || '')}" title="${esc(title)}">
+          <span class="rkb-title">${esc(title)}</span>
+          <span class="rkb-meta"><span class="rkb-st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>
+          ${asg ? `<span class="rkb-asg">${esc(asg)}</span>` : ''}
+          ${ago ? `<span>${esc(ago)}</span>` : ''}</span></button>`;
+      }).join('');
+      const more = g.all.length > tasks.length
+        ? `<div class="rkb-none">还有 ${g.all.length - tasks.length} 张 · 点 ⤢ 看全部</div>` : '';
+      const open = first ? (g.all.length > 0) : !!opened[g.key];
+      return `<details class="rkb-group" data-rkb-group="${esc(g.key)}" data-dot="${esc(g.dot)}"${open ? ' open' : ''}>
+        <summary class="rkb-group-head" title="${esc(g.hint)}"><span class="rkb-group-name">${esc(g.label)}</span>
+          <span class="rkb-group-num">${g.all.length}</span><span class="rkb-group-rule"></span></summary>
+        ${cards || '<div class="rkb-none">暂无任务</div>'}${more}</details>`;
+    }).join('');
+  }
+  const foot = $('#rkb-foot-text');
+  if (foot) foot.textContent = KB.error || (KB.board
+    ? `${total} 张任务 · 每 5 秒同步 · 点卡片打开详情` : '等待数据');
 }
 
 /* ---- 任务详情抽屉 ---- */

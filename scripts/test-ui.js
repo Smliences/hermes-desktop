@@ -317,7 +317,7 @@ let CHROME_BIN = null;
     btns: [...document.querySelectorAll('.pv-vbtn')].map((b) => b.dataset.pvView),
     shown: ['#pv-frame','#pv-image','#pv-doc','#pv-table','#pv-raw'].filter((s) => !document.querySelector(s).hidden)
   }))()`;
-  await cdp.ev(`(() => { setView('chat'); toggleTerminal(true); setRailTab('preview'); return 1; })()`);
+  await cdp.ev(`(() => { setView('chat'); toggleRail(true); setRailTab('preview'); return 1; })()`);
   await sleep(200);
   await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/report.md'); return 1; })()`);
   const s11a = await cdp.ev(pvProbe);
@@ -367,6 +367,85 @@ let CHROME_BIN = null;
     s11h.bg !== 'rgb(250, 249, 245)' && s11h.bg !== 'rgb(255, 255, 255)'
       && s11h.rail === railBefore && s11h.views, JSON.stringify(s11h));
   await cdp.ev(`document.documentElement.setAttribute('data-theme', 'light'); 'ok'`);
+
+  /* S12 右侧 rail 看板：终端下线、紧凑视图与整页共用数据 */
+  console.log('\nS12 右侧 rail 看板（替代终端页签）');
+  const s12a = await cdp.ev(`(() => ({
+    tabs: [...document.querySelectorAll('#rail-tabs .rt')].map((b) => b.dataset.rail),
+    term: !!document.querySelector('#term-pane, #term-out, #term-in, #term-mode'),
+    pane: !!document.querySelector('#kanban-pane')
+  }))()`);
+  ok('页签只剩预览 / 看板，终端 DOM 已移除',
+    s12a.tabs.join(',') === 'preview,kanban' && !s12a.term && s12a.pane, JSON.stringify(s12a));
+
+  await cdp.ev(`(() => { setView('chat'); toggleRail(true); setRailTab('kanban'); return 1; })()`);
+  await cdp.ev(`(async () => { await kanbanLoad(true); return 1; })()`);
+  const s12b = await cdp.ev(`(() => ({
+    tab: railTab,
+    previewHidden: document.querySelector('#preview-pane').hidden,
+    kanbanHidden: document.querySelector('#kanban-pane').hidden,
+    groups: document.querySelectorAll('.rkb-group').length,
+    openGroups: document.querySelectorAll('.rkb-group[open]').length,
+    cards: document.querySelectorAll('.rkb-card').length,
+    stats: [...document.querySelectorAll('.rkb-stat b')].map((b) => Number(b.textContent)),
+    board: document.querySelector('#rkb-board').textContent,
+    cols: KB.board && KB.board.columns ? KB.board.columns.length : 0
+  }))()`);
+  ok('看板页签渲染 5 组紧凑卡片，数据来自同一份 KB.board',
+    s12b.tab === 'kanban' && s12b.previewHidden && !s12b.kanbanHidden
+      && s12b.groups === 5 && s12b.openGroups > 0 && s12b.cards > 0 && s12b.cols > 0
+      && s12b.stats.length === 5 && s12b.board.length > 0, JSON.stringify(s12b));
+
+  const s12c = await cdp.ev(`(() => {
+    document.querySelector('.rkb-group[data-rkb-group="todo"]').open = false;
+    renderRailKanban();
+    return { open: document.querySelector('.rkb-group[data-rkb-group="todo"]').open,
+             cards: document.querySelectorAll('.rkb-card').length };
+  })()`);
+  ok('折叠状态在轮询重渲染后保留', s12c.open === false && s12c.cards > 0, JSON.stringify(s12c));
+
+  const s12d = await cdp.ev(`(() => {
+    const card = document.querySelector('.rkb-card[data-rkb-task]');
+    const id = card ? card.dataset.rkbTask : '';
+    if (card) card.click();
+    return { id, page: !document.querySelector('#kanban-page').hidden,
+             detail: !document.querySelector('#kb-drawer').hidden,
+             railHidden: document.querySelector('#rail').hidden };
+  })()`);
+  ok('点卡片收起 rail、打开完整看板页与详情抽屉（不并排两份看板）',
+    !!s12d.id && s12d.page && s12d.detail && s12d.railHidden, JSON.stringify(s12d));
+
+  const s12e = await cdp.ev(`(() => {
+    closeKanbanPage();
+    toggleRail(true);
+    showKanban(true);
+    closeKanbanPage();
+    return { railVisible: railKanbanVisible(), pageHidden: document.querySelector('#kanban-page').hidden,
+             timer: !!KB.timer };
+  })()`);
+  ok('关整页看板后 rail 轮询继续在跑（不误停）',
+    s12e.railVisible && s12e.pageHidden && s12e.timer, JSON.stringify(s12e));
+
+  await cdp.ev(`(async () => { await loadPreviewInput('/tmp/demo/report.md'); return 1; })()`);
+  const s12f = await cdp.ev(`(() => ({ tab: railTab, hint: document.querySelector('#rail-hint').textContent }))()`);
+  ok('Agent 写文件触发预览时不抢看板页签',
+    s12f.tab === 'kanban' && s12f.hint.includes('看板'), JSON.stringify(s12f));
+
+  await cdp.ev(`(() => { setRailTab('preview'); return 1; })()`);
+  const s12g = await cdp.ev(`(() => ({ tab: railTab,
+    kHidden: document.querySelector('#kanban-pane').hidden,
+    pHidden: document.querySelector('#preview-pane').hidden, timer: !!KB.timer }))()`);
+  ok('切回预览：看板面收起、预览面恢复、轮询停表',
+    s12g.tab === 'preview' && s12g.kHidden && !s12g.pHidden && !s12g.timer, JSON.stringify(s12g));
+
+  const railBefore12 = await cdp.ev(`document.querySelector('#rail').offsetWidth`);
+  await cdp.ev(`(() => { document.documentElement.setAttribute('data-theme', 'dark'); setRailTab('kanban'); return 1; })()`);
+  const s12h = await cdp.ev(`(() => ({ card: getComputedStyle(document.querySelector('.rkb-card')).backgroundColor,
+    rail: document.querySelector('#rail').offsetWidth }))()`);
+  ok('深色主题卡片跟随 --canvas，rail 定版宽度不变',
+    s12h.card !== 'rgb(255, 255, 255)' && s12h.card !== 'rgb(250, 249, 245)'
+      && s12h.rail === railBefore12, JSON.stringify(s12h));
+  await cdp.ev(`(() => { document.documentElement.setAttribute('data-theme', 'light'); setRailTab('preview'); toggleRail(false); return 1; })()`);
 
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
