@@ -284,9 +284,49 @@ body.resizing #sidebar { transition: none; }
 #session-list li.s-proj:hover .s-pnew, #session-list .s-pnew:focus-visible { opacity: 1; }
 #session-list .s-pnew:hover { color: var(--text); background: var(--fill-2); }
 #session-list .s-pnew:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* 项目预览截断提示行：只读，不可交互 */
-#session-list li.s-more { min-height: 22px; cursor: default; font-size: 10.5px; color: var(--caption); }
-#session-list li.s-more:hover { background: transparent; color: var(--caption); }
+/* 项目分组头：折叠开关铺满左侧（点名字即收/开，官方 WorkspaceHeader 语义）。
+   项目名右侧是会话计数、再右侧是「＋」与「⋯」；折叠/展开状态由 aria-expanded 表达。 */
+#session-list .s-ptoggle {
+  display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+  padding: 0; margin: 0; border: 0; border-radius: 4px;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+#session-list .s-ptoggle:hover { color: var(--text); }
+#session-list .s-ptoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 折叠箭头常占位只淡出，展开时悬停才显形 —— 避免文字左右跳 */
+#session-list .s-pcaret {
+  width: 10px; height: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--text-3); opacity: 0; transition: opacity .12s, transform .12s;
+}
+/* 三角形用边框画，不依赖字体里有没有 ▸ 这个字形 */
+#session-list .s-pcaret::before {
+  content: ''; width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+#session-list .s-ptoggle[aria-expanded="true"] .s-pcaret { transform: rotate(90deg); }
+#session-list .s-ptoggle[aria-expanded="false"] .s-pcaret { opacity: .75; }
+#session-list li.s-proj:hover .s-pcaret,
+#session-list .s-ptoggle:focus-visible .s-pcaret { opacity: .75; }
+/* 展开但空的项目：一行占位说明（官方 noSessions） */
+#session-list li.s-pempty {
+  min-height: 22px; cursor: default; padding-left: 24px;
+  font-size: 10.5px; color: var(--caption);
+}
+#session-list li.s-pempty:hover { background: transparent; color: var(--caption); }
+/* 项目下的会话行缩进到项目名所在列：折叠箭头占 10px + 4px 间距 */
+#session-list li.s-psess { padding-left: 24px; }
+/* 「再显示 N 个」分页行（官方 WorkspaceShowMoreRow）：整行可点，不是死文案 */
+#session-list li.s-pshow { min-height: 22px; cursor: default; }
+#session-list .s-pshow-btn {
+  width: 100%; min-height: 22px; padding: 0 6px 0 14px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--caption); font-size: 10.5px; line-height: 22px;
+  text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#session-list .s-pshow-btn:hover { color: var(--text); background: var(--nav-hover); }
+#session-list .s-pshow-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .s-rename-input { width: 100%; font-size: 12.5px; border: 1px solid var(--blue); border-radius: 4px; padding: 2px 5px; outline: none; background: var(--canvas); color: var(--text); }
 
 /* 会话操作菜单（固定在视口坐标，跟随 ⋯ 按钮） */

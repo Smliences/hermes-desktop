@@ -367,7 +367,7 @@ async function refreshSessions(search = '') {
     const ql = q.toLowerCase();
     state.sessions = all
       .map((s) => ({ ...s, snippet: (hitMap.get(s.id) || {}).snippet || '', fulltext: hitMap.has(s.id) }))
-      .filter((s) => !q || String(s.title || '').toLowerCase().includes(ql) || String(s.id).toLowerCase().includes(ql) || s.fulltext)
+      .filter((s) => !q || sessionLabel(s).toLowerCase().includes(ql) || String(s.id).toLowerCase().includes(ql) || s.fulltext)
       .slice(0, 80);
     // 后端冷启（CLI 常要 5~12s）会晚于首屏：树请求失败时保留上一次的分组，不把侧栏刷空，
     // 并用 projectsTreeOk 标记给启动自愈判断是否还要重试。成功才覆盖树。
@@ -417,6 +417,18 @@ function sessionGroup(s) {
   return '更早';
 }
 /** 侧栏单个会话行（项目预览与时间分组共用）：返回 li，由调用方挂事件 */
+/** 会话显示名（官方 sessionTitle：title → preview → 'Untitled session'）。
+ *  CLI 的标题是异步生成的，新建会话在生成前 title 为空；服务层还会退化成会话 id，
+ *  那串 `local-<64 hex>` 不能当标题显示，所以与 id 相同的 title 视作「没有标题」。 */
+function sessionLabel(s) {
+  const o = s || {};
+  const id = String(o.id || '');
+  const raw = String(o.title || '').trim();
+  const title = raw && raw !== id ? raw : '';
+  const preview = String(o.preview || '').trim();
+  return title || preview || '未命名会话';
+}
+
 function sessionItemEl(s, { query = '', snippet = '' } = {}) {
   const tab = activeTab();
   const li = document.createElement('li');
@@ -427,7 +439,7 @@ function sessionItemEl(s, { query = '', snippet = '' } = {}) {
   li.setAttribute('role', 'option');
   li.setAttribute('tabindex', '0');
   li.setAttribute('aria-selected', tab && s.id === tab.sessionId ? 'true' : 'false');
-  li.innerHTML = `<span class="s-main"><span class="s-title">${hlMark(s.title, query)}</span>` +
+  li.innerHTML = `<span class="s-main"><span class="s-title">${hlMark(sessionLabel(s), query)}</span>` +
     (snippet ? `<span class="s-snippet">${hlMark(snippet, query)}</span>` : '') + `</span>` +
     `<span class="s-actions" role="button" tabindex="0" aria-label="会话操作" title="会话操作">⋯</span>` +
     `<span class="s-meta">${s.pinned ? '⌁ ' : ''}${when}</span>`;
@@ -459,6 +471,11 @@ function sessionItemEl(s, { query = '', snippet = '' } = {}) {
 /** 项目行「＋」：在项目根目录新建会话 —— CLI 按 cwd 的 git 仓库根自动归属项目 */
 function newTabInProject(projectPath) {
   const p = String(projectPath || '');
+  // 官方 prepareWorkspaceTarget：先展开目标分组，否则新会话会落进一个收起的项目里
+  const root = p.replace(/\/+$/, '');
+  const proj = (Array.isArray(state.projectsTree) ? state.projectsTree : [])
+    .find((x) => x && String(x.path || '').replace(/\/+$/, '') === root);
+  if (proj) setProjectOpen(proj.id, true);
   const t = newTab();
   if (p.startsWith('/')) t.cwd = p;
   syncComposerProject();
@@ -501,6 +518,63 @@ function applyComposerProject(value) {
   }
   syncComposerProject();
 }
+/** 项目分组的分页尺寸（官方 model.ts：首屏 SIDEBAR_GROUP_PAGE=5，「再显示」每次 PROJECT_SESSION_PAGE=50）。 */
+const SB_PROJECT_PAGE = 5;
+const SB_PROJECT_STEP = 50;
+/** 每个项目已展开的行数（只在内存里，重绘不丢；切项目筛选不影响）。 */
+const sbProjectShown = new Map();
+
+/** 项目折叠状态（官方 $sidebarWorkspaceNodeOpen）：存「解析后的布尔」而不是与默认值异或，
+ *  这样有会话的项目默认展开、空项目默认收起，用户显式折叠/展开后不再被默认值翻转。
+ *  localStorage 只在渲染层用，不进 CLI 配置。 */
+const SB_PROJECT_OPEN_KEY = 'sb-project-open';
+function sbProjectOpenMap() {
+  try {
+    const o = JSON.parse(safeGet(SB_PROJECT_OPEN_KEY) || '{}');
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch { return {}; }
+}
+function projectOpen(id, fallback) {
+  const v = sbProjectOpenMap()[String(id || '')];
+  return typeof v === 'boolean' ? v : !!fallback;
+}
+function setProjectOpen(id, open) {
+  const key = String(id || '');
+  if (!key) return;
+  const m = sbProjectOpenMap();
+  if (m[key] === open) return;
+  m[key] = open;
+  safeSet(SB_PROJECT_OPEN_KEY, JSON.stringify(m));
+}
+
+/** 项目分组的会话行：树里的 preview（最近几条）+ 本地列表按 sessionIds 补齐。
+ *  本地列表的标题带「首条用户消息」回退，覆盖到 preview 行上（官方 live overlay 同义），
+ *  否则新会话标题还没生成时，项目分组里就是一片空白。 */
+function projectSessionRows(p, byId, liveIds) {
+  const seen = new Set();
+  const out = [];
+  const push = (row) => {
+    const id = String((row && row.id) || '');
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const live = byId.get(id);
+    out.push(live ? { ...row, ...live } : row);
+  };
+  for (const s of (p.previewSessions || [])) push(s);
+  for (const id of (p.sessionIds || [])) {
+    if (!liveIds.has(id)) continue; // 超出本地列表窗口的会话没有数据可渲染，不伪造空行
+    push(byId.get(id) || { id });
+  }
+  return out;
+}
+
+/** 折叠/展开会重建 DOM，把焦点还给同一个项目的开关（键盘操作不至于跳回页首）。 */
+function focusProjectToggle(pid) {
+  const gl = [...document.querySelectorAll('#session-list .s-proj')].find((x) => x.dataset.pid === pid);
+  const btn = gl && gl.querySelector('.s-ptoggle');
+  if (btn) { try { btn.focus({ preventScroll: true }); } catch {} }
+}
+
 function renderSessions(q = '') {
   const ul = $('#session-list'); ul.innerHTML = '';
   const query = q || (($('#session-search') && $('#session-search').value.trim()) || '');
@@ -513,17 +587,39 @@ function renderSessions(q = '') {
     const s = state.sessions.find((x) => x.id === id);
     return claimed.has(id) && !(s && (Number(s.pinned) > 0 || s.pinned === true));
   };
-  // 项目分组：sidebarProjectNodes 已滤掉 auto 项目与 Home 桶，只留显式项目（含 0 会话）；
-  // 服务端已按 lastActive 排序。被这些项目认领的会话才从下方时间分组排除。
+  // 项目分组（官方 SidebarWorkspaceGroup）：头部是折叠开关 + 名称 + 计数 + 新建/操作，
+  // 展开后按页显示（首屏 5 条，「再显示」每次 +50）；空项目展开显示「暂无会话」。
+  const byId = new Map(state.sessions.map((s) => [s.id, s]));
+  const liveIds = new Set(byId.keys());
   let shownProject = false;
   for (const p of projects) {
     shownProject = true;
+    const pid = String(p.id || '');
+    const label = String(p.label || p.id || '');
+    const rowsAll = projectSessionRows(p, byId, liveIds);
+    const open = projectOpen(pid, (p.sessionCount || 0) > 0);
+    const shown = Math.max(SB_PROJECT_PAGE, sbProjectShown.get(pid) || SB_PROJECT_PAGE);
+    const rows = rowsAll.slice(0, shown);
+    const rest = Math.max(0, rowsAll.length - rows.length);
     const gl = document.createElement('li');
     gl.className = 's-group s-proj';
+    gl.dataset.pid = pid;
     gl.setAttribute('role', 'presentation');
     const safePath = esc(p.path || '');
-    gl.innerHTML = `<span class="s-pname">${esc(p.label || p.id)}<span class="s-pcount">${p.sessionCount || 0}</span></span>` +
+    const name = esc(label);
+    // 折叠按钮铺满左侧，点名字即收/开（官方 WorkspaceHeader 的 disclosure 语义）
+    gl.innerHTML = `<button class="s-ptoggle" type="button" aria-expanded="${open ? 'true' : 'false'}" ` +
+        `aria-label="${open ? '收起' : '展开'}${name}的会话" title="${name}">` +
+        `<span class="s-pcaret" aria-hidden="true"></span>` +
+        `<span class="s-pname">${name}<span class="s-pcount">${p.sessionCount || 0}</span></span></button>` +
       (p.path ? `<button class="s-pnew" data-cwd="${safePath}" title="在 ${safePath} 新建会话（会话将归属该项目）" aria-label="在此项目新建会话">+</button>` : '');
+    const toggle = gl.querySelector('.s-ptoggle');
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      setProjectOpen(pid, !open);
+      renderSessions(currentSearch());
+      focusProjectToggle(pid);
+    };
     const plus = gl.querySelector('.s-pnew');
     if (plus) {
       plus.onclick = (e) => { e.stopPropagation(); newTabInProject(p.path); };
@@ -535,7 +631,7 @@ function renderSessions(q = '') {
     const more = document.createElement('button');
     more.className = 's-pmore';
     more.textContent = '⋯';
-    more.title = `项目操作：${p.label || p.id}`;
+    more.title = `项目操作：${label}`;
     more.setAttribute('aria-label', '项目操作');
     more.onclick = (e) => { e.stopPropagation(); openProjectMenu(p, more); };
     more.onkeydown = (e) => {
@@ -544,16 +640,37 @@ function renderSessions(q = '') {
     gl.appendChild(more);
     gl.oncontextmenu = (e) => { e.preventDefault(); openProjectMenu(p, gl); };
     ul.appendChild(gl);
-    for (const ps of (p.previewSessions || []).slice(0, 3)) {
+    if (!open) continue;
+    if (!rowsAll.length) {
+      const empty = document.createElement('li');
+      empty.className = 's-pempty';
+      empty.setAttribute('role', 'presentation');
+      empty.textContent = '暂无会话';
+      ul.appendChild(empty);
+      continue;
+    }
+    for (const ps of rows) {
       const li = sessionItemEl(ps, { query });
+      li.classList.add('s-psess'); // 项目下的会话缩进到项目名所在列（官方 tree 层级）
       ul.appendChild(li);
     }
-    if ((p.sessionCount || 0) > 3) {
-      const more = document.createElement('li');
-      more.className = 's-more';
-      more.setAttribute('role', 'presentation');
-      more.textContent = `… 该项目还有 ${p.sessionCount - 3} 条会话`;
-      ul.appendChild(more);
+    if (rest > 0) {
+      const page = Math.min(SB_PROJECT_STEP, rest);
+      const moreRow = document.createElement('li');
+      moreRow.className = 's-pshow';
+      moreRow.setAttribute('role', 'presentation');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 's-pshow-btn';
+      btn.textContent = `… 在 ${label} 中再显示 ${page} 个`;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        sbProjectShown.set(pid, shown + SB_PROJECT_STEP);
+        renderSessions(currentSearch());
+        focusProjectToggle(pid);
+      };
+      moreRow.appendChild(btn);
+      ul.appendChild(moreRow);
     }
   }
   if (shownProject) {
@@ -856,7 +973,11 @@ async function openSession(sessionId) {
         tab.items.push({ kind: 'tool', name: m.toolName, input: null, output: m.content, state: 'ok', done: true, ts });
       }
     }
-    tab.title = tab.items.find((i) => i.kind === 'user')?.text.slice(0, 24) || sessionId;
+    // 官方 sessionTitle 同序：首条用户消息 → 列表里的标题/预览 → 未命名会话。
+    // 旧实现最后回落到 sessionId，于是空会话的页签标题变成一串 local-<hash>。
+    const known = state.sessions.find((x) => x.id === sessionId);
+    tab.title = tab.items.find((i) => i.kind === 'user')?.text.slice(0, 24)
+      || (known ? sessionLabel(known) : '') || '未命名会话';
   } catch (e) { toast('加载历史失败: ' + ((e && e.message) || e)); }
   finally { if (gen === tab.loadGen) tab.loading = false; }
   // 状态条用量初值（库内累计值；回合进行中会被 gateway 的实时 session.usage 覆盖）

@@ -1282,9 +1282,49 @@ t('侧栏项目树：数据只来自 /api/profiles/projects/tree 投影，时间
   assert.ok(appSrc.includes('sessionItemEl('), '项目预览行未复用会话行渲染');
   assert.ok(appSrc.includes("textContent = '其他会话'"), '缺少剩余会话分组标题');
   // 样式类必须在 styles.css 有规则（CSS class 契约）
-  for (const cls of ['.s-proj', '.s-pname', '.s-pcount', '.s-pnew', '.s-more']) {
+  for (const cls of ['.s-proj', '.s-pname', '.s-pcount', '.s-pnew', '.s-pmore',
+    '.s-ptoggle', '.s-pcaret', '.s-pempty', '.s-pshow', '.s-psess']) {
     assert.ok(cssSrc.includes(cls), '缺少样式规则 ' + cls);
   }
+});
+t('会话显示名：标题 → 预览 → 未命名会话，id 式标题不算标题', () => {
+  // 官方 lib/chat-runtime sessionTitle 同序；服务层 title 会退化成 session id，不能再原样显示
+  assert.ok(appSrc.includes('function sessionLabel(s)'), '缺少会话显示名兜底');
+  const anchor = 'function sessionLabel(s)';
+  const body = appSrc.slice(appSrc.indexOf(anchor), appSrc.indexOf('function sessionItemEl('));
+  assert.ok(body.includes("const title = raw && raw !== id ? raw : ''"), '未过滤 id 式标题');
+  assert.ok(/return title \|\| preview \|\| '未命名会话'/.test(body), '标题回退顺序不符官方');
+  // 三处显示口都要走同一个兜底：侧栏行、搜索过滤、打开会话后的页签标题
+  assert.ok(appSrc.includes("hlMark(sessionLabel(s), query)"), '侧栏行未使用显示名兜底');
+  assert.ok(appSrc.includes('sessionLabel(s).toLowerCase().includes(ql)'), '搜索未匹配显示名');
+  assert.ok(appSrc.includes("|| (known ? sessionLabel(known) : '') || '未命名会话'"),
+    '打开空会话后页签标题仍回落成 session id');
+});
+t('项目分组折叠与分页：官方 WorkspaceHeader / ShowMoreRow 同语义', () => {
+  // 折叠状态存「解析后的布尔」：有会话默认展开、空项目默认收起，用户显式选择优先
+  assert.ok(appSrc.includes("const SB_PROJECT_OPEN_KEY = 'sb-project-open'"), '缺少折叠状态存储键');
+  assert.ok(appSrc.includes('function projectOpen(id, fallback)'), '缺少折叠状态读取');
+  assert.ok(appSrc.includes('function setProjectOpen(id, open)'), '缺少折叠状态写入');
+  assert.ok(appSrc.includes("typeof v === 'boolean' ? v : !!fallback"), '折叠默认值未按「有会话才展开」解析');
+  assert.ok(appSrc.includes('const open = projectOpen(pid, (p.sessionCount || 0) > 0)'), '项目分组未按会话数决定默认展开');
+  // 头部是开关：aria-expanded + 点名字切换；收起时不渲染任何会话行
+  assert.ok(/class="s-ptoggle" type="button" aria-expanded="\$\{open \? 'true' : 'false'\}"/.test(appSrc),
+    '项目行缺少 aria-expanded 开关');
+  assert.ok(appSrc.includes('setProjectOpen(pid, !open)') && appSrc.includes('focusProjectToggle(pid)'),
+    '折叠后未切换状态或未归还焦点');
+  assert.ok(appSrc.includes('if (!open) continue;'), '收起状态仍渲染了会话行');
+  // 展开空项目显示占位（官方 noSessions）
+  assert.ok(appSrc.includes("empty.textContent = '暂无会话'"), '空项目展开后没有占位提示');
+  // 分页：首屏 5 条，「再显示」每次 +50（官方 SIDEBAR_GROUP_PAGE / PROJECT_SESSION_PAGE）
+  assert.ok(appSrc.includes('const SB_PROJECT_PAGE = 5;') && appSrc.includes('const SB_PROJECT_STEP = 50;'),
+    '分页尺寸与官方不一致');
+  assert.ok(appSrc.includes('中再显示 ${page} 个'), '缺少「再显示 N 个」分页行');
+  assert.ok(appSrc.includes('sbProjectShown.set(pid, shown + SB_PROJECT_STEP)'), '分页点击未推进已显示行数');
+  // 分组取数：树预览 + 本地列表按 sessionIds 补齐，标题用本地（带首条用户消息回退）
+  assert.ok(appSrc.includes('function projectSessionRows(p, byId, liveIds)'), '缺少项目分组取数函数');
+  assert.ok(appSrc.includes('if (!liveIds.has(id)) continue;'), '无数据的认领 id 被伪造成空行');
+  // 「＋」先展开目标分组（官方 prepareWorkspaceTarget），否则新会话落进收起的项目
+  assert.ok(/if \(proj\) setProjectOpen\(proj\.id, true\);/.test(appSrc), '新建会话前未展开目标项目');
 });
 t('项目内新建会话：cwd 从项目根一路传到 session.create，主进程校验绝对路径 + 目录存在', () => {
   // 渲染层：项目行「＋」→ newTabInProject（带 cwd 的新页签）；send payload 带 cwd
