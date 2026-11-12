@@ -10,18 +10,19 @@
  *   - 会话 token 只存在于本模块与 master 进程，绝不进入返回值 / 渲染层；
  *     每个请求由主进程自己加 `X-Hermes-Session-Token`。
  *   - 读端点只允许 GET；写端点固定白名单（新建任务/看板、删除任务、提交派发、
- *     改派受让人、拖列改状态、派发 tick、拆解、补规格、估算、项目绑定、编排开关），
- *     路径由本模块构造，渲染层无法拼任意路径或任意 body 字段。
+ *     改派受让人、拖列改状态、派发 tick、拆解、补规格、估算、评论、项目绑定、
+ *     编排开关），路径由本模块构造，渲染层无法拼任意路径或任意 body 字段。
  *   - 任务 id / board slug / run id 全部过严格正则，query 走 URLSearchParams
  *     编码；固定 loopback 127.0.0.1 + 端口数字校验 + 不跟随重定向 + 超时 + 体积上限。
  *   - CLI 返回的 task 行含 workspace_path / claim_lock / worker_pid 等本机敏感
  *     字段，统一按白名单投影后才交给渲染层；正文与诊断做长度 / 条数封顶。
  *   - 派发是唯一会唤醒 agent worker 的路径，三重兜底：dry_run 默认 true
- *     （只有显式 false 才真派发）、单次最多启动 4 个 worker、同一客户端串行
- *     （并发请求直接拒绝）。派发结果里的 workspace 路径与 worker PID 一律不透出。
+ *     （只有显式 false 才真派发）、并发上限与 CLI 默认对齐（max=8，本看板
+ *     running + 本次）、同一客户端串行（并发请求直接拒绝）。派发结果里的
+ *     workspace 路径与 worker PID 一律不透出。
  *     「派发这一张」（dispatchTask）额外先在 dry_run 里确认它是队首，
  *     否则真派发会先唤醒更早的卡片 —— 那种情况一律不写库。
- *   - 明确不放行：bulk、reclaim、terminate、评论写入、把任务设成 running、
+ *   - 明确不放行：bulk、reclaim、terminate、把任务设成 running、
  *     归档、裸 /estimate（无任务的文本级估算）、orchestration 配置写入
  *     （只读推导在 hermes-kanban-mode.js）、看板切换（switch 恒为 false）。
  *     人工状态推进只走 SET_STATUSES 那 7 个动词。
@@ -70,8 +71,10 @@ const SET_STATUSES = Object.freeze(['triage', 'todo', 'ready', 'review', 'blocke
 const ASSIGNEE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 /** 项目标识（id 或 slug）：字母或数字开头，可含 _ -。CLI 接受 id / slug 两种形态。 */
 const PROJECT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
-/** 单次手动派发的硬上限，远低于 CLI 默认 8：一次误点最多唤醒 4 个 worker。 */
-const DISPATCH_MAX_SPAWN = 4;
+/** 手动派发的并发上限钳制：与 CLI 的 POST /dispatch 默认 max=8 对齐。
+ *  CLI 的 max_spawn 是「本看板并发上限（running + 本次）」，不是每次批量 ——
+ *  用户选 8 最多也就把并发提到 8 个 worker，再高需要改 CLI 配置而不是这里。 */
+const DISPATCH_MAX_SPAWN = 8;
 /** 提交派发后任务进入的状态。服务层写死，渲染层只传 taskId。 */
 const SUBMIT_STATUS = 'ready';
 
@@ -254,6 +257,10 @@ function buildWritePath(op, params = {}) {
     case 'estimate':
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/estimate' + suffix;
+    // 评论：CLI 的 POST /tasks/{id}/comments（body 只有 body + 可选 author，均不过模型）。
+    case 'comment':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/comments' + suffix;
     default: return null;
   }
 }
@@ -296,7 +303,19 @@ function cleanTaskInput(raw) {
   }
   return out;
 }
-/** 新建看板：不传 switch，绝不改 CLI 的 current_board 指针。 */function cleanBoardInput(raw) {
+/** 评论：body 必填（CLI 对空白串回 400 "body is required"），author 可选（缺省 CLI 落 'dashboard'）。 */
+function cleanCommentInput(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const body = cleanText(o.body, 4000);
+  if (!body) return null;
+  const out = { body };
+  const author = cleanText(o.author, 80);
+  if (author) out.author = author;
+  return out;
+}
+
+/** 新建看板：不传 switch，绝不改 CLI 的 current_board 指针。 */
+function cleanBoardInput(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
   const slug = cleanText(o.slug, 64);
   if (!BOARD_RE.test(slug)) return null;
@@ -966,6 +985,22 @@ function createKanbanClient(getBackendInfo) {
       const r = await write('estimate', 'POST', { board: o.board, taskId: id }, {}, ESTIMATE_TIMEOUT_MS);
       if (!r.ok) return { ok: false, error: kbEstimateReason(r.error || '估算没成功'), status: r.status };
       return { ok: true, generation: info().generation || 0, ...projectEstimate(r.data) };
+    },
+
+    /**
+     * 添加评论（POST /tasks/{id}/comments）。追加文本：不过模型、不计费、不改状态，
+     * CLI 对空白 body 回 400 "body is required"，这里在本地先做同一道校验，
+     * 省一次往返；body / author 都过 cleanText（控制字符剥除 + 限长）。
+     */
+    async addComment(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const body = cleanCommentInput({ body: o.body, author: o.author });
+      if (!body) return { ok: false, error: '评论内容不能为空' };
+      const r = await write('comment', 'POST', { board: o.board, taskId: id }, body);
+      if (!r.ok) return r;
+      return { ok: true, generation: info().generation || 0, taskId: id };
     },
 
     /** 删除任务（UI 侧必须先过二次确认卡）。CLI 会在有子任务等场景自行拒绝。 */

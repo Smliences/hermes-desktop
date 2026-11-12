@@ -7111,6 +7111,16 @@ function renderKanbanDetail(d) {
         </div>
         <div class="kbd-reassign-note" id="kbd-reassign-note">受让人 = Hermes profile 名，派发时用 <code>hermes -p &lt;名字&gt;</code> 启动 worker；留空表示取消指派。</div>
       </div>` : '';
+  // 评论输入：追加文本、不计费、不改状态；发布仍过一次确认（与全部写操作一致）。
+  const commentBox = canDelete
+    ? `<div class="kbd-comment-box" id="kbd-comment-box">
+        <textarea id="kbd-comment-input" rows="3" maxlength="4000"
+          placeholder="给这张卡写条评论（worker 与看板都会看到）…"></textarea>
+        <div class="kbd-comment-foot">
+          <span class="kbd-hint">追加一条文本 · 不计费 · 不改状态</span>
+          <button class="kb-btn" type="button" data-kb-comment="${esc(t.id)}">发布评论</button>
+        </div>
+      </div>` : '';
 
   body.innerHTML = `
     <div class="kbd-id">${esc(t.id || '')}</div>
@@ -7128,7 +7138,8 @@ function renderKanbanDetail(d) {
     <div class="kbd-section"><h3>依赖 (${(links.parents || []).length + (links.children || []).length})</h3>
       ${linkRows ? `<ul class="kbd-list">${linkRows}</ul>` : '<div class="kbd-empty">无父子依赖</div>'}</div>
     <div class="kbd-section"><h3>评论 (${(d.comments || []).length})</h3>
-      ${comments ? `<ul class="kbd-list">${comments}</ul>` : '<div class="kbd-empty">暂无评论</div>'}</div>
+      ${comments ? `<ul class="kbd-list">${comments}</ul>` : '<div class="kbd-empty">暂无评论</div>'}
+      ${commentBox}</div>
     <div class="kbd-section"><h3>运行记录 (${(d.runs || []).length})</h3>
       ${runs ? `<ul class="kbd-list">${runs}</ul>` : '<div class="kbd-empty">尚无运行记录</div>'}</div>
     ${atts ? `<div class="kbd-section"><h3>附件</h3><ul class="kbd-list">${atts}</ul></div>` : ''}
@@ -7347,6 +7358,48 @@ function kbEstimateTask(taskId, host) {
   });
 }
 
+/**
+ * 发布评论（抽屉评论区）：追加文本，不计费、不改状态、永不覆盖已有内容。
+ * 与其余写操作一致，发布前过一次确认卡（写清「作者记为 dashboard」）；
+ * 成功后重读任务详情，评论列表就地刷新。
+ */
+function kbAddComment(taskId) {
+  const id = String(taskId || '');
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(id)) return;
+  const input = $('#kbd-comment-input');
+  const box = $('#kbd-comment-box');
+  const text = input ? String(input.value || '').trim() : '';
+  if (!text) { toast('先写点什么再发布', 1600); if (input) input.focus(); return; }
+  const a = kbApi();
+  // 确认卡挂在评论框内：抽屉很长，挂 body 末尾会掉到可视区外
+  const host = box || $('#kb-drawer-body');
+  if (!host || !a || !a.kanbanAddComment) { toast('此页需要 Hermes 桌面端才能发评论', 1800); return; }
+  const clip = text.length > 60 ? text.slice(0, 60) + '…' : text;
+  opConfirm(host, {
+    title: '发布这条评论？',
+    cmd: `POST /api/plugins/kanban/tasks/${id}/comments`,
+    note: `追加一条评论（作者记为 dashboard）：「${clip}」。不计费、不改状态，发布后不能撤回。`,
+    confirmLabel: '发布评论',
+    onGo: async () => {
+      const btn = box && box.querySelector('[data-kb-comment]');
+      if (btn) btn.disabled = true;
+      try {
+        const r = await a.kanbanAddComment(id, { board: KB.filters.board || '', body: text });
+        if (!r || !r.ok) {
+          toast('评论没发出去：' + ((r && r.error) || '未知错误'), 3000);
+          if (btn && btn.isConnected) btn.disabled = false;
+          return;
+        }
+        toast('评论已发布', 1600);
+        await openKanbanTask(id, true); // 重读详情，评论列表就地刷新
+      } catch (e) {
+        toast('评论失败：' + ((e && e.message) || '未知错误'), 3000);
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
+    },
+  });
+}
+
 /** 抽屉里的「保存改派」：只写 assignee，不推进状态（推进 ready 走「提交派发」）。 */
 async function kbReassignTask(taskId, host) {
   if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(String(taskId || ''))) return;
@@ -7421,7 +7474,9 @@ function kbDpClearConfirm() {
  * 所以先按本地上限减去已在跑的 worker，算出本次真正能新增几个。
  */
 function kbDispatchCapacity() {
-  const max = Math.max(1, Math.min(4, Number($('#kb-dp-max') && $('#kb-dp-max').value) || 1));
+  // 上限语义与 CLI dispatch_once 对齐：max_spawn 是「本看板并发上限（running + 本次）」，
+  // CLI 的 POST /dispatch 默认 max=8，这里不再人为砍到 4；本地上限只截到 8。
+  const max = Math.max(1, Math.min(8, Number($('#kb-dp-max') && $('#kb-dp-max').value) || 1));
   const tasks = KB.board ? (KB.board.columns || []).flatMap((c) => c.tasks || []) : [];
   const running = tasks.filter((t) => String(t.status || '') === 'running').length;
   const ready = tasks.filter((t) => {
@@ -7567,7 +7622,7 @@ async function kbDispatchRun(dryRun) {
   if (preview) preview.disabled = true;
   if (run) run.disabled = true;
   kbDpState(dryRun ? '正在试运行…' : '正在派发…', '');
-  const max = Math.max(1, Math.min(4, Number($('#kb-dp-max') && $('#kb-dp-max').value) || 1));
+  const max = Math.max(1, Math.min(8, Number($('#kb-dp-max') && $('#kb-dp-max').value) || 1));
   try {
     const r = await a.kanbanDispatch({ board: KB.filters.board || '', dryRun: !!dryRun, max });
     if (my !== KB.dispatch.epoch || !KB.dispatch.open) return;
@@ -8382,6 +8437,8 @@ function setupKanban() {
     if (del) { kbDeleteTask(del.getAttribute('data-kb-delete'), del.closest('.kbd-danger')); return; }
     const re = e.target.closest && e.target.closest('[data-kb-reassign]');
     if (re) { kbReassignTask(re.getAttribute('data-kb-reassign'), re.closest('.kbd-reassign') || body); return; }
+    const cmt = e.target.closest && e.target.closest('[data-kb-comment]');
+    if (cmt) { kbAddComment(cmt.getAttribute('data-kb-comment')); return; }
     const t = e.target.closest && e.target.closest('[data-kb-task]');
     if (t) { openKanbanTask(t.getAttribute('data-kb-task')); return; }
     const s = e.target.closest && e.target.closest('[data-kb-session]');

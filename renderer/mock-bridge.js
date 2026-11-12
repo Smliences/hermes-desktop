@@ -313,6 +313,21 @@
         model: 'demo-estimator',
       };
     },
+    // 评论：追加文本，不计费、不改状态；空白内容本地拒（与服务层同规则）
+    async kanbanAddComment(taskId, opts = {}) {
+      const body = String((opts && opts.body) || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim().slice(0, 4000);
+      if (!body) return { ok: false, error: '评论内容不能为空' };
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, error: '任务不存在（Demo）' };
+      KB_COMMENTS.push({
+        id: KB_COMMENTS.length + 1, task_id: taskId,
+        author: String((opts && opts.author) || 'dashboard'),
+        body, created_at: Math.floor(Date.now() / 1000),
+      });
+      t.comment_count = KB_COMMENTS.filter((c) => c.task_id === taskId).length;
+      KB_EVT += 1;
+      return { ok: true, generation: 1, taskId };
+    },
     async kanbanActiveWorkers() {
       const ws = KB_TASKS.filter((t) => t.status === 'running').map((t, i) => ({
         run_id: i + 1, task_id: t.id, task_title: t.title, task_status: 'running',

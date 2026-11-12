@@ -79,7 +79,8 @@ const jsIds = uniq([
 // 不算死绑定：前三处本来就有 null 保护；其余是抽屉渲染时才生成的节点
 // （renderKanbanDetail 拼进 #kb-drawer-body，静态 index.html 里查不到）
 const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee',
-  'kbd-reassign-note', 'kbd-actions-decompose', 'kbd-actions-specify', 'kbd-actions-estimate']);
+  'kbd-reassign-note', 'kbd-actions-decompose', 'kbd-actions-specify', 'kbd-actions-estimate',
+  'kbd-comment-box', 'kbd-comment-input']);
 t(`HTML 有 ${htmlIds.length} 个 id，app.js 引用 ${jsIds.length} 个`, () => {
   assert.ok(htmlIds.length >= 100 && jsIds.length >= 80, 'id/引用数量异常，可能解析失败');
 });
@@ -1006,13 +1007,13 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!appSrc.includes('backend.token'), 'renderer 不应直接读后端 token');
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
-t('读写边界：读固定 GET，写只有十一条白名单，危险端点一律不暴露', () => {
+t('读写边界：读固定 GET，写只有十二条白名单，危险端点一律不暴露', () => {
   assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null, base)"), '读端点未固定 GET');
   assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
   for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch',
-    'orchestration', 'bindBoard', 'decompose', 'specify', 'estimate']) {
+    'orchestration', 'bindBoard', 'decompose', 'specify', 'estimate', 'comment']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少写端点 ' + op);
   }
   assert.ok(kbSrc.includes('TASK_ID_RE.test(String(p.taskId'), '任务 id 未过正则');
@@ -1025,8 +1026,8 @@ t('读写边界：读固定 GET，写只有十一条白名单，危险端点一�
   assert.ok(kbSrc.includes('default: return null'), '白名单之外必须拒绝');
   // orchestration 是唯一一条带 body 白名单的写端点，body 必须经 cleanOrchestration 投影；
   // 三条会花 LLM 钱的端点必须走 /tasks/{id}/…（见下方「辅助模型三条路径」）；
-  // 其余危险端点仍一律不暴露。
-  for (const bad of ["'/tasks/bulk'", "'/links'", "'/reclaim'", "'/terminate'", "'/comments'"]) {
+  // 其余危险端点仍一律不暴露（/links 与 /comments 的 DELETE 侧仍不开放）。
+  for (const bad of ["'/tasks/bulk'", "'/links'", "'/reclaim'", "'/terminate'"]) {
     assert.ok(!kbSrc.includes(bad), '不得暴露端点 ' + bad);
   }
   // 裸的文本级 /estimate（无任务、直接吃 title/body 并计费）不开放：
@@ -1054,12 +1055,15 @@ t('读写边界：读固定 GET，写只有十一条白名单，危险端点一�
     assert.ok(writeFn.includes(`return ${m}(snap, path`), `write() 缺少 ${m} 分发分支`);
   }
 });
-t('派发边界：默认 dry-run、显式才真跑、上限 4、串行、提交状态写死', () => {
+t('派发边界：默认 dry-run、显式才真跑、上限 8、串行、提交状态写死', () => {
   assert.ok(kbSrc.includes("case 'dispatch':") && kbSrc.includes("return '/dispatch?' + q.toString()"),
     '派发路径不固定');
   assert.ok(kbSrc.includes("p.dryRun === false ? 'false' : 'true'"), 'dry_run 缺省必须是 true');
   assert.ok(kbSrc.includes('o.dryRun !== false'), '客户端缺省必须是纯预览');
-  assert.ok(kbSrc.includes('const DISPATCH_MAX_SPAWN = 4'), '单次启动上限缺失');
+  // 上限与 CLI 的 POST /dispatch 默认 max=8 对齐：max_spawn 是「本看板并发上限
+  // （running + 本次）」，不是每次批量。以前桌面端自砍到 4，属于无来由的保守。
+  assert.ok(kbSrc.includes('const DISPATCH_MAX_SPAWN = 8'), '派发上限必须与 CLI 默认 8 对齐');
+  assert.ok(!/DISPATCH_MAX_SPAWN = 4/.test(kbSrc), '旧的 4 上限残留');
   assert.ok(kbSrc.includes('clampMaxSpawn(p.max)'), 'max 未做上限收敛');
   assert.ok(kbSrc.includes('dispatchBusy'), '缺少并发串行锁');
   assert.ok(kbSrc.includes("const SUBMIT_STATUS = 'ready'") && kbSrc.includes('{ status: SUBMIT_STATUS }'),
@@ -1156,6 +1160,49 @@ t('辅助模型三条路径：补规格改数据、估算只读，都要 confirm
   const mockSrc = read('renderer/mock-bridge.js');
   assert.ok(mockSrc.includes('async kanbanSpecify(') && mockSrc.includes('async kanbanEstimate('),
     'Demo 桥缺少两条路径');
+});
+t('评论：追加文本、不计费、不改状态，空 body 本地就拒', () => {
+  // 服务层：路径固定挂在任务下；body / author 过 cleanText（控制字符剥除 + 限长）
+  assert.ok(kbSrc.includes("case 'comment':") && kbSrc.includes("'/comments' + suffix"),
+    '评论端点路径不固定');
+  assert.ok(kbSrc.includes('function cleanCommentInput'), '评论 body 未清洗');
+  const cf = kbSrc.slice(kbSrc.indexOf('function cleanCommentInput'), kbSrc.indexOf('/** 新建看板'));
+  assert.ok(cf.includes('if (!body) return null'), '空 body 必须整体拒绝（CLI 对空白串回 400）');
+  assert.ok(cf.includes('cleanText(o.body, 4000)'), '评论 body 未限长');
+  assert.ok(cf.includes("cleanText(o.author, 80)"), 'author 未限长（缺省交 CLI 落 dashboard）');
+  // addComment：本地空 body 校验在 write 之前；不过模型、没有 confirm 闸（不计费），
+  // 但渲染层仍走一次确认卡（与全部受控写操作一致）
+  const at = kbSrc.indexOf('async addComment(');
+  assert.ok(at > 0, '缺少 addComment 方法');
+  const fn = kbSrc.slice(at, at + 900);
+  const iEmpty = fn.indexOf("return { ok: false, error: '评论内容不能为空' }");
+  const iWrite = fn.indexOf('await write(');
+  assert.ok(iEmpty > 0 && iWrite > iEmpty, '空 body 校验必须在发请求之前');
+  assert.ok(!/confirm/.test(fn), '评论不计费，不需要 confirm 硬闸（确认卡由渲染层出）');
+  assert.ok(!/retry|for\s*\(|while\s*\(/.test(fn), '评论不得自动重试');
+  // 渲染层：输入框 + 按钮 + 实现 + 委托分支 + 成功后重读详情
+  assert.ok(appSrc.includes('id="kbd-comment-input"') && appSrc.includes('data-kb-comment='),
+    '抽屉评论区缺输入框或按钮');
+  assert.ok(appSrc.includes('function kbAddComment('), '缺少评论实现');
+  assert.ok(appSrc.includes("e.target.closest('[data-kb-comment]')"), '抽屉事件委托缺评论分支');
+  assert.ok(appSrc.includes("a.kanbanAddComment(id, { board: KB.filters.board || '', body: text })"),
+    '调用未传清洗后的 body');
+  const af = appSrc.slice(appSrc.indexOf('function kbAddComment('), appSrc.indexOf('/** 抽屉里的「保存改派」'));
+  assert.ok(af.includes("await openKanbanTask(id, true)"), '发布成功后没重读详情刷新评论列表');
+  // 接线三段
+  assert.ok(mainSrc.includes("handle('kanban:add-comment'"), '主进程缺少 kanban:add-comment');
+  assert.ok(preloadSrc.includes("ipcRenderer.invoke('kanban:add-comment'"), 'preload 缺少 kanban:add-comment');
+  const mockSrc = read('renderer/mock-bridge.js');
+  assert.ok(mockSrc.includes('async kanbanAddComment('), 'Demo 桥缺少评论路径');
+});
+t('派发上限与 CLI 对齐：下拉与双端钳制都是 8', () => {
+  const htmlSrc = read('renderer/index.html');
+  for (const v of ['1', '2', '3', '4', '5', '6', '7', '8']) {
+    assert.ok(htmlSrc.includes(`<option value="${v}">`), '并发下拉缺 ' + v + ' 档');
+  }
+  const hits = appSrc.match(/Math\.min\(8, Number\(\$\('#kb-dp-max'\)/g) || [];
+  assert.ok(hits.length === 2, '渲染层两处（容量计算与发送）都必须钳到 8，实测 ' + hits.length);
+  assert.ok(!appSrc.includes('Math.min(4,'), '渲染层残留旧的 4 上限');
 });
 t('新建边界：默认收集箱、幂等键、绝不改 CLI 当前看板指针', () => {
   assert.ok(kbSrc.includes("const CREATE_STATUSES = Object.freeze(['triage', 'ready'])"), '起始状态白名单缺失');

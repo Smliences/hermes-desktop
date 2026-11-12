@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   kanbanDecompose: (taskId, opts) => ipcRenderer.invoke('kanban:decompose', taskId, opts || {}),
   kanbanSpecify: (taskId, opts) => ipcRenderer.invoke('kanban:specify', taskId, opts || {}),
   kanbanEstimate: (taskId, opts) => ipcRenderer.invoke('kanban:estimate', taskId, opts || {}),
+  kanbanAddComment: (taskId, opts) => ipcRenderer.invoke('kanban:add-comment', taskId, opts || {}),
   kanbanDispatchTask: (taskId, opts) => ipcRenderer.invoke('kanban:dispatch-task', taskId, opts || {}),
   kanbanDispatch: (opts) => ipcRenderer.invoke('kanban:dispatch', opts || {}),
   kanbanActiveWorkers: (opts) => ipcRenderer.invoke('kanban:workers', opts || {}),

@@ -961,7 +961,7 @@ async function run() {
     assert.strictEqual(kanban.buildPath('board', { board: null }), '/board', 'null board 不应变成 slug "null"');
     assert.strictEqual(kanban.buildPath('projects'), '/projects', '项目列表读端点缺失');
   });
-  await t('buildWritePath 只有十一条写路径，动态段同样过正则', () => {
+  await t('buildWritePath 只有十二条写路径，动态段同样过正则', () => {
     assert.strictEqual(kanban.buildWritePath('createTask'), '/tasks');
     assert.strictEqual(kanban.buildWritePath('createTask', { board: 'ops-2026' }), '/tasks?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('createBoard'), '/boards');
@@ -977,10 +977,14 @@ async function run() {
     assert.strictEqual(kanban.buildWritePath('specify', { taskId: 't_ab12', board: 'ops-2026' }),
       '/tasks/t_ab12/specify?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('estimate', {}), null, '估算缺 taskId 竟然能拼出路径');
+    // 评论同样挂具体任务（DELETE /links、DELETE /comments 仍不开放）
+    assert.strictEqual(kanban.buildWritePath('comment', { taskId: 't_ab12' }), '/tasks/t_ab12/comments');
+    assert.strictEqual(kanban.buildWritePath('comment', { taskId: 't_ab12', board: 'ops-2026' }),
+      '/tasks/t_ab12/comments?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'default' }), '/boards/default');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'ops 2026' }), null, '非法看板 slug 未被拒');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: '' }), null, '空 slug 未被拒');
-    for (const bad of ['bulk', 'task', 'comments', 'reclaim', 'terminate', '']) {
+    for (const bad of ['bulk', 'task', 'links', 'reclaim', 'terminate', '']) {
       assert.strictEqual(kanban.buildWritePath(bad), null, '未知写 op 未被拒：' + bad);
     }
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: '../x' }), null);
@@ -989,6 +993,7 @@ async function run() {
     assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('specify', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('estimate', { taskId: '../x' }), null);
+    assert.strictEqual(kanban.buildWritePath('comment', { taskId: '../x' }), null);
     // 人工状态推进的动词表：7 个都认，running（只能调度器认领）与 archived（单向）不在里面
     for (const s of ['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done']) {
       assert.ok(kanban.SET_STATUSES.includes(s), '缺少状态动词 ' + s);
@@ -1092,13 +1097,13 @@ async function run() {
     assert.strictEqual(tree.errors.length, 1, 'errors 未透传');
     assert.strictEqual(kanban.projectTree(null).projects.length, 0, '空响应不能抛错');
   });
-  await t('派发参数：dry_run 默认 true、显式 false 才真跑、max 硬上限 4', () => {
+  await t('派发参数：dry_run 默认 true、显式 false 才真跑、max 硬上限 8（对齐 CLI 默认）', () => {
     assert.strictEqual(kanban.buildWritePath('dispatch'), '/dispatch?dry_run=true&max=1');
     assert.strictEqual(kanban.buildWritePath('dispatch', { dryRun: true }), '/dispatch?dry_run=true&max=1');
     assert.strictEqual(kanban.buildWritePath('dispatch', { dryRun: false }), '/dispatch?dry_run=false&max=1');
     // 伪造的 truthy 值不能把试运行变成真派发
     assert.ok(!kanban.buildWritePath('dispatch', { dryRun: 'false' }).includes('dry_run=false'));
-    assert.ok(kanban.buildWritePath('dispatch', { dryRun: false, max: 999 }).endsWith('max=4'), 'max 未封顶');
+    assert.ok(kanban.buildWritePath('dispatch', { dryRun: false, max: 999 }).endsWith('max=8'), 'max 未封顶');
     assert.ok(kanban.buildWritePath('dispatch', { dryRun: false, max: -3 }).endsWith('max=1'), '负数 max 未收敛');
     assert.ok(kanban.buildWritePath('dispatch', { dryRun: false, max: '8' }).endsWith('max=1'), '字符串 max 未收敛');
     assert.strictEqual(kanban.buildWritePath('dispatch', { board: '../x' }), null, '非法 board 未拒');
@@ -1280,6 +1285,17 @@ async function run() {
           return;
         }
         res.end(JSON.stringify({ task: { id: 't_ab12', title: 'A', status: 'ready', workspace_path: '/secret' } }));
+        return;
+      }
+      if (req.method === 'POST' && p === '/api/plugins/kanban/tasks/t_ab12/comments') {
+        // 与 CLI 一致：空白 body 回 400 detail；成功 {ok:true}（评论不回传内容）
+        const body = JSON.parse(raw || '{}');
+        if (!String(body.body || '').trim()) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ detail: 'body is required' }));
+          return;
+        }
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
       if (req.method === 'GET' && p === '/api/plugins/kanban/workers/active') {
@@ -1465,6 +1481,44 @@ async function run() {
     assert.ok(!na.ok && na.reason.includes('辅助模型未配置'), '英文 reason 未中文化：' + na.reason);
     estimateMode = 'ok';
   });
+  await t('评论：空 body 本地拒、body/author 清洗后原样进请求、CLI 400 detail 透出', async () => {
+    const before = seen.length;
+    // 空 / 纯空白 / 控制字符剥完 → 本地就拒，请求都不发
+    for (const bad of ['', '   ', '\x07\x08']) {
+      const no = await client.addComment('t_ab12', { body: bad });
+      assert.ok(!no.ok && no.error.includes('评论内容不能为空'), '空白 body 竟然放行：' + JSON.stringify(no));
+    }
+    assert.strictEqual(seen.length, before, '空白 body 竟然发出了请求');
+    const badId = await client.addComment('../etc/passwd', { body: 'hi' });
+    assert.ok(!badId.ok, '非法 id 未拦下');
+
+    // 正常路径：body 去控制字符 + trim + 限长；author 缺省不发（CLI 落 'dashboard'）
+    const ok = await client.addComment('t_ab12', { board: 'default', body: '  已按方案 A 复现\x07，日志见附件  ' });
+    assert.ok(ok.ok, '评论失败：' + ok.error);
+    assert.strictEqual(ok.taskId, 't_ab12');
+    let req = seen[before];
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.path, '/api/plugins/kanban/tasks/t_ab12/comments?board=default');
+    assert.strictEqual(req.body, JSON.stringify({ body: '已按方案 A 复现，日志见附件' }), 'body 未清洗：' + req.body);
+
+    // author 透传（清洗后）；超长 body 截到 4000
+    const withAuthor = await client.addComment('t_ab12', { body: '好', author: ' ops\x1b ' });
+    assert.ok(withAuthor.ok);
+    req = seen[seen.length - 1];
+    assert.strictEqual(req.body, JSON.stringify({ body: '好', author: 'ops' }), 'author 未清洗：' + req.body);
+    const long = await client.addComment('t_ab12', { body: 'x'.repeat(5000) });
+    assert.ok(long.ok);
+    req = seen[seen.length - 1];
+    assert.strictEqual(JSON.parse(req.body).body.length, 4000, '超长 body 未截断');
+
+    // CLI 侧兜底校验（400 detail）照样透出：本地清洗保证正常输入到不了这里，
+    // 但 CLI 升级换校验文案时不能被吞成「接口返回 400」
+    force400 = true;
+    const rejected = await client.addComment('t_ab12', { body: 'hi' });
+    assert.ok(!rejected.ok, 'CLI 400 竟然被当成成功');
+    assert.ok(rejected.error.includes('title is required'), 'CLI detail 未透出：' + rejected.error);
+    force400 = false;
+  });
   await t('拖列改状态：只放行 7 个动词、running 本地拦下、body 只有 status', async () => {
     const before = seen.length;
     const run = await client.setTaskStatus('t_ab12', { status: 'running' });
@@ -1551,7 +1605,7 @@ async function run() {
     assert.strictEqual(preview.counts.reclaimed, 0, 'dry_run=true 未传到服务端');
     const r1 = seen[before];
     assert.strictEqual(r1.method, 'POST');
-    assert.strictEqual(r1.path, '/api/plugins/kanban/dispatch?board=default&dry_run=true&max=4');
+    assert.strictEqual(r1.path, '/api/plugins/kanban/dispatch?board=default&dry_run=true&max=8');
     assert.strictEqual(r1.body, '', '派发 POST 不应带 body');
     assert.strictEqual(r1.len, '0', '无 body 的 POST 必须显式声明长度');
     assert.strictEqual(r1.token, TOKEN, '派发请求未注入会话 token');

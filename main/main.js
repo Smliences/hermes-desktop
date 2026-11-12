@@ -777,6 +777,12 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.estimateTask(taskId, opts || {});
   });
+
+  // 添加评论：追加文本，不计费、不改状态；空白内容在服务层本地就拒。
+  handle('kanban:add-comment', async (_e, taskId, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.addComment(taskId, opts || {});
+  });
   // 拖拽指派：改派受让人（可选同时推进到 ready），不启动任何进程
   handle('kanban:reassign', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
