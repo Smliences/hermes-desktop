@@ -1195,6 +1195,48 @@ t('评论：追加文本、不计费、不改状态，空 body 本地就拒', ()
   const mockSrc = read('renderer/mock-bridge.js');
   assert.ok(mockSrc.includes('async kanbanAddComment('), 'Demo 桥缺少评论路径');
 });
+t('抽屉「移到」行：拖列之外的第二条改状态路径（复用 kbDropToStatus，不开新通道）', () => {
+  // 渲染：按钮值必须是 KB_GROUP_STATUS 的状态动词；目标列排除当前所在列
+  assert.ok(appSrc.includes('id="kbd-actions-move"') && appSrc.includes('data-kb-move="${esc(verb)}"'),
+    '抽屉缺「移到」操作行或按钮值不是状态动词');
+  assert.ok(appSrc.includes("KB_GROUPS.filter((g) => g.key !== curGroup.key)"),
+    '「移到」目标必须排除当前所在列');
+  assert.ok(appSrc.includes('const curGroup = KB_GROUPS.find((g) => g.statuses.includes(curSt))'),
+    '当前列必须按 KB_GROUPS.statuses 归属判定（archived 不在任何组 → 不出按钮）');
+  // 委托：点按钮走 kbDropToStatus（同态短路 / running 确认卡 / 写后回读都由它兜底）
+  assert.ok(appSrc.includes("e.target.closest('[data-kb-move]')"), '抽屉事件委托缺「移到」分支');
+  const mv = appSrc.slice(appSrc.indexOf("e.target.closest('[data-kb-move]')"),
+    appSrc.indexOf("e.target.closest('[data-kb-move]')") + 160);
+  assert.ok(mv.includes('kbDropToStatus(KB.detailId'), '「移到」必须复用 kbDropToStatus，不得直连 kanbanSetStatus');
+  assert.ok(!mv.includes('kanbanSetStatus'), '「移到」分支不得绕过 kbDropToStatus 直接写');
+});
+t('轻浮层菜单键盘导航：↑↓/Home/End 全覆盖，Esc/Enter 维持既有链路', () => {
+  assert.ok(appSrc.includes('function menuArrowNav('), '缺 menuArrowNav 实现');
+  assert.ok(appSrc.includes("document.addEventListener('keydown', menuArrowNav, true)"),
+    'menuArrowNav 必须以捕获阶段注册（否则菜单内默认滚动先发生）');
+  // 覆盖面：五个固定浮层 + 插件/技能页动态 .pp-menu 一个不落
+  for (const sel of ['#chip-menu', '#chip-submenu', '#kb-more-menu', '#session-menu', '#pf-menu']) {
+    assert.ok(appSrc.includes(`'${sel}'`), 'menuArrowNav 未覆盖 ' + sel);
+  }
+  assert.ok(appSrc.includes(".find((m) => !m.hidden) || null"), '动态 .pp-menu 必须纳入 openMenuRoot');
+  for (const k of ["'ArrowDown'", "'ArrowUp'", "'Home'", "'End'"]) {
+    assert.ok(appSrc.includes(`e.key !== ${k}`), 'menuArrowNav 未处理 ' + k);
+  }
+  // 不抢输入框的箭头键：焦点在 INPUT/TEXTAREA/SELECT 且不在菜单内时直接返回
+  assert.ok(appSrc.includes("ae.type !== 'checkbox'"), '必须放行菜单内 checkbox、拦下输入框');
+});
+t('npm run test:ui：UI 冒烟固化（Demo 页通道，不碰 CLI / 不写 ~/.hermes）', () => {
+  const pkg = JSON.parse(read('package.json'));
+  assert.ok(pkg.scripts['test:ui'] === 'node scripts/test-ui.js', 'package.json 缺 test:ui 脚本');
+  const ui = read('scripts/test-ui.js');
+  assert.ok(ui.includes("require(path.join(__dirname, '..', 'node_modules', 'ws'))"), 'UI 冒烟必须用仓库内 ws，不引新依赖');
+  assert.ok(ui.includes('mock-bridge') === false || ui.includes('renderer'), 'UI 冒烟只服务 renderer/（mock 桥）');
+  // 红线：冒烟脚本绝不启动 serve、绝不写 CLI 目录（HERMES_HOME）
+  assert.ok(!/hermes\s+serve|HERMES_HOME|\.hermes/.test(ui), 'UI 冒烟不得触碰 CLI / ~/.hermes');
+  assert.ok(!ui.includes('fs.writeFile') || ui.includes("path.join(os.tmpdir()"), '截图等输出只能进系统临时目录');
+  assert.ok(ui.includes('process.exit(0)') && /process\.exit\(fails\.length \? 1 : 0\)/.test(ui),
+    '有失败必须以非零码退出；无 Chrome 时 SKIP 退 0');
+});
 t('派发上限与 CLI 对齐：下拉与双端钳制都是 8', () => {
   const htmlSrc = read('renderer/index.html');
   for (const v of ['1', '2', '3', '4', '5', '6', '7', '8']) {

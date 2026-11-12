@@ -12,6 +12,7 @@
     "dev": "electron . --dev",
     "postinstall": "node scripts/fix-pty-perm.js",
     "test": "node scripts/test-services.js && node scripts/test-contracts.js && node scripts/check-package.js",
+    "test:ui": "node scripts/test-ui.js",
     "test:services": "node scripts/test-services.js",
     "test:contracts": "node scripts/test-contracts.js",
     "pack:check": "node scripts/check-package.js",

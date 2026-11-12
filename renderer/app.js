@@ -5643,6 +5643,47 @@ function closeAllOverlays() {
   if (menus.length) closed = true;
   return closed;
 }
+/** 轻浮层菜单的 ↑↓/Home/End 焦点导航（Esc 关闭与 Enter 激活各处已有，这里只补移动）。
+ *  覆盖所有「打开即挂 tabindex/menuitem」的浮层：chip 一二级、看板 ⋯、会话/项目 ⋯、
+ *  profile、插件/技能页「＋添加」菜单。菜单没开就立刻返回，零开销。 */
+const MENU_NAV_ROOTS = ['#chip-menu', '#chip-submenu', '#kb-more-menu', '#session-menu', '#pf-menu'];
+function openMenuRoot() {
+  // 焦点已经在哪个菜单里，就留在哪个菜单（一级/二级互不打架）；否则取第一个打开的
+  const ae = document.activeElement;
+  if (ae) {
+    const host = MENU_NAV_ROOTS.map((s) => $(s)).find((el) => el && !el.hidden && el.contains(ae));
+    if (host) return host;
+  }
+  const fixed = MENU_NAV_ROOTS.map((s) => $(s)).find((el) => el && !el.hidden);
+  if (fixed) return fixed;
+  return Array.from(document.querySelectorAll('.subpage .pp-menu')).find((m) => !m.hidden) || null;
+}
+function menuItems(root) {
+  return Array.from(root.querySelectorAll('[role="menuitem"], button, input'))
+    .filter((el) => !el.closest('[hidden]') && !el.disabled);
+}
+function menuArrowNav(e) {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+  const root = openMenuRoot();
+  if (!root) return;
+  // 焦点在输入框里（菜单外的搜索框等）不抢箭头键；菜单内的 checkbox/input 不受限
+  const ae = document.activeElement;
+  const inRoot = ae && root.contains(ae);
+  if (!inRoot && ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.type !== 'checkbox') return;
+  const items = menuItems(root);
+  if (!items.length) return;
+  const idx = inRoot ? items.indexOf(ae) : -1;
+  let next;
+  if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = items.length - 1;
+  else if (e.key === 'ArrowDown') next = idx < 0 ? 0 : Math.min(items.length - 1, idx + 1);
+  else next = idx < 0 ? items.length - 1 : Math.max(0, idx - 1);
+  e.preventDefault();
+  e.stopPropagation();
+  if (items[next] && items[next] !== ae) items[next].focus();
+}
+document.addEventListener('keydown', menuArrowNav, true);
 /** 消息操作条里的绝对时间（HH:MM:SS）。 */
 function fmtTime(ts) {
   const d = new Date(Number(ts) || Date.now());
@@ -7074,7 +7115,20 @@ function renderKanbanDetail(d) {
   // 拆解此任务：CLI 只接受收集箱（triage）里的任务，别处的请求会被后端短路成 ok:false，
   // 所以按钮也只在这里出现。它会调辅助模型（计费、最长 3 分钟），点击后还要过一次确认卡。
   // 自动编排下调度器本来就会自己拆，这里给的是「我现在就要拆」的手动入口。
-  const isTriage = String(t.status || '') === 'triage';
+  const curSt = String(t.status || '');
+  const isTriage = curSt === 'triage';
+  // 移到（拖列之外的第二条改状态路径）：拖列只服务鼠标，这里给键盘和不爱拖拽的用户
+  // 一排直接按钮。目标列排除当前所在列；按钮值是 KB_GROUP_STATUS 的状态动词，点击
+  // 复用 kbDropToStatus —— 同态短路、running 过确认卡、写后回读抽屉，全由它统一兜底。
+  const curGroup = KB_GROUPS.find((g) => g.statuses.includes(curSt));
+  const moveRow = canDelete && curGroup
+    ? `<div class="kbd-actions" id="kbd-actions-move"><span>移到</span>${
+        KB_GROUPS.filter((g) => g.key !== curGroup.key).map((g) => {
+          const verb = KB_GROUP_STATUS[g.key] || '';
+          return `<button class="kb-btn" type="button" data-kb-move="${esc(verb)}" title="${esc(KB_STATUS_ACTION[verb] || g.label)}">${esc(g.label)}</button>`;
+        }).join('')
+      }</div>`
+    : '';
   // 补规格：把收集箱里的一句随手记扩成 Goal / Approach / 验收标准，并**由 CLI 顺手
   // 推进到待办**。与拆解同条件（都只认 triage），但语义是「先写清楚」而不是「拆开」，
   // 所以排在拆解前面。它同样计费、同样改数据，点击后过一次确认卡。
@@ -7131,6 +7185,7 @@ function renderKanbanDetail(d) {
     ${decomposeAct}
     ${dispatchAct}
     ${reassignAct}
+    ${moveRow}
     ${wsHtml}
     ${jump}
     ${t.body ? `<div class="kbd-section"><h3>描述</h3><pre class="kbd-text">${esc(clip(t.body, 12000))}</pre></div>` : ''}
@@ -8433,6 +8488,8 @@ function setupKanban() {
     if (spec) { kbSpecifyTask(spec.getAttribute('data-kb-specify'), spec.closest('.kbd-actions') || body); return; }
     const est = e.target.closest && e.target.closest('[data-kb-estimate]');
     if (est) { kbEstimateTask(est.getAttribute('data-kb-estimate'), est.closest('.kbd-actions') || body); return; }
+    const mv = e.target.closest && e.target.closest('[data-kb-move]');
+    if (mv && KB.detailId) { kbDropToStatus(KB.detailId, mv.getAttribute('data-kb-move')); return; }
     const del = e.target.closest && e.target.closest('[data-kb-delete]');
     if (del) { kbDeleteTask(del.getAttribute('data-kb-delete'), del.closest('.kbd-danger')); return; }
     const re = e.target.closest && e.target.closest('[data-kb-reassign]');
