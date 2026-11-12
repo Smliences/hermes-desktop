@@ -3608,6 +3608,43 @@ t('展开走局部切换，键盘可达且不整页重绘', () => {
     '动作被中文化后，原始工具名在行与详情头都不可见');
 });
 
+section('3ai. 项目会话隐藏项目选择器：归属权威、显隐同步、弹层收起');
+t('归属只认显式项目，树 sessionIds 优先、cwd 最长前缀兜底', () => {
+  assert.ok(appSrc.includes('function activeTabProject('), '缺少归属判定函数');
+  const fn = appSrc.slice(appSrc.indexOf('function activeTabProject('),
+    appSrc.indexOf('/** 下拉显示跟随当前页签'));
+  assert.ok(fn.includes('sessionProjectId(tab.sessionId)'), '未以项目树 sessionIds 为权威来源');
+  assert.ok(fn.includes('tab.cwd'), '新会话（CLI 尚未认领）未用 cwd 兜底');
+  assert.ok(fn.includes("startsWith(root + '/')"), '子目录未做最长前缀命中');
+  assert.ok(fn.includes('state.projectsTree'), '候选未复用已过滤的显式项目树');
+  assert.ok(fn.includes("if (!cwd.startsWith('/')) return null;"), '默认会话必须仍显示选择器');
+});
+t('归属已定收起选择器，隐藏前先关掉挂在 body 上的面板', () => {
+  const fn = appSrc.slice(appSrc.indexOf('function syncComposerProject('),
+    appSrc.indexOf('function onComposerNewProject('));
+  assert.ok(fn.includes('const fixed = !!activeTabProject()'), '显隐没有走统一判定');
+  assert.ok(fn.includes('el.hidden = fixed'), '没有按归属写 hidden');
+  assert.ok(fn.includes("if (fixed && typeof el.close === 'function') el.close();"),
+    '自绘下拉面板挂在 document.body，不显式 close 会留孤儿浮层');
+  assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(cssSrc)
+    || cssSrc.includes('.ui-select[hidden]'), '作者样式的 display 会盖掉 UA 的 hidden');
+});
+t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新校准', () => {
+  assert.ok(htmlSrc.includes('<hm-select id="chip-project"'), '不能删元素，默认会话还要用');
+  assert.ok(/id="chip-project"[^>]*aria-label=/.test(htmlSrc)
+    && /id="chip-project"[^>]*placeholder="选择项目"/.test(htmlSrc), '无障碍名与空值占位不能丢');
+  assert.ok(!/\$\('#chip-project'\)\.remove\(/.test(appSrc), '不得从 DOM 移除项目选择器');
+  const openSess = appSrc.slice(appSrc.indexOf('async function openSession('),
+    appSrc.indexOf('/* ---------- 渲染：聊天流'));
+  assert.ok(openSess.includes('syncComposerProject()'),
+    '从项目分组点开已有会话会复用空 tab，不走 setActiveTab，显隐不会更新');
+  const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
+  assert.ok(setTab.includes('syncComposerProject()'), '切换页签未重新校准显隐');
+  const refresh = appSrc.slice(appSrc.indexOf('async function refreshSessions('),
+    appSrc.indexOf('/** 后端冷启'));
+  assert.ok(refresh.includes('syncComposerProject()'), '项目树冷启落地后未重新校准');
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;

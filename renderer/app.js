@@ -734,7 +734,25 @@ function composerProjectOptions() {
 }
 /** 下拉末尾的动作行（不取值，选中即打开新建项目弹窗）。 */
 const COMPOSER_NEW_PROJECT = '__new_project__';
-/** 下拉显示跟随当前页签：tab.cwd 精确命中项目根，或落在项目子目录时取最长前缀命中。 */
+/** 当前页签归属的显式项目（只读）。树的 sessionIds 是权威来源；
+ *  还没发首条消息、CLI 尚未认领的会话用 tab.cwd 命中项目根兜底
+ *  （从项目行「＋」新建的会话就是这种）。命中即视为「在项目下创建的会话」。 */
+function activeTabProject() {
+  const tab = activeTab();
+  if (!tab) return null;
+  const projects = Array.isArray(state.projectsTree) ? state.projectsTree : [];
+  const pid = sessionProjectId(tab.sessionId);
+  if (pid) return projects.find((p) => String(p.id || '') === pid) || null;
+  const cwd = String(tab.cwd || '').replace(/\/+$/, '');
+  if (!cwd.startsWith('/')) return null;
+  return projects.filter((p) => {
+    const root = String(p.path || '').replace(/\/+$/, '');
+    return root && (cwd === root || cwd.startsWith(root + '/'));
+  }).sort((a, b) => String(b.path || '').length - String(a.path || '').length)[0] || null;
+}
+/** 下拉显示跟随当前页签：tab.cwd 精确命中项目根，或落在项目子目录时取最长前缀命中。
+ *  归属已定的会话不再显示选择器 —— CLI 没有改既有会话归属的写接口，
+ *  留着下拉只会让人误以为能切换（实际点了是另开一个项目会话）。 */
 function syncComposerProject() {
   const el = $('#chip-project');
   if (!el || typeof el.setOptions !== 'function') return;
@@ -748,6 +766,10 @@ function syncComposerProject() {
   const nested = items.filter((i) => !i.action && cwd.startsWith(i.value.replace(/\/+$/, '') + '/'))
     .sort((a, b) => b.value.length - a.value.length)[0];
   el.value = (exact || nested || {}).value || '';
+  const fixed = !!activeTabProject();
+  // 自绘下拉的面板挂在 document.body 上，隐藏宿主不会带走它，必须先显式收起
+  if (fixed && typeof el.close === 'function') el.close();
+  el.hidden = fixed;
 }
 /** 选中动作行：建项目（官方 project-dialog），建完由创建流程自己进项目根开新会话。 */
 function onComposerNewProject() {
@@ -1263,6 +1285,9 @@ async function openSession(sessionId) {
   const gen = (tab.loadGen = (tab.loadGen || 0) + 1);
   tab.loading = true;
   tab.sessionId = sessionId; state.view = 'chat';
+  // 从项目分组点开已有会话时会复用当前空 tab，不走 setActiveTab；归属在下一行才落地，
+  // 必须在这里补一次同步，否则项目选择器会沿用上一个页签的显隐状态。
+  syncComposerProject();
   document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   try {
     const hist = arr(await api.loadHistory({ sessionId, limit: 200 }));

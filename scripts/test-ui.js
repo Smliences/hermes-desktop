@@ -286,6 +286,29 @@ let CHROME_BIN = null;
   await cdp.ev(`(() => { document.getElementById('input').value = ''; slashClose(); return 1; })()`);
   await shot(cdp, 'hermes-ui-landing.png');
 
+  /* S10 项目会话隐藏项目选择器（运行时显隐，静态契约查不到 hidden 属性） */
+  console.log('\nS10 项目会话隐藏项目选择器');
+  await cdp.ev(`(() => { setView('chat'); newTab(); return 1; })()`);
+  await sleep(250);
+  const s10a = await cdp.ev(`(() => { const e = document.querySelector('#chip-project'); return { hidden: e.hidden, display: getComputedStyle(e).display, projects: composerProjectOptions().length }; })()`);
+  ok('默认会话保留「选择项目」入口', !s10a.hidden && s10a.display !== 'none' && s10a.projects > 0, JSON.stringify(s10a));
+  await cdp.ev(`(() => { window.__s10Tab = activeTab().id; newTabInProject('/tmp/demo-repo'); return 1; })()`);
+  await sleep(250);
+  const s10b = await cdp.ev(`(() => { const p = activeTabProject(); return { hidden: document.querySelector('#chip-project').hidden, project: p ? (p.label || p.id) : null }; })()`);
+  ok('项目下新建会话收起选择器（归属读得到）', s10b.hidden && s10b.project === 'Hermes Agent', JSON.stringify(s10b));
+  await cdp.ev(`setActiveTab(window.__s10Tab)`); await sleep(200);
+  const s10c = await cdp.ev(`document.querySelector('#chip-project').hidden`);
+  ok('切回默认会话恢复选择器', s10c === false, String(s10c));
+  await cdp.ev(`(async () => { await openSession('s_demo_0'); return 1; })()`); await sleep(400);
+  const s10d = await cdp.ev(`(() => ({ hidden: document.querySelector('#chip-project').hidden, project: (activeTabProject() || {}).label || null }))()`);
+  ok('打开项目分组里的历史会话也收起', s10d.hidden && s10d.project === 'Hermes Agent', JSON.stringify(s10d));
+  await cdp.ev(`(async () => { await openSession('s_demo_2'); return 1; })()`); await sleep(400);
+  const s10e = await cdp.ev(`document.querySelector('#chip-project').hidden`);
+  ok('打开未归类会话恢复选择器', s10e === false, String(s10e));
+  await cdp.ev(`document.querySelector('#chip-project .us-trigger').click()`); await sleep(150);
+  const s10f = await cdp.ev(`(() => { const open = !document.querySelector('#ui-select-pop').hidden; activeTab().cwd = '/tmp/demo-repo-2'; syncComposerProject(); return { open, popHidden: document.querySelector('#ui-select-pop').hidden, chipHidden: document.querySelector('#chip-project').hidden }; })()`);
+  ok('隐藏时下拉面板一并收起，不留孤儿浮层', s10f.open && s10f.popHidden && s10f.chipHidden, JSON.stringify(s10f));
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);
