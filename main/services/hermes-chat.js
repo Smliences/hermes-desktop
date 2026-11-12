@@ -383,6 +383,8 @@ class ChatChannel {
     this._epochStamp = 0;     // 每次后端失效递增；在途连接靠它判定自己是否已过期
     this._connectTimeoutMs = Number(opts.connectTimeoutMs) > 0 ? Number(opts.connectTimeoutMs) : 20000;
     this._abortGraceMs = Number(opts.abortGraceMs) > 0 ? Number(opts.abortGraceMs) : 10000;
+    /** 连接状态变化回调：{state, port, connected, epoch}。主进程负责转发给渲染层。 */
+    this._onStatusCb = typeof opts.onStatus === 'function' ? opts.onStatus : () => {};
     this._gatewayFactory = typeof opts.createGateway === 'function'
       ? opts.createGateway
       : ((o) => new GatewayConnection(o));
@@ -581,11 +583,59 @@ class ChatChannel {
       if (!first) {
         this._invalidateBackend(state === 'idle' ? 'hermes serve 已停止' : 'hermes serve 正在重启');
       }
+      this._emitStatus();
       return;
     }
     // 同一代进程异常退出：新进程还没 spawn，generation 未变，也要立刻停掉旧连接
     if ((state === 'error' || state === 'idle') && this._backendEpoch > 0) {
       this._invalidateBackend('hermes serve 连接中断');
+    }
+    this._emitStatus();
+  }
+
+  /** gateway WS 的连接状态（断线重连由 gateway-client 自己排期，这里只负责让状态可见）。 */
+  _onGatewayStatus(st) {
+    this._emitStatus(!!(st && st.connected));
+  }
+
+  /** 连接状态快照：不含 token，只给渲染层判断「能不能用 / 要不要重连」。 */
+  statusSnapshot() {
+    const info = this.backendInfo();
+    return {
+      state: info.state,
+      port: info.port,
+      epoch: info.generation,
+      connected: !!(this.gateway && this.gateway.connected),
+    };
+  }
+
+  _emitStatus(forceConnected) {
+    const info = this.backendInfo();
+    const connected = forceConnected === undefined ? !!(this.gateway && this.gateway.connected) : forceConnected;
+    try {
+      this._onStatusCb({ state: info.state, port: info.port, epoch: info.generation, connected });
+    } catch { /* 状态回调异常不影响主流程 */ }
+  }
+
+  /**
+   * 手动重连：丢到现有 gateway 后重新建连。gateway-client 有自己的退避重连，
+   * 这里给用户一个「立刻再试一次」的入口（自动重连连续失败时最常见）。
+   * 后端进程本身挂了会经 backend.start() 的幂等启动路径重新拉起。
+   */
+  async reconnect() {
+    try { if (this.gateway) this.gateway.close(); } catch { /* 已关闭 */ }
+    this.gateway = null;
+    this.gatewayReady = null;
+    this._emitStatus(false);
+    try {
+      await this._ensureGateway();
+      this._emitStatus();
+      return { ok: true };
+    } catch (err) {
+      const msg = String((err && err.message) || err || '重连失败');
+      log.warn('chat', `reconnect: ${msg}`);
+      this._emitStatus(false);
+      return { ok: false, error: msg };
     }
   }
 
@@ -599,7 +649,7 @@ class ChatChannel {
       if (this.gateway) { try { this.gateway.close(); } catch {} this.gateway = null; }
       const gw = this._gatewayFactory({
         port, token: this.backend.token,
-        onStatus: () => {},
+        onStatus: (st) => this._onGatewayStatus(st),
       });
       // 服务端请求（approval.received 等）：回 ack 并按 yolo 自动响应
       gw.onRequest(({ method, params }) => {

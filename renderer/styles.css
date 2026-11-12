@@ -363,7 +363,7 @@ body.resizing #sidebar { transition: none; }
 .storage-copy:hover { border-color: var(--blue); }
 .storage-loading { font-size: 12px; color: var(--text-3); padding: 8px 0; }
 /* 左下角设置入口：单个齿轮图标按钮（非菜单项） */
-.sb-bottom { padding: 6px 12px 10px; border-top: 1px solid var(--line); flex-shrink: 0; display: flex; }
+.sb-bottom { padding: 6px 12px 10px; border-top: 1px solid var(--line); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sb-gear {
   width: 28px; height: 28px; border-radius: var(--r-sm);
   display: flex; align-items: center; justify-content: center;
@@ -3191,3 +3191,39 @@ body.kb-dragging * { cursor: grabbing !important; }
 .session-menu button[data-move] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-menu button:disabled { color: var(--caption); cursor: default; }
 .session-menu button:disabled:hover { background: transparent; color: var(--caption); }
+
+/* ── 侧栏底部：后端连接状态（掉线可见、点击重连） ─────────────────────── */
+.sb-conn {
+  display: flex; align-items: center; gap: 6px; min-width: 0; height: 24px;
+  padding: 0 8px 0 7px; border-radius: 999px; color: var(--text-3);
+  font: 400 11px/1 var(--sans); transition: background .12s, color .12s;
+}
+.sb-conn:hover { background: var(--nav-hover); color: var(--text); }
+.sb-conn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sb-conn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-conn-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--text-3);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-3) 16%, transparent);
+  transition: background .15s, box-shadow .15s;
+}
+/* 已连接：绿点；连接中：蓝点呼吸；断开：红点 + 红字（唯一需要用户动作的状态） */
+.sb-conn[data-state="ready"] { color: var(--text-2); }
+.sb-conn[data-state="ready"] .sb-conn-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 20%, transparent);
+}
+.sb-conn[data-state="connecting"] .sb-conn-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: sb-conn-pulse 1.3s ease-in-out infinite;
+}
+.sb-conn[data-state="offline"] { color: var(--red); }
+.sb-conn[data-state="offline"] .sb-conn-dot {
+  background: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 20%, transparent);
+}
+@keyframes sb-conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) {
+  .sb-conn[data-state="connecting"] .sb-conn-dot { animation: none; }
+}

@@ -8,6 +8,14 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   send: (payload) => ipcRenderer.invoke('hermes:send', payload),
   abort: (tabId) => ipcRenderer.invoke('hermes:abort', tabId),
   tabState: (tabId) => ipcRenderer.invoke('hermes:tabState', tabId),
+  // 后端连接状态（不含 token）：读快照、手动重连、订阅变化
+  backendStatus: () => ipcRenderer.invoke('chat:status'),
+  reconnectBackend: () => ipcRenderer.invoke('chat:reconnect'),
+  onBackendStatus: (fn) => {
+    const h = (_e, p) => fn(p);
+    ipcRenderer.on('hermes:status', h);
+    return () => ipcRenderer.removeListener('hermes:status', h);
+  },
 
   listSessions: (args) => ipcRenderer.invoke('sessions:list', args),
   loadHistory: (args) => ipcRenderer.invoke('sessions:history', args),

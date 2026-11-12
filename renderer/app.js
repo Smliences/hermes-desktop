@@ -404,6 +404,56 @@ function ensureSidebarTree() {
     ensureSidebarTree();
   }, Math.min(1000 + n * 800, 3500));
 }
+/* ---------- 后端连接状态 ----------
+   gateway 掉线过去只在「下一次操作失败」时以 toast 出现，用户看到的是一堆「连接已重置」，
+   却不知道原因。这里把主进程推来的状态落成侧栏底部一个点：绿=可用、蓝=正在连、
+   红=断开（点击重连）。状态只反映事实，不主动探测端口。 */
+const CONN_TEXT = { ready: '已连接', connecting: '连接中', offline: '已断开' };
+function renderConnStatus(st) {
+  const btn = $('#btn-conn');
+  if (!btn) return;
+  const s = st || {};
+  let state = 'connecting';
+  if (s.connected) state = 'ready';
+  else if (s.state === 'error' || s.state === 'idle' || s.state === 'stopped') state = 'offline';
+  btn.dataset.state = state;
+  const label = CONN_TEXT[state] || '未知';
+  const txt = btn.querySelector('.sb-conn-text');
+  if (txt) txt.textContent = label;
+  btn.title = state === 'ready'
+    ? `后端已连接${s.port ? '（端口 ' + s.port + '）' : ''}`
+    : (state === 'offline' ? '后端未连接，点击重连' : '正在连接后端…');
+  btn.setAttribute('aria-label', '后端' + label);
+}
+function initConnStatus() {
+  const btn = $('#btn-conn');
+  if (!btn) return;
+  if (typeof api.onBackendStatus === 'function') {
+    try { api.onBackendStatus(renderConnStatus); } catch { /* 订阅失败不影响主流程 */ }
+  }
+  const pull = () => {
+    if (typeof api.backendStatus !== 'function') return;
+    Promise.resolve(api.backendStatus()).then(renderConnStatus).catch(() => {});
+  };
+  pull();
+  let busy = false;
+  btn.onclick = async () => {
+    if (busy) return;
+    // 已连接时点一下只是复查，不做破坏性动作（用户可能是想确认状态）
+    if (btn.dataset.state === 'ready') { pull(); toast('后端连接正常', 1400); return; }
+    busy = true;
+    btn.dataset.state = 'connecting';
+    const txt = btn.querySelector('.sb-conn-text');
+    if (txt) txt.textContent = '重连中';
+    let r = null;
+    try { r = await api.reconnectBackend(); }
+    catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+    busy = false;
+    if (r && r.ok) toast('后端已重新连接', 1800);
+    else toast('重连失败：' + ((r && r.error) || '未知错误'), 3200);
+    pull();
+  };
+}
 /* ---------- 时间分桶：置顶 / 今天 / 昨天 / 其他会话 ----------
    官方 calendarBucket 的收敛版：只保留三档（用户侧只需要「今天 / 昨天 / 其余」），
    时间取 last_active || started_at —— 与行上显示的日期同源，否则「昨天活跃、上月开始」
@@ -7909,6 +7959,7 @@ async function init() {
   }
   syncComposerState();
   syncComposerProject(); // 首屏把项目下拉的候选与当前页签状态落地
+  initConnStatus();      // 后端连接状态点：先拉一次快照，之后靠主进程推送
   // 非阻断：启动即核对桌面端模型与 CLI 默认是否漂移；切 profile 会 reload 重跑
   syncModelDrift(true);
   // 球下拉里选了别的 profile 的会话：doSwitchProfile 重载后在这里补上打开动作。

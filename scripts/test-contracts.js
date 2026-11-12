@@ -3108,6 +3108,42 @@ t('会话移到项目：官方 session.workspace.move + 二级菜单 + 候选过
     '缺少二级页样式');
 });
 
+t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () => {
+  // 服务层：快照 / 回调 / 重连
+  assert.ok(chatSrc.includes('statusSnapshot()'), 'ChatChannel 缺少 statusSnapshot');
+  assert.ok(chatSrc.includes('this._onStatusCb('), '状态回调未落地');
+  assert.ok(chatSrc.includes('async reconnect()'), '缺少手动重连');
+  // gateway 的 onStatus 原本是空函数，断线只有超时才暴露
+  assert.ok(chatSrc.includes('onStatus: (st) => this._onGatewayStatus(st)'), 'gateway 连接状态未接入');
+  assert.ok(chatSrc.includes('state: info.state, port: info.port, epoch: info.generation, connected'),
+    '状态快照字段不全（不得含 token）');
+  // 主进程：广播给所有窗口 + 两条通道
+  assert.ok(mainSrc.includes("webContents.send('hermes:status'"), '主进程未广播连接状态');
+  assert.ok(mainSrc.includes('BrowserWindow.getAllWindows()'), '广播应覆盖所有窗口');
+  assert.ok(mainSrc.includes("handle('chat:status'") && mainSrc.includes("handle('chat:reconnect'"),
+    '主进程缺少状态 / 重连通道');
+  assert.ok(preloadSrc.includes("invoke('chat:status'") && preloadSrc.includes("invoke('chat:reconnect'"),
+    'preload 缺少状态 / 重连通道');
+  // 渲染层：DOM + 三态 + 订阅 + 点击重连
+  assert.ok(/id="btn-conn"/.test(htmlSrc) && htmlSrc.includes('sb-conn-dot'), '侧栏缺少连接状态点');
+  assert.ok(appSrc.includes('function renderConnStatus(') && appSrc.includes("CONN_TEXT = { ready: '已连接'"),
+    '缺少连接状态渲染');
+  assert.ok(appSrc.includes("if (s.connected) state = 'ready';") && appSrc.includes("state = 'offline';"),
+    '状态映射不完整（ready / offline）');
+  assert.ok(appSrc.includes('api.onBackendStatus(renderConnStatus)'), '未订阅状态变化');
+  assert.ok(appSrc.includes('await api.reconnectBackend()'), '点击未接重连通道');
+  assert.ok(appSrc.includes('initConnStatus();'), '启动时未初始化连接状态');
+  // 样式：三态圆点 + 呼吸动画（减少动效偏好下要关掉）
+  for (const rule of ['.sb-conn', '.sb-conn-dot', '[data-state="ready"]', '[data-state="offline"]',
+    'sb-conn-pulse', 'prefers-reduced-motion']) {
+    assert.ok(cssSrc.includes(rule), '缺少连接状态样式 ' + rule);
+  }
+  // 只能用既有 token（没有 --amber 这类）
+  assert.ok(!/--amber/.test(cssSrc), '不得发明不存在的 token');
+  // Demo 桥
+  assert.ok(read('renderer/mock-bridge.js').includes('async backendStatus()'), 'Demo 桥缺少 backendStatus');
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;

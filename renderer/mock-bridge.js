@@ -196,6 +196,10 @@
       DEMO_MOVED_SESSIONS.set(sid, hit[0]);
       return { ok: true, cwd: dir, branch: '', gitRepoRoot: '' };
     },
+    // Demo：连接状态恒为「已连接」；其它状态用 renderConnStatus 直接驱动即可验证样式
+    async backendStatus() { return { state: 'ready', port: 0, epoch: 1, connected: true }; },
+    async reconnectBackend() { return { ok: true }; },
+    onBackendStatus() { return () => {}; },
     async copyText() { return true; },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);

@@ -51,7 +51,14 @@ function boot() {
   profile.init(app.getPath('userData'));
 
   let mainWindow = null;
-  const chat = new ChatChannel();
+  // 连接状态变化 → 推给所有窗口（含小球聊天窗）：掉线要让用户看见，
+  // 而不是等下一次操作失败才在 toast 里露一句「连接已重置」
+  const pushConnStatus = (st) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w && !w.isDestroyed()) { try { w.webContents.send('hermes:status', st); } catch {} }
+    }
+  };
+  const chat = new ChatChannel('', { onStatus: pushConnStatus });
   const terminals = new Map();
   const warmTimers = { plugins: null, skills: null };
 
@@ -533,6 +540,9 @@ function boot() {
 
   handle('hermes:abort', (_e, tabId) => { chat.abort(tabId); return true; });
   handle('hermes:tabState', (_e, tabId) => chat.getTabState(tabId));
+  // 后端连接状态：读快照 + 手动重连（掉线时侧栏状态点可点）
+  handle('chat:status', () => chat.statusSnapshot());
+  handle('chat:reconnect', () => chat.reconnect());
 
   // 会话管理（数组型结果异常时返回 []，渲染层不必处理 throw）
   handle('sessions:list', (_e, args) => sessions.listSessions(args || {}), []);

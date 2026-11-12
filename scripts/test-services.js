@@ -466,6 +466,7 @@ async function run() {
       backend, createGateway: () => gw,
       connectTimeoutMs: o.connectTimeoutMs || 400,
       abortGraceMs: o.abortGraceMs || 40,
+      onStatus: o.onStatus,
     });
     return { chat, backend, get gw() { return gw; }, setGw(g) { gw = g; } };
   }
@@ -1691,6 +1692,46 @@ async function run() {
     assert.ok(/会话不存在/.test(String((await h2.chat.moveSession('ok_id', '/tmp/x')).error)));
     const h3 = makeChat({ gw: moveGw({ error: 'session busy' }) });
     assert.ok(/生成中/.test(String((await h3.chat.moveSession('ok_id', '/tmp/x')).error)));
+  });
+
+  section('10e. 连接状态：快照 + 变更推送 + 手动重连');
+  await t('状态快照不含 token，connected 反映 gateway 实际连接', async () => {
+    const gw = fakeGateway({ connected: true });
+    const h = makeChat({ gw });
+    await h.chat._ensureGateway();
+    const st = h.chat.statusSnapshot();
+    assert.strictEqual(st.connected, true);
+    assert.strictEqual(typeof st.state, 'string');
+    assert.ok(!('token' in st), '状态快照不得带 token');
+  });
+  await t('后端 / gateway 状态变化都会回调 onStatus，且不带 token', async () => {
+    const seen = [];
+    const h = makeChat({ gw: fakeGateway(), onStatus: (s) => seen.push(s) });
+    await h.chat._ensureGateway();
+    h.chat._onGatewayStatus({ connected: false });
+    h.chat._onBackendStatus({ state: 'error', generation: 1 });
+    assert.ok(seen.length >= 2, '状态变化未回调给主进程');
+    assert.strictEqual(seen[seen.length - 1].connected, false, '断线状态未体现');
+    for (const s of seen) assert.ok(!('token' in s), '推送状态不得含 token');
+  });
+  await t('reconnect 关掉旧连接并新建一个，失败收敛成 {ok:false}', async () => {
+    const gws = [];
+    const chat = new ChatChannel('', {
+      backend: fakeBackend(1),
+      createGateway: () => { const g = fakeGateway(); gws.push(g); return g; },
+      connectTimeoutMs: 400,
+    });
+    await chat._ensureGateway();
+    const first = chat.gateway;
+    const r = await chat.reconnect();
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(first.closed, true, '旧连接必须关闭');
+    assert.notStrictEqual(chat.gateway, first, '重连后应换成新连接');
+    // 后端起不来时不能抛：渲染层只能处理 {ok:false}
+    chat._ensureGateway = async () => { throw new Error('port busy'); };
+    const bad = await chat.reconnect();
+    assert.strictEqual(bad.ok, false);
+    assert.ok(/port busy/.test(String(bad.error)));
   });
 
   section('10c. 项目设置：projects.get / update / 文件夹维护走冻结白名单');
