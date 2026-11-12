@@ -2745,9 +2745,9 @@ t('输入区结构与 dsh 对齐：圆形 +、权限胶囊、两态发送键', (
     '附件按钮没换成 dsh 的 plus-outline 图标');
   assert.ok(/id="chip-yolo" class="cr-pill"/.test(htmlSrc), '审批模式未改成独立胶囊');
   assert.ok(htmlSrc.includes('aria-pressed="false"'), '权限胶囊缺少 aria-pressed');
-  assert.ok(htmlSrc.includes('发消息或创建任务，/ 调用指令，@ 文件或对话'), '占位文案未对齐');
+  assert.ok(htmlSrc.includes('发消息或创建任务，/ 调用指令，拖入文件可附加'), '占位文案未对齐（@ 引用无实现，已改为拖入附加）');
   // 运行态会重写 placeholder：只改 HTML 不改这里，发送一次就跳回旧文案
-  assert.ok(appSrc.includes("running ? '正在生成…可按 Esc 或 ■ 停止' : '发消息或创建任务，/ 调用指令，@ 文件或对话'"),
+  assert.ok(appSrc.includes("running ? '正在生成…可按 Esc 或 ■ 停止' : '发消息或创建任务，/ 调用指令，拖入文件可附加'"),
     '运行态的占位文案仍是旧版');
   assert.ok(appSrc.includes("yoloBtn.textContent = state.config.yolo ? '⊙ 完全权限' : '⊙ 审批模式'"),
     '权限胶囊文案未对齐（完全权限 / 审批模式）');
@@ -2755,6 +2755,55 @@ t('输入区结构与 dsh 对齐：圆形 +、权限胶囊、两态发送键', (
     '发送键缺少「空输入软底 / 有内容实心」两态');
   assert.ok(cssSrc.includes('.send-btn.ready'), '缺少发送键实心态样式');
   for (const cls of ['.cr-icon', '.cr-pill']) assert.ok(cssSrc.includes(cls + ' {'), '缺少 ' + cls + ' 样式');
+});
+
+t('内联指令菜单：/ 起手即弹，Enter 执行，无匹配不误发', () => {
+  assert.ok(appSrc.includes('function slashRows') && appSrc.includes('function slashSync')
+    && appSrc.includes('function slashNav') && appSrc.includes('function slashClose'),
+    '内联指令菜单四件套（rows/sync/nav/close）缺件');
+  // 输入事件接线：非 / 起手必须自动收起
+  assert.ok(appSrc.includes('slashSync(); // / 起手弹内联指令菜单；非 / 起手自动收起'),
+    'input 事件未接 slashSync');
+  // 键盘接线：菜单开着时 Enter/↑↓ 拦在发送之前
+  assert.ok(appSrc.includes('if (slashNav(e)) return;'), 'keydown 未先问 slashNav');
+  assert.ok(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.isComposing\) \{\s*\n\s*\/\/ 没有候选时不发送/.test(appSrc),
+    '无匹配时 Enter 必须拦下（/xyz 不得字面发给 CLI）');
+  // 标记管理：openChipMenu 入口清标记、slashSync 打开后补标记（防 chip 菜单误判）
+  assert.ok(appSrc.includes("menu.dataset.slash = '';"), 'openChipMenu 入口未清 slash 标记');
+  assert.ok(appSrc.includes("menu.dataset.slash = '1'; // 必须在 openChipMenu 之后打标记"),
+    'slashSync 未在 openChipMenu 之后打标记');
+  // send 乐观清空不走 input 事件，必须显式收起
+  assert.ok(appSrc.includes('slashClose(); // 乐观清空不走 input 事件'), 'send() 未兜底收起指令菜单');
+  // 复用 chip-menu 浮层与 COMMANDS 表，不另起炉灶
+  assert.ok(appSrc.includes('openChipMenu($(\'#composer\')'), '指令菜单未锚到 composer 复用浮层');
+  assert.ok(appSrc.includes('return COMMANDS.filter'), '候选未从 COMMANDS 派生');
+  // role=menuitem 键盘可达性：普通行 Enter/Space 激活
+  assert.ok(/row\.onkeydown = \(e\) => \{\s*\n\s*if \(e\.key === 'Enter' \|\| e\.key === ' '\)/.test(appSrc),
+    'wb-menu-row 普通行缺少 Enter/Space 激活');
+  assert.ok(cssSrc.includes('.wb-menu-empty'), '无匹配占位行缺少样式');
+});
+
+t('新会话落地页：时段问候 + 快捷开始（全真实入口）', () => {
+  assert.ok(appSrc.includes('function renderLanding()'), '缺少 renderLanding');
+  assert.ok(appSrc.includes("if (!$('#landing').hidden) renderLanding();"), 'renderChat 未在落地页可见时渲染问候');
+  assert.ok(appSrc.includes('function landingGreet()'), '缺少时段问候');
+  for (const key of ['slash', 'kanban', 'model', 'project']) {
+    assert.ok(appSrc.includes(`data-landing="${key}"`), '落地页缺少 chip ' + key);
+    assert.ok(appSrc.includes(`${key}: () =>`), 'LANDING_ACTIONS 缺少动作 ' + key);
+  }
+  assert.ok(appSrc.includes("e.target.closest('[data-landing]')"), '落地页未做事件委托');
+  assert.ok(cssSrc.includes('.landing-greet'), '缺少问候样式');
+  assert.ok(cssSrc.includes('.landing-chip'), '缺少快捷 chip 样式');
+  assert.ok(cssSrc.includes('.landing-chip:focus-visible'), '快捷 chip 缺少焦点环');
+  // 空会话布局：组居中靠两条 auto margin，不许用 flex:0 0 0 把问候藏掉
+  assert.ok(/#main\.empty #chat-scroll \{[^}]*margin-top: auto/.test(cssSrc), '空会话 chat-scroll 缺 auto margin');
+  assert.ok(cssSrc.includes('#main.empty #status-strip { margin-top: auto; }'), '状态条缺 auto margin（组无法居中）');
+});
+
+t('文案对齐现实：placeholder 不承诺未实现能力，状态条不说「未选择」', () => {
+  assert.ok(!appSrc.includes('@ 文件或对话'), '@ 文件引用无实现，placeholder 不得保留该承诺');
+  assert.ok(appSrc.includes("|| '跟随 CLI 默认'"), '状态条空模型文案应为「跟随 CLI 默认」（发送走 CLI default）');
+  assert.ok(!appSrc.includes("|| '未选择'"), '状态条不得再用误导性的「未选择」');
 });
 
 t('用量带：轮次/步数 + 总量/缓存命中 + 上下文，且不挤格子', () => {

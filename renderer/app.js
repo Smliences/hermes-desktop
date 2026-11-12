@@ -1310,6 +1310,47 @@ async function openSession(sessionId) {
 }
 
 /* ---------- 渲染：聊天流 / 轨迹 ---------- */
+/* ---------- 新会话落地页：时段问候 + 快捷开始 ----------
+   四个 chip 全部是已接线的真实入口；「看看指令」把输入框填成 / 直接拉起
+   内联指令菜单，与 placeholder 的承诺一一对应。事件走 #landing 委托。 */
+const LANDING_ACTIONS = {
+  slash: () => {
+    const inp = $('#input');
+    inp.value = '/'; autoGrow(); updateCount();
+    inp.focus();
+    slashSync();
+  },
+  kanban: () => showKanban(true),
+  model: () => openModelPicker(),
+  project: () => kbProjectDialog('create'),
+};
+function landingGreet() {
+  const h = new Date().getHours();
+  if (h < 5) return '夜深了，想做点什么？';
+  if (h < 12) return '早上好，今天想做点什么？';
+  if (h < 14) return '中午好，想做点什么？';
+  if (h < 18) return '下午好，想做点什么？';
+  return '晚上好，想做点什么？';
+}
+function renderLanding() {
+  $('#landing').innerHTML = `
+    <div class="landing-inner">
+      <div class="landing-greet">${esc(landingGreet())}</div>
+      <div class="landing-chips" role="toolbar" aria-label="快捷开始">
+        <button class="landing-chip" data-landing="slash">/ 看看指令</button>
+        <button class="landing-chip" data-landing="kanban">打开看板</button>
+        <button class="landing-chip" data-landing="model">切换模型</button>
+        <button class="landing-chip" data-landing="project">新建项目会话</button>
+      </div>
+    </div>`;
+}
+$('#landing').addEventListener('click', (e) => {
+  const chip = e.target.closest && e.target.closest('[data-landing]');
+  if (!chip) return;
+  const fn = LANDING_ACTIONS[chip.dataset.landing];
+  if (fn) fn();
+});
+
 function renderChat() {
   const tab = activeTab(); const chat = $('#chat');
   if (!tab) { chat.innerHTML = ''; return; }
@@ -1346,7 +1387,8 @@ function renderChat() {
   // 用 hidden 属性而非 style.display：全局 [hidden]{display:none!important} 会让
   // style.display='' 永远无法让 landing 显示出来。
   $('#landing').hidden = hasContent || state.view === 'trace';
-  // 空会话：输入框垂直居中（#main.empty 布局）
+  if (!$('#landing').hidden) renderLanding();
+  // 空会话：问候 + 输入框作为一组垂直居中（#main.empty 布局）
   $('#main').classList.toggle('empty', !hasContent && state.view !== 'trace');
   // 查找入口只在有内容时出现（轨迹/空态没有可查找文本）
   const findBtn = $('#btn-find');
@@ -1760,6 +1802,7 @@ async function send(text) {
   const tab = activeTab();
   if (!tab || tab.running) return;
   text = text.trim(); if (!text) return;
+  slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
   state.sendHistory.push(text); state.histIdx = state.sendHistory.length;
   tab.items.push({ kind: 'user', text, ts: Date.now(), files: state.attachments.map((a) => a.name) });
   // 取消在途草稿定时器：否则发送后它仍会以「清空后的输入框」再写一次草稿归属
@@ -1860,7 +1903,8 @@ function resetUsageUI() {
 }
 function updateStatus() {
   const tab = activeTab();
-  $('#st-model').textContent = '⬢ ' + ((tab && tab.model) || state.config.model || '未选择');
+  // 未显式选模型时发送走 CLI 默认：状态条如实说「跟随 CLI 默认」，不说误导性的「未选择」
+  $('#st-model').textContent = '⬢ ' + ((tab && tab.model) || state.config.model || '跟随 CLI 默认');
   // 会话 id 是 48 位哈希：状态条只留前 8 位，完整值放 title（否则会挤掉中间的用量组）
   const sid = (tab && tab.sessionId) || '';
   const sessEl = $('#st-session');
@@ -1967,10 +2011,13 @@ function autoGrow() {
 }
 $('#input').addEventListener('input', () => {
   autoGrow(); updateCount();
+  slashSync(); // / 起手弹内联指令菜单；非 / 起手自动收起
   clearTimeout($('#input')._draftTimer);
   $('#input')._draftTimer = setTimeout(() => { if (typeof saveDraftFor === 'function') saveDraftFor(activeTab()); }, 400);
 });
 $('#input').addEventListener('keydown', (e) => {
+  // 指令菜单开着时：↑↓/Home/End 移行、Enter 执行高亮行（拦在发送之前）
+  if (slashNav(e)) return;
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send($('#input').value); }
   else if (e.key === 'ArrowUp' && !$('#input').value && state.sendHistory.length) {
     e.preventDefault(); state.histIdx = Math.max(0, state.histIdx - 1);
@@ -2367,6 +2414,7 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
   // 清理上一次未释放的监听（防残留 onDoc 吞点击）
   if (chipMenuCleanup) chipMenuCleanup();
   const menu = $('#chip-menu');
+  menu.dataset.slash = ''; // 清掉上一轮内联指令菜单的标记（slashSync 打开时会重新打上）
   chipSubClose();
   const rowHtml = (r) => {
     if (Array.isArray(r.sub)) {
@@ -2464,6 +2512,10 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
     // 移回普通行就收起二级，避免「菜单还停在别的行上」
     row.onmouseenter = chipSubClose;
     row.onclick = () => { close(); if (src) onPick(src); };
+    // role=menuitem 的键盘可达性：Enter / Space 触发（与 has-sub 行的 Enter 同语义）
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
+    };
   });
 
   return {
@@ -2473,6 +2525,69 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
       if (row) subOpen(row);
     },
   };
+}
+
+/* ---------- 内联指令菜单（输入框以 / 开头时浮现） ----------
+   placeholder 承诺「/ 调用指令」，但此前只有 ⌘K 面板一条路 —— 在输入框里敲
+   /new 会被当字面文本发给 CLI。现在复用 #chip-menu 浮层 + COMMANDS 表：
+   输入 / 起手即弹候选（按指令名/描述过滤），↑↓/Home/End 选行、Enter 执行、
+   Esc 关闭；无匹配时显示占位行而不是关菜单，避免 /xyz 被误发出去。 */
+function slashRows(q) {
+  const s = (q || '').trim().toLowerCase();
+  return COMMANDS.filter((c) => !s || c.cmd.slice(1).toLowerCase().includes(s) || c.desc.toLowerCase().includes(s));
+}
+function slashMenuOpen() {
+  const m = $('#chip-menu');
+  return !m.hidden && !!chipMenuCleanup && m.dataset.slash === '1';
+}
+function slashSync() {
+  const inp = $('#input');
+  const v = inp.value || '';
+  const tab = activeTab();
+  if (!v.startsWith('/') || (tab && tab.running) || state.view !== 'chat') { slashClose(); return; }
+  const rows = slashRows(v.slice(1));
+  const menu = $('#chip-menu');
+  openChipMenu($('#composer'), rows.length ? rows.map((c) => ({ key: c.cmd, name: c.cmd, tag: c.desc })) : [],
+    null, (picked) => {
+      const cmd = COMMANDS.find((c) => c.cmd === picked.key);
+      inp.value = ''; autoGrow(); updateCount();
+      if (cmd) cmd.run();
+    });
+  menu.dataset.slash = '1'; // 必须在 openChipMenu 之后打标记（其入口会先清空）
+  if (!rows.length) {
+    menu.innerHTML = `<div class="wb-menu-list"><div class="wb-menu-row wb-menu-empty" role="status">没有匹配的指令 · 清空后重试或按 Esc 关闭</div></div>`;
+  }
+}
+function slashClose() {
+  const m = $('#chip-menu');
+  if (m.dataset.slash === '1' && typeof chipMenuCleanup === 'function') chipMenuCleanup();
+  if (m.dataset.slash === '1') { delete m.dataset.slash; m.hidden = true; }
+}
+/** 输入框内 ↑↓/Home/End/Enter 对指令菜单的接管：焦点没离开输入框时 Enter 执行高亮行。 */
+function slashNav(e) {
+  if (!slashMenuOpen()) return false;
+  const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row:not(.wb-menu-empty)')];
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) && rows.length) {
+    e.preventDefault();
+    const idx = rows.indexOf(document.activeElement);
+    let next;
+    if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = rows.length - 1;
+    else if (e.key === 'ArrowDown') next = idx < 0 ? 0 : Math.min(rows.length - 1, idx + 1);
+    else next = idx < 0 ? rows.length - 1 : Math.max(0, idx - 1);
+    rows[next].focus();
+    return true;
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    // 没有候选时不发送：拦下 Enter，避免字面 /xyz 发给 CLI
+    e.preventDefault();
+    if (rows.length) {
+      const ae = document.activeElement;
+      (rows.indexOf(ae) >= 0 ? ae : rows[0]).click();
+    }
+    return true;
+  }
+  return false;
 }
 
 /* ---------- 模型配置漂移 ----------
@@ -5706,7 +5821,7 @@ function syncComposerState() {
   if (sendBtn) sendBtn.classList.toggle('is-busy', running);
   if (inp) {
     inp.setAttribute('aria-busy', String(running));
-    inp.placeholder = running ? '正在生成…可按 Esc 或 ■ 停止' : '发消息或创建任务，/ 调用指令，@ 文件或对话';
+    inp.placeholder = running ? '正在生成…可按 Esc 或 ■ 停止' : '发消息或创建任务，/ 调用指令，拖入文件可附加';
   }
   updateCount();
 }

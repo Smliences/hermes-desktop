@@ -9,6 +9,7 @@
  *   S3 抽屉「移到」行（新）      S4 拖列改状态（真指针 + running 强制确认 + 同列短路）
  *   S5 评论（空拒/确认/发布）    S6 半自动模式拆解按钮（待办②实证）
  *   S7 轻浮层菜单键盘导航（新）  S8 深色主题对比度
+ *   S9 内联指令菜单（/ 起手）+ 新会话落地页（问候/chip/无匹配不误发）
  * Chrome 不在默认路径时用 HERMES_UI_CHROME 指定；找不到 Chrome 则 SKIP（exit 0），
  * 因为它只服务本机交互回归，不作为 CI 硬闸。 */
 const { spawn } = require('child_process');
@@ -256,6 +257,34 @@ let CHROME_BIN = null;
   })()`);
   ok('深色主题卡片标题对比度 ≥ 4.5:1', s8 && s8.theme === 'dark' && s8.ratio >= 4.5, JSON.stringify(s8));
   await shot(cdp, 'hermes-ui-dark.png');
+
+  /* S9 内联指令菜单 + 新会话落地页 */
+  console.log('\nS9 内联指令菜单（/ 起手）与落地页');
+  await cdp.ev(`(() => { document.documentElement.setAttribute('data-theme', 'light'); setView('chat'); newTab(); return 1; })()`);
+  await sleep(500);
+  const s9a = await cdp.ev(`(() => ({ greet: !!document.querySelector('#landing .landing-greet'), chips: document.querySelectorAll('#landing .landing-chip').length, empty: document.getElementById('main').classList.contains('empty') }))()`);
+  ok('落地页显示问候 + 4 个快捷 chip（#main.empty）', s9a.greet && s9a.chips === 4 && s9a.empty, JSON.stringify(s9a));
+  await cdp.ev(`document.querySelector('[data-landing="slash"]').click()`);
+  await sleep(300);
+  const s9b = await cdp.ev(`(() => ({ open: !document.querySelector('#chip-menu').hidden, rows: document.querySelectorAll('#chip-menu .wb-menu-row').length, val: document.getElementById('input').value }))()`);
+  ok('落地页「/ 看看指令」chip 拉起内联菜单', s9b.open && s9b.rows > 0 && s9b.val === '/', JSON.stringify(s9b));
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/new'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(250);
+  const s9c = await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; return { n: rows.length, key: rows[0] ? rows[0].dataset.key : null }; })()`);
+  ok('输入 /new 过滤出唯一指令', s9c.n === 1 && s9c.key === '/new', JSON.stringify(s9c));
+  const tabCountBefore = await cdp.ev(`state.tabs.length`);
+  await key(cdp, 'Enter', 13); await sleep(400);
+  const s9d = await cdp.ev(`({ tabs: state.tabs.length, menuHidden: document.querySelector('#chip-menu').hidden, cleared: !document.getElementById('input').value })`);
+  ok('Enter 执行 /new：新建页签、菜单收起、输入框清空', s9d.tabs === tabCountBefore + 1 && s9d.menuHidden && s9d.cleared, JSON.stringify(s9d));
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/zzz'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(250);
+  const s9e1 = await cdp.ev(`(() => ({ emptyRow: !!document.querySelector('#chip-menu .wb-menu-empty'), hidden: document.querySelector('#chip-menu').hidden }))()`);
+  ok('无匹配显示占位行而非关菜单', s9e1.emptyRow && !s9e1.hidden, JSON.stringify(s9e1));
+  await key(cdp, 'Enter', 13); await sleep(300);
+  const s9e2 = await cdp.ev(`({ tabs: state.tabs.length, stillEmpty: !!document.querySelector('#chip-menu .wb-menu-empty'), inputVal: document.getElementById('input').value })`);
+  ok('无匹配 Enter 被拦下：不建页签、不发送、不清输入', s9e2.tabs === tabCountBefore + 1 && s9e2.stillEmpty && s9e2.inputVal === '/zzz', JSON.stringify(s9e2));
+  await cdp.ev(`(() => { document.getElementById('input').value = ''; slashClose(); return 1; })()`);
+  await shot(cdp, 'hermes-ui-landing.png');
 
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
