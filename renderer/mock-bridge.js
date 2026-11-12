@@ -279,6 +279,40 @@
       return { ok: true, generation: 1, taskId: root.id, fanout: true, single: false,
         childIds: kids.map((k) => k.id), newTitle: root.title, reason: '' };
     },
+    // 补规格：Demo 里把 body 补成四段规格、标题加后缀，并把卡推进到待办，
+    // 这样「按钮只在收集箱出现 → 确认 → 出收集箱 → 规格可见」整条链路能走通。
+    async kanbanSpecify(taskId, opts = {}) {
+      if (!opts || opts.confirm !== true) return { ok: false, error: '补规格会调用辅助模型并产生费用，需要先确认' };
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, reason: '任务不存在（可能已被删除）' };
+      if (t.status !== 'triage') return { ok: false, reason: '只有收集箱里的任务能补规格；这张已经离开收集箱' };
+      const title = String(t.title || '未命名任务').replace(/（已补规格）$/, '');
+      t.title = title + '（已补规格）';
+      t.body = [
+        'Goal：' + title,
+        'Approach：先读现有实现与测试，再按最小改动落地。',
+        'Acceptance criteria：行为可验证，覆盖失败路径。',
+        'Out of scope：与本任务无关的重构。',
+      ].join('\n\n');
+      t.status = 'todo';
+      KB_EVT += 1;
+      return { ok: true, generation: 1, taskId: t.id, reason: '', newTitle: t.title };
+    },
+    // 估算：Demo 用任务标题长度编一个稳定值，别每次都变（截图对比要可复现）
+    async kanbanEstimate(taskId, opts = {}) {
+      if (!opts || opts.confirm !== true) return { ok: false, error: '估算会调用一次辅助模型并产生少量费用，需要先确认' };
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, reason: '任务不存在（可能已被删除）' };
+      const n = String(t.title || '').length;
+      const complexity = n > 24 ? 'L' : (n > 14 ? 'M' : 'S');
+      return {
+        ok: true, generation: 1, reason: '',
+        estTokens: complexity === 'L' ? 86000 : (complexity === 'M' ? 42000 : 18000),
+        complexity,
+        rationale: complexity === 'L' ? '跨多个模块，还需要补回归测试' : (complexity === 'M' ? '要改两三处并补测试' : '局部小改，读一个文件就够'),
+        model: 'demo-estimator',
+      };
+    },
     async kanbanActiveWorkers() {
       const ws = KB_TASKS.filter((t) => t.status === 'running').map((t, i) => ({
         run_id: i + 1, task_id: t.id, task_title: t.title, task_status: 'running',

@@ -767,6 +767,16 @@ function boot() {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     return kanban.decomposeTask(taskId, opts || {});
   });
+  // 补规格（辅助模型，120s）：同样要求渲染层带 confirm:true，成功会把任务推出收集箱
+  handle('kanban:specify', async (_e, taskId, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.specifyTask(taskId, opts || {});
+  });
+  // 估算工作量（辅助模型，60s，不改数据）：会计费，所以也要 confirm
+  handle('kanban:estimate', async (_e, taskId, opts) => {
+    if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
+    return kanban.estimateTask(taskId, opts || {});
+  });
   // 拖拽指派：改派受让人（可选同时推进到 ready），不启动任何进程
   handle('kanban:reassign', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };

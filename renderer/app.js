@@ -5962,6 +5962,10 @@ const KB = {
   dispatch: { open: false, busy: false, epoch: 0 },
   // 拆解会调用辅助模型（计费、最长 3 分钟）：全局只允许一次在途，防重复计费
   decomposeBusy: false,
+  // 补规格同样是计费 + 改数据（会把卡推出收集箱），一次只跑一个
+  specifyBusy: false,
+  // 估算只读、最便宜，但也要防连点；结果按 taskId 缓存，重开抽屉不用再算一遍
+  estimateBusy: false, estimate: {},
   filters: { q: '', assignee: '', tenant: '', archived: false, board: '' },
   // 页头那枚只读模式标记的数据（null = 还没读到 / 读不到，此时不显示）
   mode: null,
@@ -7071,6 +7075,24 @@ function renderKanbanDetail(d) {
   // 所以按钮也只在这里出现。它会调辅助模型（计费、最长 3 分钟），点击后还要过一次确认卡。
   // 自动编排下调度器本来就会自己拆，这里给的是「我现在就要拆」的手动入口。
   const isTriage = String(t.status || '') === 'triage';
+  // 补规格：把收集箱里的一句随手记扩成 Goal / Approach / 验收标准，并**由 CLI 顺手
+  // 推进到待办**。与拆解同条件（都只认 triage），但语义是「先写清楚」而不是「拆开」，
+  // 所以排在拆解前面。它同样计费、同样改数据，点击后过一次确认卡。
+  const specifyAct = canDelete && isTriage
+    ? `<div class="kbd-actions" id="kbd-actions-specify">
+        <button class="kb-btn" type="button" data-kb-specify="${esc(t.id)}"${KB.specifyBusy ? ' disabled' : ''}>✎ 补规格</button>
+        <span class="kbd-act-note">${KB.specifyBusy ? '补规格中…最长 2 分钟'
+          : '让辅助模型把这句随手记补成 Goal / Approach / 验收标准，并推进到待办（会产生费用）'}</span>
+      </div>` : '';
+  // 估算：不改任何数据、不限状态，结果内联显示（按 taskId 缓存在 KB.estimate 里，
+  // 重开抽屉不用再花一次钱）。它是最便宜的一次调用，但仍然计费，所以也要确认。
+  const estView = KB.estimate[String(t.id || '')];
+  const estimateAct = canDelete
+    ? `<div class="kbd-actions" id="kbd-actions-estimate">
+        <button class="kb-btn" type="button" data-kb-estimate="${esc(t.id)}"${KB.estimateBusy ? ' disabled' : ''}>⌛ 估算工作量</button>
+        <span class="kbd-act-note" id="kbd-estimate-note">${estView ? esc(kbEstimateLine(estView))
+          : (KB.estimateBusy ? '估算中…' : '按「读文件 + 工具调用 + 改代码 + 重试」估一次 token 量级（约几百 token 开销，不改任务）')}</span>
+      </div>` : '';
   const decomposeAct = canDelete && isTriage
     ? `<div class="kbd-actions" id="kbd-actions-decompose">
         <button class="kb-btn" type="button" data-kb-decompose="${esc(t.id)}"${KB.decomposeBusy ? ' disabled' : ''}>⚗ 拆解此任务</button>
@@ -7094,6 +7116,8 @@ function renderKanbanDetail(d) {
     <div class="kbd-id">${esc(t.id || '')}</div>
     <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
     <div class="kbd-meta">${meta.join('')}</div>
+    ${estimateAct}
+    ${specifyAct}
     ${decomposeAct}
     ${dispatchAct}
     ${reassignAct}
@@ -7185,6 +7209,138 @@ function kbDecomposeTask(taskId, host) {
         KB.decomposeBusy = false;
         // 抽屉可能已被重绘（按钮是新的），禁用态由渲染时读 KB.decomposeBusy 决定，
         // 这里只兜底恢复仍挂在 DOM 上的那个旧节点
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
+    },
+  });
+}
+
+/**
+ * 估算结果的一行文案：`复杂度 M · 约 4.2 万 tokens · 要改两三处并补测试`。
+ * 空字段一律跳过 —— CLI 的 complexity / rationale 都可能是 null。
+ */
+function kbKilo(n) {
+  const v = Math.max(0, Math.round(Number(n) || 0));
+  if (v >= 10000) return String(Math.round(v / 1000) / 10) + ' 万';
+  if (v >= 1000) return String(Math.round(v / 100) / 10) + 'k';
+  return String(v);
+}
+function kbEstimateLine(e) {
+  const o = e && typeof e === 'object' ? e : {};
+  const parts = [];
+  if (o.complexity) parts.push(`复杂度 ${o.complexity}`);
+  if (Number(o.estTokens) > 0) parts.push(`约 ${kbKilo(o.estTokens)} tokens`);
+  const head = parts.join(' · ') || '估算完成';
+  return o.rationale ? `${head} · ${o.rationale}` : head;
+}
+
+/**
+ * 补规格（抽屉里的 ✎ 按钮）：把收集箱里的一句话扩成可执行的 spec，
+ * **CLI 会顺手把任务推进到待办**（triage → todo），所以它是「写数据 + 计费」双属性。
+ * 与拆解同样的三道闸：只认 triage、点击先过确认卡、服务层再校验 confirm === true。
+ */
+function kbSpecifyTask(taskId, host) {
+  const id = String(taskId || '');
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(id)) return;
+  if (KB.specifyBusy) { toast('已经有一次补规格在进行中', 1600); return; }
+  const a = kbApi();
+  if (!host || !a || !a.kanbanSpecify) { toast('此页需要 Hermes 桌面端才能补规格', 1800); return; }
+  opConfirm(host, {
+    title: '让模型补全这张卡的规格？',
+    cmd: `POST /api/plugins/kanban/tasks/${id}/specify`,
+    note: '会调用 CLI 的辅助模型（auxiliary.triage_specifier）把标题收紧、正文补成 '
+      + 'Goal / Approach / 验收标准 / 不做的事 四段，然后把任务从收集箱推进到待办。'
+      + '这一步会消耗 token 并计费，最长约 2 分钟。模型只补全、不改需求；'
+      + '原文已经写得够细时只重排格式。',
+    confirmLabel: '开始补规格',
+    onGo: async () => {
+      const act = $('#kbd-actions-specify');
+      const note = act && act.querySelector('.kbd-act-note');
+      const btn = act && act.querySelector('[data-kb-specify]');
+      const say = (text, bad) => {
+        if (!note) return;
+        note.textContent = text;
+        note.classList.toggle('warn', !!bad);
+      };
+      KB.specifyBusy = true;
+      if (btn) btn.disabled = true;
+      say('补规格中…最长 2 分钟', false);
+      try {
+        const r = await a.kanbanSpecify(id, { board: KB.filters.board || '', confirm: true });
+        if (!r || !r.ok) {
+          const why = (r && (r.reason || r.error)) || '未知原因';
+          say('补规格未完成：' + why, true);
+          toast('补规格未完成：' + why, 3200);
+          return;
+        }
+        toast(r.newTitle
+          ? `已补规格并推进到待办，标题改为「${r.newTitle}」`
+          : '已补规格并推进到待办', 3600);
+        await kanbanLoad(true);        // 状态变了：收集箱少一张、待办多一张
+        await openKanbanTask(id, true); // 抽屉保持打开，能看到新正文
+      } catch (e) {
+        const why = (e && e.message) || '未知错误';
+        say('补规格失败：' + why, true);
+        toast('补规格失败：' + why, 3000);
+      } finally {
+        KB.specifyBusy = false;
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
+    },
+  });
+}
+
+/**
+ * 估算工作量（抽屉里的 ⌛ 按钮）：只读一次辅助模型，返回 token 量级 + S/M/L。
+ * 不改任何字段，所以不需要回读看板，只把结果就地写进说明行并缓存。
+ */
+function kbEstimateTask(taskId, host) {
+  const id = String(taskId || '');
+  if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(id)) return;
+  if (KB.estimateBusy) { toast('已经有一次估算在进行中', 1600); return; }
+  const a = kbApi();
+  if (!host || !a || !a.kanbanEstimate) { toast('此页需要 Hermes 桌面端才能估算', 1800); return; }
+  opConfirm(host, {
+    title: '估一下这张卡有多大？',
+    cmd: `POST /api/plugins/kanban/tasks/${id}/estimate`,
+    note: '会调用一次辅助模型（kanban_estimator）估出整轮 agent run 的 token 量级与 S/M/L 复杂度。'
+      + '只花几百 token，是三条计费路径里最便宜的，并且不会修改任何字段 —— 这张卡还是原样。',
+    confirmLabel: '开始估算',
+    onGo: async () => {
+      const act = $('#kbd-actions-estimate');
+      const note = act && (act.querySelector('#kbd-estimate-note') || act.querySelector('.kbd-act-note'));
+      const btn = act && act.querySelector('[data-kb-estimate]');
+      const say = (text, bad) => {
+        if (!note) return;
+        note.textContent = text;
+        note.classList.toggle('warn', !!bad);
+      };
+      KB.estimateBusy = true;
+      if (btn) btn.disabled = true;
+      say('估算中…最长 1 分钟', false);
+      try {
+        const r = await a.kanbanEstimate(id, { board: KB.filters.board || '', confirm: true });
+        if (!r || !r.ok) {
+          const why = (r && (r.reason || r.error)) || '未知原因';
+          say('估算没成功：' + why, true);
+          toast('估算没成功：' + why, 3000);
+          return;
+        }
+        const view = {
+          estTokens: Math.max(0, Math.round(Number(r.estTokens || r.est_tokens) || 0)),
+          complexity: String(r.complexity || ''),
+          rationale: String(r.rationale || ''),
+          model: String(r.model || ''),
+        };
+        KB.estimate[id] = view; // 同一张卡重开抽屉不必再花一次钱
+        say(kbEstimateLine(view), false);
+        toast('估算完成：' + kbEstimateLine(view), 3000);
+      } catch (e) {
+        const why = (e && e.message) || '未知错误';
+        say('估算失败：' + why, true);
+        toast('估算失败：' + why, 3000);
+      } finally {
+        KB.estimateBusy = false;
         if (btn && btn.isConnected) btn.disabled = false;
       }
     },
@@ -8218,6 +8374,10 @@ function setupKanban() {
     if (sub) { kbSubmitTask(sub.getAttribute('data-kb-submit'), sub.closest('.kbd-actions') || body); return; }
     const dec = e.target.closest && e.target.closest('[data-kb-decompose]');
     if (dec) { kbDecomposeTask(dec.getAttribute('data-kb-decompose'), dec.closest('.kbd-actions') || body); return; }
+    const spec = e.target.closest && e.target.closest('[data-kb-specify]');
+    if (spec) { kbSpecifyTask(spec.getAttribute('data-kb-specify'), spec.closest('.kbd-actions') || body); return; }
+    const est = e.target.closest && e.target.closest('[data-kb-estimate]');
+    if (est) { kbEstimateTask(est.getAttribute('data-kb-estimate'), est.closest('.kbd-actions') || body); return; }
     const del = e.target.closest && e.target.closest('[data-kb-delete]');
     if (del) { kbDeleteTask(del.getAttribute('data-kb-delete'), del.closest('.kbd-danger')); return; }
     const re = e.target.closest && e.target.closest('[data-kb-reassign]');

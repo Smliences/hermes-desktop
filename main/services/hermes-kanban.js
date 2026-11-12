@@ -10,8 +10,8 @@
  *   - 会话 token 只存在于本模块与 master 进程，绝不进入返回值 / 渲染层；
  *     每个请求由主进程自己加 `X-Hermes-Session-Token`。
  *   - 读端点只允许 GET；写端点固定白名单（新建任务/看板、删除任务、提交派发、
- *     改派受让人、拖列改状态、派发 tick、拆解、项目绑定、编排开关），路径由本模块构造，
- *     渲染层无法拼任意路径或任意 body 字段。
+ *     改派受让人、拖列改状态、派发 tick、拆解、补规格、估算、项目绑定、编排开关），
+ *     路径由本模块构造，渲染层无法拼任意路径或任意 body 字段。
  *   - 任务 id / board slug / run id 全部过严格正则，query 走 URLSearchParams
  *     编码；固定 loopback 127.0.0.1 + 端口数字校验 + 不跟随重定向 + 超时 + 体积上限。
  *   - CLI 返回的 task 行含 workspace_path / claim_lock / worker_pid 等本机敏感
@@ -21,13 +21,14 @@
  *     （并发请求直接拒绝）。派发结果里的 workspace 路径与 worker PID 一律不透出。
  *     「派发这一张」（dispatchTask）额外先在 dry_run 里确认它是队首，
  *     否则真派发会先唤醒更早的卡片 —— 那种情况一律不写库。
- *   - 明确不放行：specify、estimate、bulk、reclaim、terminate、把任务设成 running、
- *     归档、orchestration 配置写入（只读推导在 hermes-kanban-mode.js）、
- *     看板切换（switch 恒为 false）。人工状态推进只走 SET_STATUSES 那 7 个动词。
- *   - 唯一会花 LLM 钱的写路径是「拆解此任务」（POST /tasks/:id/decompose）。
- *     它调用 CLI 的 auxiliary.kanban_decomposer，最长 180s：因此单独给它
- *     200s 预算（不能套用 6s 的常规超时），并且**必须显式 confirm === true**
- *     才发请求 —— 渲染层要过一次二次确认卡，任何顺手调用都写不进来。
+ *   - 明确不放行：bulk、reclaim、terminate、评论写入、把任务设成 running、
+ *     归档、裸 /estimate（无任务的文本级估算）、orchestration 配置写入
+ *     （只读推导在 hermes-kanban-mode.js）、看板切换（switch 恒为 false）。
+ *     人工状态推进只走 SET_STATUSES 那 7 个动词。
+ *   - 会花 LLM 钱的写路径只有三条：拆解（/decompose，180s）、补规格（/specify，120s）、
+ *     估算（/estimate，60s）。三者都单独给超长预算（不能套用 6s 的常规超时），并且
+ *     **必须显式 confirm === true** 才发请求 —— 渲染层要过一次二次确认卡，
+ *     任何顺手调用都写不进来。估算不改任何数据，但也计费，同样要确认。
  */
 const http = require('http');
 const log = require('./logger');
@@ -38,8 +39,15 @@ const PROFILE_BASE = '/api/profiles';
 /** 请求前缀白名单：requestJSON 只接受这两个值，渲染层无法指定任意路径前缀。 */
 const BASES = Object.freeze([PLUGIN_BASE, PROFILE_BASE]);
 const TIMEOUT_MS = 6000;
-/** 拆解走辅助模型（CLI 侧超时 180s），常规 6s 预算必然半路掐断。 */
+/**
+ * 调辅助模型的三条路径都要独立预算：常规 6s 会把模型调用半路掐断。
+ * 数值 = CLI 侧上限 + 余量（拆解 180s / 补规格 120s / 估算 60s）。
+ */
 const DECOMPOSE_TIMEOUT_MS = 200000;
+const SPECIFY_TIMEOUT_MS = 150000;
+const ESTIMATE_TIMEOUT_MS = 90000;
+/** 超长预算只认这三个模块常量：渲染层传任何其它值都退回 6s。 */
+const SLOW_BUDGETS = Object.freeze([DECOMPOSE_TIMEOUT_MS, SPECIFY_TIMEOUT_MS, ESTIMATE_TIMEOUT_MS]);
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_WRITE_BODY = 32 * 1024;
 const MAX_TEXT = 20000;
@@ -237,6 +245,15 @@ function buildWritePath(op, params = {}) {
     case 'decompose':
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/decompose' + suffix;
+    // 补规格：POST /tasks/{id}/specify，把 triage 的一句话扩成 Goal/Approach/验收标准。
+    case 'specify':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/specify' + suffix;
+    // 估算：POST /tasks/{id}/estimate，只读模型估算（不改库）。裸 /estimate（无任务的
+    // 文本级端点）不开放：它接受任意 title/body 并直接计费，桌面端没有对应入口。
+    case 'estimate':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/estimate' + suffix;
     default: return null;
   }
 }
@@ -344,7 +361,7 @@ function projectOrchestration(data) {
 function requestJSON(info, method, pathWithQuery, body, base, timeoutMs) {
   // 前缀只允许两个白名单值；undefined 兼容旧调用 = 看板插件路由。
   const prefix = BASES.includes(base) ? base : PLUGIN_BASE;
-  const budget = timeoutMs === DECOMPOSE_TIMEOUT_MS ? DECOMPOSE_TIMEOUT_MS : TIMEOUT_MS;
+  const budget = SLOW_BUDGETS.includes(timeoutMs) ? timeoutMs : TIMEOUT_MS;
   return new Promise((resolve) => {
     if (!validInfo(info) || typeof pathWithQuery !== 'string' || !pathWithQuery.startsWith('/')
         || (method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE')) {
@@ -601,6 +618,41 @@ function kbReason(text) {
   for (const [re, zh] of DECOMPOSE_REASON) if (re.test(s)) return zh;
   return s;
 }
+/**
+ * 补规格的失败原因 → 中文。文案要能指向下一步动作：CLI 的原文
+ * `task is not in triage (status='todo')` 只说「不在收集箱」，用户看不出该怎么办。
+ * 成功时 CLI 回 reason='specified'，那是内部短语，界面上另有文案，这里映射成空串。
+ */
+const SPECIFY_REASON = Object.freeze([
+  [/^specified$/i, ''],
+  [/^unknown task id$/i, '任务不存在（可能已被删除）'],
+  [/^task is not in triage/i, '只有收集箱里的任务能补规格；这张已经离开收集箱'],
+  [/^auxiliary client unavailable$/i, '辅助模型未配置：先在 CLI 里配好 auxiliary.triage_specifier'],
+  [/^LLM returned an empty response$/i, '模型没有返回内容，可以直接重试'],
+  [/^LLM response missing title and body$/i, '模型返回的内容里既没有标题也没有正文，可以直接重试'],
+  [/^task moved out of triage before promotion$/i, '写着写着这张卡被移出收集箱了（可能另一个窗口刚操作过），刷新后再看'],
+  [/^LLM error/i, '辅助模型调用失败'],
+]);
+function kbSpecifyReason(text) {
+  const s = str(text, 200);
+  if (!s) return '';
+  for (const [re, zh] of SPECIFY_REASON) if (re.test(s)) return zh;
+  return s;
+}
+/** 估算的失败原因 → 中文。它不改库，失败几乎都是「模型/配置」问题，重试往往有效。 */
+const ESTIMATE_REASON = Object.freeze([
+  [/^a title is required to estimate$/i, '任务没有标题，没法估算'],
+  [/^auxiliary client unavailable$/i, '辅助模型未配置：估算走 agent.auxiliary_client'],
+  [/^could not parse an estimate from the model$/i, '模型返回的不是合法 JSON，可以直接重试'],
+  [/^task not found$/i, '任务不存在（可能已被删除）'],
+  [/^LLM error/i, '辅助模型调用失败'],
+]);
+function kbEstimateReason(text) {
+  const s = str(text, 200);
+  if (!s) return '';
+  for (const [re, zh] of ESTIMATE_REASON) if (re.test(s)) return zh;
+  return s;
+}
 /** 拆解响应投影：只透出 UI 需要的字段，child_ids 过白名单 + 条数封顶。 */
 function projectDecompose(data) {
   const d = data && typeof data === 'object' ? data : {};
@@ -617,6 +669,35 @@ function projectDecompose(data) {
     fanout,
     childIds: kids.filter((x) => TASK_ID_RE.test(String(x || ''))).slice(0, 40),
     newTitle: str(d.new_title, 300),
+  };
+}
+/** 补规格响应投影：CLI 只回 ok / task_id / reason / new_title。 */
+function projectSpecify(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const ok = !!d.ok;
+  return {
+    ok,
+    taskId: str(d.task_id, 80),
+    reason: ok ? '' : kbSpecifyReason(d.reason),
+    newTitle: str(d.new_title, 300),
+  };
+}
+/**
+ * 估算响应投影：{ok, est_tokens, complexity: S|M|L, rationale, model}。
+ * est_tokens 是「整轮 agent run 的量级」而非报价，这里只做整数化与上限收敛；
+ * complexity 只认 S/M/L（CLI 已过滤一次，这里二次兜底，脏值一律空串）。
+ */
+function projectEstimate(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const n = Number(d.est_tokens);
+  const c = String(d.complexity || '').trim().toUpperCase();
+  return {
+    ok: !!d.ok,
+    reason: d.ok ? '' : kbEstimateReason(d.reason),
+    estTokens: Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 100000000) : 0,
+    complexity: ['S', 'M', 'L'].includes(c) ? c : '',
+    rationale: str(d.rationale, 300),
+    model: str(d.model, 80),
   };
 }
 
@@ -846,6 +927,47 @@ function createKanbanClient(getBackendInfo) {
       return { ok: true, generation: info().generation || 0, ...projectDecompose(r.data) };
     },
 
+    /**
+     * 补规格：把收集箱里的一句话扩成可执行的 spec，并**由 CLI 顺手推进到 todo**
+     * （`POST /tasks/{id}/specify`，CLI 侧 120s）。
+     *
+     * 和拆解一样会调辅助模型（`auxiliary.triage_specifier`）、一样只认 triage：
+     *   - 必须显式 confirm === true 才发请求（渲染层先过一次确认卡）；
+     *   - 独立 150s 预算，常规 6s 必掐断；
+     *   - 预期失败是 HTTP 200 + ok:false，reason 走中文映射；
+     *   - 不重试：失败一次可能已经计过一次费。
+     * 注意它会改数据（title/body + status），成功必须回读看板。
+     */
+    async specifyTask(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      if (o.confirm !== true) {
+        return { ok: false, error: '补规格会调用辅助模型并产生费用，需要先确认' };
+      }
+      const r = await write('specify', 'POST', { board: o.board, taskId: id }, {}, SPECIFY_TIMEOUT_MS);
+      if (!r.ok) return { ok: false, error: kbSpecifyReason(r.error || '补规格没成功'), status: r.status };
+      return { ok: true, generation: info().generation || 0, ...projectSpecify(r.data) };
+    },
+
+    /**
+     * 估算工作量：`POST /tasks/{id}/estimate`，返回 token 量级 + S/M/L 复杂度。
+     *
+     * **不改任何数据**，纯查询，也是最便宜的一次辅助模型调用（CLI 侧 60s，
+     * 300 max_tokens）。仍然要求 confirm：它会计费，界面上要先说清楚。
+     */
+    async estimateTask(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      if (o.confirm !== true) {
+        return { ok: false, error: '估算会调用一次辅助模型并产生少量费用，需要先确认' };
+      }
+      const r = await write('estimate', 'POST', { board: o.board, taskId: id }, {}, ESTIMATE_TIMEOUT_MS);
+      if (!r.ok) return { ok: false, error: kbEstimateReason(r.error || '估算没成功'), status: r.status };
+      return { ok: true, generation: info().generation || 0, ...projectEstimate(r.data) };
+    },
+
     /** 删除任务（UI 侧必须先过二次确认卡）。CLI 会在有子任务等场景自行拒绝。 */
     async deleteTask(taskId, opts = {}) {
       if (!TASK_ID_RE.test(String(taskId || ''))) return { ok: false, error: '非法的任务 id' };
@@ -1051,5 +1173,6 @@ module.exports = {
   projectTree, projectTreeRow,
   COLUMNS, ALL_COLUMNS, PLUGIN_BASE, PROFILE_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,
   TASK_ID_RE, BOARD_RE, RUN_ID_RE, IDEMPOTENCY_RE, ASSIGNEE_RE, PROJECT_RE,
-  CREATE_STATUSES, REASSIGN_STATUSES, SET_STATUSES, ORCHESTRATION_KEYS, kbStatusReason,
+  CREATE_STATUSES, REASSIGN_STATUSES, SET_STATUSES, ORCHESTRATION_KEYS,
+  kbStatusReason, kbSpecifyReason, kbEstimateReason, SPECIFY_TIMEOUT_MS, ESTIMATE_TIMEOUT_MS,
 };

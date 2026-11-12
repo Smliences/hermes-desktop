@@ -961,7 +961,7 @@ async function run() {
     assert.strictEqual(kanban.buildPath('board', { board: null }), '/board', 'null board 不应变成 slug "null"');
     assert.strictEqual(kanban.buildPath('projects'), '/projects', '项目列表读端点缺失');
   });
-  await t('buildWritePath 只有六条写路径，动态段同样过正则', () => {
+  await t('buildWritePath 只有十一条写路径，动态段同样过正则', () => {
     assert.strictEqual(kanban.buildWritePath('createTask'), '/tasks');
     assert.strictEqual(kanban.buildWritePath('createTask', { board: 'ops-2026' }), '/tasks?board=ops-2026');
     assert.strictEqual(kanban.buildWritePath('createBoard'), '/boards');
@@ -970,16 +970,25 @@ async function run() {
     assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: 't_ab12' }), '/tasks/t_ab12');
     assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: 't_ab12', board: 'ops-2026' }),
       '/tasks/t_ab12?board=ops-2026');
+    // 三条辅助模型端点都挂在具体任务下（裸 /estimate 不开放）
+    assert.strictEqual(kanban.buildWritePath('decompose', { taskId: 't_ab12' }), '/tasks/t_ab12/decompose');
+    assert.strictEqual(kanban.buildWritePath('specify', { taskId: 't_ab12' }), '/tasks/t_ab12/specify');
+    assert.strictEqual(kanban.buildWritePath('estimate', { taskId: 't_ab12' }), '/tasks/t_ab12/estimate');
+    assert.strictEqual(kanban.buildWritePath('specify', { taskId: 't_ab12', board: 'ops-2026' }),
+      '/tasks/t_ab12/specify?board=ops-2026');
+    assert.strictEqual(kanban.buildWritePath('estimate', {}), null, '估算缺 taskId 竟然能拼出路径');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'default' }), '/boards/default');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: 'ops 2026' }), null, '非法看板 slug 未被拒');
     assert.strictEqual(kanban.buildWritePath('bindBoard', { slug: '' }), null, '空 slug 未被拒');
-    for (const bad of ['decompose', 'bulk', 'task', 'specify', 'reclaim', 'terminate', '']) {
+    for (const bad of ['bulk', 'task', 'comments', 'reclaim', 'terminate', '']) {
       assert.strictEqual(kanban.buildWritePath(bad), null, '未知写 op 未被拒：' + bad);
     }
     assert.strictEqual(kanban.buildWritePath('deleteTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('submitTask', { taskId: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('createTask', { board: '../x' }), null);
     assert.strictEqual(kanban.buildWritePath('setStatus', { taskId: '../x' }), null);
+    assert.strictEqual(kanban.buildWritePath('specify', { taskId: '../x' }), null);
+    assert.strictEqual(kanban.buildWritePath('estimate', { taskId: '../x' }), null);
     // 人工状态推进的动词表：7 个都认，running（只能调度器认领）与 archived（单向）不在里面
     for (const s of ['triage', 'todo', 'ready', 'review', 'blocked', 'scheduled', 'done']) {
       assert.ok(kanban.SET_STATUSES.includes(s), '缺少状态动词 ' + s);
@@ -1191,6 +1200,8 @@ async function run() {
   let force401 = false;
   let force400 = false;
   let decomposeMode = 'fanout';
+  let specifyMode = 'ok';
+  let estimateMode = 'ok';
   let statusMode = 'ok';
   const server = http.createServer((req, res) => {
     let raw = '';
@@ -1236,6 +1247,30 @@ async function run() {
         // child_ids 里故意塞一个非法 id：投影必须过滤，不能原样回渲染层
         res.end(JSON.stringify({ ok: true, task_id: 't_ab12', reason: '', fanout: true,
           child_ids: ['t_c1', 't_c2', '../etc/passwd', 't_c3'], new_title: '根任务' }));
+        return;
+      }
+      if (req.method === 'POST' && p === '/api/plugins/kanban/tasks/t_ab12/specify') {
+        // 与 CLI 一致：预期失败是 200 + ok:false；成功时 reason 是内部短语 'specified'
+        if (specifyMode === 'nottriage') {
+          res.end(JSON.stringify({ ok: false, task_id: 't_ab12', reason: "task is not in triage (status='ready')", new_title: null }));
+          return;
+        }
+        if (specifyMode === 'llm') {
+          res.end(JSON.stringify({ ok: false, task_id: 't_ab12', reason: 'LLM returned an empty response', new_title: null }));
+          return;
+        }
+        res.end(JSON.stringify({ ok: true, task_id: 't_ab12', reason: 'specified',
+          new_title: '导出报表：按项目维度汇总并支持 CSV' }));
+        return;
+      }
+      if (req.method === 'POST' && p === '/api/plugins/kanban/tasks/t_ab12/estimate') {
+        if (estimateMode === 'unavailable') {
+          res.end(JSON.stringify({ ok: false, reason: 'auxiliary client unavailable' }));
+          return;
+        }
+        // est_tokens 给浮点 + 脏 complexity：投影必须整数化并把非法值收成空串
+        res.end(JSON.stringify({ ok: true, est_tokens: 42123.7, complexity: 'x',
+          rationale: '要改三处并补测试', model: 'test-estimator' }));
         return;
       }
       if (req.method === 'PATCH' && p === '/api/plugins/kanban/tasks/t_ab12') {
@@ -1377,6 +1412,58 @@ async function run() {
     assert.ok(one.ok && one.single === true && one.fanout === false, 'fanout=false 的正常结局被判成失败');
     assert.strictEqual(one.newTitle, '改写后的标题');
     decomposeMode = 'fanout';
+  });
+  await t('补规格：确认前不发请求、body 恒空、成功后保留新标题并吞掉内部 reason', async () => {
+    const before = seen.length;
+    const no = await client.specifyTask('t_ab12', {});
+    assert.ok(!no.ok && no.error.includes('需要先确认'), '未确认竟然放行：' + no.error);
+    assert.ok(!(await client.specifyTask('../etc/passwd', { confirm: true })).ok, '非法 id 未拦下');
+    assert.strictEqual(seen.length, before, '未确认 / 非法 id 竟然发出了请求');
+
+    const ok = await client.specifyTask('t_ab12', { board: 'default', confirm: true });
+    assert.ok(ok.ok, '补规格失败：' + ok.error);
+    assert.strictEqual(ok.newTitle, '导出报表：按项目维度汇总并支持 CSV');
+    assert.strictEqual(ok.reason, '', "成功时的内部短语 'specified' 不该漏到界面上");
+    assert.strictEqual(ok.taskId, 't_ab12');
+    const req = seen[before];
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.path, '/api/plugins/kanban/tasks/t_ab12/specify?board=default');
+    assert.strictEqual(req.body, '{}', '补规格 body 必须为空（author 由 CLI 自己算）');
+    assert.strictEqual(req.token, TOKEN, '补规格请求未注入会话 token');
+
+    specifyMode = 'nottriage';
+    const nt = await client.specifyTask('t_ab12', { confirm: true });
+    assert.ok(!nt.ok, '非收集箱任务被当成成功');
+    assert.ok(nt.reason.includes('收集箱'), '英文 reason 未中文化：' + nt.reason);
+    specifyMode = 'llm';
+    const empty = await client.specifyTask('t_ab12', { confirm: true });
+    assert.ok(!empty.ok && empty.reason.includes('没有返回内容'), '空回复未中文化：' + empty.reason);
+    specifyMode = 'ok';
+  });
+  await t('估算：确认前不发请求、不改数据、脏字段被投影收敛', async () => {
+    const before = seen.length;
+    const no = await client.estimateTask('t_ab12', {});
+    assert.ok(!no.ok && no.error.includes('需要先确认'), '未确认竟然放行：' + no.error);
+    assert.strictEqual(seen.length, before, '未确认竟然发出了请求');
+
+    const ok = await client.estimateTask('t_ab12', { board: 'default', confirm: true });
+    assert.ok(ok.ok, '估算失败：' + ok.error);
+    assert.strictEqual(ok.estTokens, 42124, 'est_tokens 未整数化');
+    assert.strictEqual(ok.complexity, '', '非法 complexity 必须收成空串');
+    assert.strictEqual(ok.rationale, '要改三处并补测试');
+    assert.strictEqual(ok.model, 'test-estimator');
+    assert.ok(!('task' in ok) && !('body' in ok), '估算不该回传任务本体');
+    const req = seen[before];
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.path, '/api/plugins/kanban/tasks/t_ab12/estimate?board=default');
+    assert.strictEqual(req.body, '{}', '估算 body 必须为空');
+    // 只读语义：估算路径上不得发出 PATCH / DELETE
+    assert.ok(!seen.slice(before).some((x) => x.method !== 'POST'), '估算竟然发了写请求');
+
+    estimateMode = 'unavailable';
+    const na = await client.estimateTask('t_ab12', { confirm: true });
+    assert.ok(!na.ok && na.reason.includes('辅助模型未配置'), '英文 reason 未中文化：' + na.reason);
+    estimateMode = 'ok';
   });
   await t('拖列改状态：只放行 7 个动词、running 本地拦下、body 只有 status', async () => {
     const before = seen.length;

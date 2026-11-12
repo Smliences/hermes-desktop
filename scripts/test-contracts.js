@@ -79,7 +79,7 @@ const jsIds = uniq([
 // 不算死绑定：前三处本来就有 null 保护；其余是抽屉渲染时才生成的节点
 // （renderKanbanDetail 拼进 #kb-drawer-body，静态 index.html 里查不到）
 const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee',
-  'kbd-reassign-note', 'kbd-actions-decompose']);
+  'kbd-reassign-note', 'kbd-actions-decompose', 'kbd-actions-specify', 'kbd-actions-estimate']);
 t(`HTML 有 ${htmlIds.length} 个 id，app.js 引用 ${jsIds.length} 个`, () => {
   assert.ok(htmlIds.length >= 100 && jsIds.length >= 80, 'id/引用数量异常，可能解析失败');
 });
@@ -1006,12 +1006,13 @@ t('会话 token 只存在于主进程服务层', () => {
   assert.ok(!appSrc.includes('backend.token'), 'renderer 不应直接读后端 token');
   assert.ok(!kbAppSrc.includes('127.0.0.1'), 'renderer 不应自己拼后端地址');
 });
-t('读写边界：读固定 GET，写只有九条白名单，危险端点一律不暴露', () => {
+t('读写边界：读固定 GET，写只有十一条白名单，危险端点一律不暴露', () => {
   assert.ok(kbSrc.includes("requestJSON(info, 'GET', pathWithQuery, null, base)"), '读端点未固定 GET');
   assert.ok(kbSrc.includes("method !== 'GET' && method !== 'POST' && method !== 'PATCH' && method !== 'PUT' && method !== 'DELETE'"),
     '写方法未收窄');
   assert.ok(kbSrc.includes('function buildWritePath'), '缺少写路径白名单');
-  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch', 'orchestration', 'bindBoard', 'decompose']) {
+  for (const op of ['createTask', 'createBoard', 'deleteTask', 'submitTask', 'reassign', 'dispatch',
+    'orchestration', 'bindBoard', 'decompose', 'specify', 'estimate']) {
     assert.ok(kbSrc.includes("case '" + op + "':"), '缺少写端点 ' + op);
   }
   assert.ok(kbSrc.includes('TASK_ID_RE.test(String(p.taskId'), '任务 id 未过正则');
@@ -1023,12 +1024,19 @@ t('读写边界：读固定 GET，写只有九条白名单，危险端点一律�
   }
   assert.ok(kbSrc.includes('default: return null'), '白名单之外必须拒绝');
   // orchestration 是唯一一条带 body 白名单的写端点，body 必须经 cleanOrchestration 投影；
-  // decompose 是唯一一条会花 LLM 钱、且需要超长预算的端点（见下一条测试）；
+  // 三条会花 LLM 钱的端点必须走 /tasks/{id}/…（见下方「辅助模型三条路径」）；
   // 其余危险端点仍一律不暴露。
-  for (const bad of ["'/tasks/bulk'", "'/specify'", "'/estimate'", "'/links'",
-    "'/reclaim'", "'/terminate'"]) {
+  for (const bad of ["'/tasks/bulk'", "'/links'", "'/reclaim'", "'/terminate'", "'/comments'"]) {
     assert.ok(!kbSrc.includes(bad), '不得暴露端点 ' + bad);
   }
+  // 裸的文本级 /estimate（无任务、直接吃 title/body 并计费）不开放：
+  // 唯一合法形态是 /tasks/{id}/estimate。这两条断言防止有人图省事放行全局端点。
+  assert.ok(!kbSrc.includes("return '/estimate'"), '不得暴露文本级 /estimate 端点');
+  const estAt = kbSrc.indexOf("case 'estimate':");
+  assert.ok(estAt > 0, '缺少估算写端点');
+  const estCase = kbSrc.slice(estAt, estAt + 320);
+  assert.ok(estCase.includes("'/tasks/' + encodeURIComponent(String(p.taskId)) + '/estimate'"),
+    '估算必须挂在具体任务上');
   assert.ok(kbSrc.includes('function cleanOrchestration'), 'orchestration 写 body 未过白名单');
   // bindBoard 的 body 只放行 project_id 一个键（PATCH /boards/{slug}），且必须过 cleanBoardBind
   assert.ok(kbSrc.includes('function cleanBoardBind') && kbSrc.includes("cleanBoardBind(o)"),
@@ -1072,7 +1080,9 @@ t('拆解边界：唯一花 LLM 钱的写路径，必须显式确认 + 独立超
   assert.ok(kbSrc.includes("'/decompose' + suffix"), '拆解路径不固定');
   assert.ok(kbSrc.includes('const DECOMPOSE_TIMEOUT_MS = 200000'), '拆解必须有自己的超长超时（CLI 侧上限 180s）');
   // 6s 的常规预算会把 180s 的模型调用半路掐断，且渲染层不能自己传超时
-  assert.ok(kbSrc.includes('timeoutMs === DECOMPOSE_TIMEOUT_MS ? DECOMPOSE_TIMEOUT_MS : TIMEOUT_MS'),
+  assert.ok(kbSrc.includes('const SLOW_BUDGETS = Object.freeze([DECOMPOSE_TIMEOUT_MS, SPECIFY_TIMEOUT_MS, ESTIMATE_TIMEOUT_MS])'),
+    '超长预算必须集中在 SLOW_BUDGETS 白名单里');
+  assert.ok(kbSrc.includes('SLOW_BUDGETS.includes(timeoutMs) ? timeoutMs : TIMEOUT_MS'),
     '超时预算必须只认模块常量，渲染层不得自选');
   assert.ok(kbSrc.includes("if (o.confirm !== true)"), '缺少 confirm 闸门：任何顺手调用都能触发计费');
   // body 恒为 {}：author 由 CLI 自己算，桌面端不往审计字段里写东西
@@ -1091,6 +1101,61 @@ t('拆解边界：唯一花 LLM 钱的写路径，必须显式确认 + 独立超
   assert.ok(appSrc.includes('KB.decomposeBusy'), '缺少拆解在途锁，连点会拆两次、计两份费');
   assert.ok(appSrc.includes("cmd: `POST /api/plugins/kanban/tasks/${id}/decompose`"),
     '确认卡里必须明示将要发出的请求');
+});
+t('辅助模型三条路径：补规格改数据、估算只读，都要 confirm + 独立预算', () => {
+  // 服务层：两条新端点都挂在具体任务下（路径固定、id 过正则）
+  assert.ok(kbSrc.includes("case 'specify':"), '缺少补规格端点');
+  assert.ok(kbSrc.includes("'/specify' + suffix"), '补规格路径不固定');
+  assert.ok(kbSrc.includes("case 'estimate':"), '缺少估算端点');
+  assert.ok(kbSrc.includes("'/estimate' + suffix"), '估算路径不固定');
+  assert.ok(kbSrc.includes('const SPECIFY_TIMEOUT_MS = 150000')
+    && kbSrc.includes('const ESTIMATE_TIMEOUT_MS = 90000'), '两条路径缺少独立预算');
+  // confirm 闸门：两条都必须有，且在发请求之前；失败一次可能已计费，不得自动重试
+  for (const fn of ['specifyTask', 'estimateTask']) {
+    const at = kbSrc.indexOf('async ' + fn + '(');
+    assert.ok(at > 0, '缺少方法 ' + fn);
+    const body = kbSrc.slice(at, at + 1000);
+    const iConfirm = body.indexOf('o.confirm !== true');
+    const iWrite = body.indexOf('await write(');
+    assert.ok(iConfirm > 0, fn + ' 缺少 confirm 闸门');
+    assert.ok(iWrite > iConfirm, fn + ' 的 confirm 必须在发请求之前');
+    assert.ok(!/retry|for\s*\(|while\s*\(/.test(body), fn + ' 不得自动重试（失败可能已计费）');
+  }
+  // 结果投影：估算只透出 5 个数值/短文本字段，工作区与正文一律不上渲染层
+  assert.ok(kbSrc.includes('function projectEstimate') && kbSrc.includes('function projectSpecify'),
+    '缺少两条结果投影');
+  const pe = kbSrc.slice(kbSrc.indexOf('function projectEstimate'), kbSrc.indexOf('const STATUS_REASON'));
+  for (const bad of ['workspace_path', 'claim_lock', 'worker_pid']) {
+    assert.ok(!pe.includes("'" + bad + "'"), '估算投影泄漏字段 ' + bad);
+  }
+  // 失败原因中文化：两套 reason 各自有映射，未命中保留原文
+  assert.ok(kbSrc.includes('function kbSpecifyReason') && kbSrc.includes('function kbEstimateReason'),
+    '缺少补规格 / 估算的原因映射');
+  assert.ok(kbSrc.includes('auxiliary.triage_specifier'), '补规格未点明要配哪个 auxiliary 任务');
+  // 渲染层：两个按钮 + 两个实现 + 在途锁 + 调用时必须显式 confirm:true
+  assert.ok(appSrc.includes('data-kb-specify='), '抽屉缺少补规格按钮');
+  assert.ok(appSrc.includes('data-kb-estimate='), '抽屉缺少估算按钮');
+  assert.ok(appSrc.includes('function kbSpecifyTask(') && appSrc.includes('function kbEstimateTask('),
+    '缺少两个动作的实现');
+  assert.ok(appSrc.includes("a.kanbanSpecify(id, { board: KB.filters.board || '', confirm: true })"),
+    '补规格必须显式 confirm:true');
+  assert.ok(appSrc.includes("a.kanbanEstimate(id, { board: KB.filters.board || '', confirm: true })"),
+    '估算必须显式 confirm:true');
+  assert.ok(appSrc.includes('KB.specifyBusy') && appSrc.includes('KB.estimateBusy'), '缺少在途锁');
+  // 补规格会把卡推出收集箱（triage→todo）：成功后必须回读看板并重开抽屉
+  const sf = appSrc.slice(appSrc.indexOf('function kbSpecifyTask('), appSrc.indexOf('function kbEstimateTask('));
+  assert.ok(sf.includes('await kanbanLoad(true)') && sf.includes('await openKanbanTask(id, true)'),
+    '补规格成功后没回读看板 / 刷新抽屉');
+  // 估算结果按 taskId 缓存：重开抽屉不再花第二次钱
+  assert.ok(appSrc.includes('KB.estimate[id] = view'), '估算结果未缓存');
+  // 三段接线（主进程 / preload / Demo 桥）
+  for (const ch of ['kanban:specify', 'kanban:estimate']) {
+    assert.ok(mainSrc.includes("handle('" + ch + "'"), '主进程缺少 ' + ch);
+    assert.ok(preloadSrc.includes("ipcRenderer.invoke('" + ch + "'"), 'preload 缺少 ' + ch);
+  }
+  const mockSrc = read('renderer/mock-bridge.js');
+  assert.ok(mockSrc.includes('async kanbanSpecify(') && mockSrc.includes('async kanbanEstimate('),
+    'Demo 桥缺少两条路径');
 });
 t('新建边界：默认收集箱、幂等键、绝不改 CLI 当前看板指针', () => {
   assert.ok(kbSrc.includes("const CREATE_STATUSES = Object.freeze(['triage', 'ready'])"), '起始状态白名单缺失');
