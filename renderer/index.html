@@ -523,71 +523,6 @@
             <div class="kb-drawer-body" id="kb-drawer-body"></div>
           </aside>
 
-          <!-- 新建弹窗：静态表单，用户输入只经 value / textContent，绝不拼进 HTML -->
-          <div class="kb-modal-mask" id="kb-modal-mask" hidden></div>
-          <div class="kb-modal" id="kb-modal" hidden role="dialog" aria-modal="true" aria-labelledby="kb-modal-title">
-            <div class="kb-modal-head">
-              <span class="kb-modal-title" id="kb-modal-title">新建任务</span>
-              <button class="pp-icon-btn" id="kb-modal-close" type="button" aria-label="关闭弹窗">✕</button>
-            </div>
-            <div class="kb-modal-body">
-              <form id="kb-form-task" class="kb-form" autocomplete="off" hidden>
-                <label class="kb-frow"><span>标题 <i>必填</i></span><input id="kb-f-title" type="text" maxlength="200" placeholder="例如：修复登录页的空状态" /></label>
-                <label class="kb-frow"><span>描述</span><textarea id="kb-f-body" rows="4" maxlength="20000" placeholder="补充背景、验收标准…"></textarea></label>
-                <div class="kb-fgrid">
-                  <label class="kb-frow"><span>起始状态</span><hm-select id="kb-f-status" class="ui-select"><option value="triage">收集箱 triage（等自动分解）</option><option value="ready">就绪 ready（可能被派发）</option></hm-select></label>
-                  <label class="kb-frow"><span>优先级</span><input id="kb-f-priority" type="number" min="0" max="100" value="0" /></label>
-                  <label class="kb-frow"><span>受让人（profile）</span><hm-select id="kb-f-assignee" class="ui-select" aria-label="受让人（profile）" placeholder="留空则不指派"></hm-select></label>
-                  <label class="kb-frow"><span>租户</span><input id="kb-f-tenant" type="text" maxlength="80" placeholder="可留空" /></label>
-                </div>
-                <div class="kb-fhint" id="kb-f-assignee-hint">
-                  <span class="kb-fhint-line">受让人 = Hermes profile 名 · 派发时用 <code>hermes -p &lt;名字&gt;</code> 拉起 worker</span>
-                  <span class="kb-fhint-line" id="kb-f-assignee-profiles"></span>
-                </div>
-                <label class="kb-frow"><span>目标看板</span><hm-select id="kb-f-board" class="ui-select"><option value="">当前看板</option></hm-select></label>
-                <label class="kb-frow" id="kb-f-project-row"><span>项目</span><hm-select id="kb-f-project" class="ui-select" aria-label="项目（决定任务工作区）"><option value="">继承看板设置</option></hm-select></label>
-                <div class="kb-fnote" id="kb-f-project-note" hidden></div>
-                <div class="kb-fnote" id="kb-f-note">收集箱不会被派发器直接拉起，但网关的自动分解会补全 spec 并推进到就绪。</div>
-              </form>
-              <form id="kb-form-board" class="kb-form" autocomplete="off" hidden>
-                <label class="kb-frow"><span>标识 slug <i>必填</i></span><input id="kb-b-slug" type="text" maxlength="64" placeholder="例如 ops-2026" /></label>
-                <label class="kb-frow"><span>显示名称</span><input id="kb-b-name" type="text" maxlength="80" placeholder="可留空" /></label>
-                <label class="kb-frow"><span>描述</span><textarea id="kb-b-desc" rows="3" maxlength="400" placeholder="可留空"></textarea></label>
-                <div class="kb-fnote">只创建看板，不会切换 CLI 的当前看板指针；同名标识会返回既有看板。</div>
-              </form>
-              <form id="kb-form-bind" class="kb-form" autocomplete="off" hidden>
-                <label class="kb-frow"><span>绑定项目</span><hm-select id="kb-b-project" class="ui-select" aria-label="绑定到看板的项目"><option value="">不绑定项目</option></hm-select></label>
-                <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
-                <div class="kb-fnote">列表里没有想要的项目？用「更多操作 → 新建项目…」创建后再绑定。</div>
-              </form>
-              <!-- 官方 project-dialog 的三种模式共用这一个弹窗：create / rename / add-folder -->
-              <form id="kb-form-project" class="kb-form" autocomplete="off" hidden>
-                <label class="kb-frow" id="kb-p-name-row"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如 Skunkworks" /></label>
-                <div class="kb-frow" id="kb-p-folders-row">
-                  <span>文件夹 <i>必填</i></span>
-                  <div id="kb-p-folders" class="kb-pfolders" role="list"></div>
-                </div>
-                <button id="kb-p-add" class="kb-btn kb-p-add" type="button">＋ 添加文件夹…</button>
-                <div class="kb-p-addnote kb-fnote" id="kb-p-addnote" hidden>选择要加入该项目的文件夹（可多选，已存在的会自动跳过）。选完即写入项目。</div>
-                <div id="kb-p-create-only" class="kb-p-create-only">
-                  <label class="kb-frow"><span>想法 <i>可选</i></span><textarea id="kb-p-idea" rows="2" maxlength="4000" placeholder="这个项目是关于什么的？（保存到主文件夹的 IDEA.md）"></textarea></label>
-                  <div class="kb-pideas" id="kb-p-ideas">
-                    <button class="kb-pchip" type="button" data-idea="一句话目标：要解决什么问题、给谁用、怎样算做成。">🎯 一句话目标</button>
-                    <button class="kb-pchip" type="button" data-idea="结构：主要模块、技术选型、目录与命名约定。">🧱 结构约定</button>
-                    <button class="kb-pchip" type="button" data-idea="验收：里程碑、测试用例、明确不做什么。">✅ 验收标准</button>
-                  </div>
-                  <label class="kb-frow"><span>slug</span><input id="kb-p-slug" type="text" maxlength="64" placeholder="可留空，默认由名称生成" /></label>
-                  <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
-                  <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）：第一个文件夹为主仓库，创建后设为活动项目并在此目录打开新会话。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
-                </div>
-              </form>
-            </div>
-            <div class="kb-modal-foot">
-              <span class="kb-modal-err" id="kb-modal-err" hidden></span>
-              <button class="kb-btn" id="kb-modal-cancel" type="button">取消</button>
-              <button class="kb-btn primary" id="kb-modal-submit" type="button">创建</button>
-            </div>
-          </div>
         </div>
       </section>
     </main>
@@ -636,6 +571,74 @@
       </div>
     </aside>
   </div>
+
+  <!-- ══════════ 新建弹窗（全局浮层）：在 #frame 之外，任意页面都能打开 ══════════ -->
+  <!-- 新建弹窗：静态表单，用户输入只经 value / textContent，绝不拼进 HTML -->
+  <div class="kb-modal-mask" id="kb-modal-mask" hidden></div>
+  <div class="kb-modal" id="kb-modal" hidden role="dialog" aria-modal="true" aria-labelledby="kb-modal-title">
+    <div class="kb-modal-head">
+      <span class="kb-modal-title" id="kb-modal-title">新建任务</span>
+      <button class="pp-icon-btn" id="kb-modal-close" type="button" aria-label="关闭弹窗">✕</button>
+    </div>
+    <div class="kb-modal-body">
+      <form id="kb-form-task" class="kb-form" autocomplete="off" hidden>
+        <label class="kb-frow"><span>标题 <i>必填</i></span><input id="kb-f-title" type="text" maxlength="200" placeholder="例如：修复登录页的空状态" /></label>
+        <label class="kb-frow"><span>描述</span><textarea id="kb-f-body" rows="4" maxlength="20000" placeholder="补充背景、验收标准…"></textarea></label>
+        <div class="kb-fgrid">
+          <label class="kb-frow"><span>起始状态</span><hm-select id="kb-f-status" class="ui-select"><option value="triage">收集箱 triage（等自动分解）</option><option value="ready">就绪 ready（可能被派发）</option></hm-select></label>
+          <label class="kb-frow"><span>优先级</span><input id="kb-f-priority" type="number" min="0" max="100" value="0" /></label>
+          <label class="kb-frow"><span>受让人（profile）</span><hm-select id="kb-f-assignee" class="ui-select" aria-label="受让人（profile）" placeholder="留空则不指派"></hm-select></label>
+          <label class="kb-frow"><span>租户</span><input id="kb-f-tenant" type="text" maxlength="80" placeholder="可留空" /></label>
+        </div>
+        <div class="kb-fhint" id="kb-f-assignee-hint">
+          <span class="kb-fhint-line">受让人 = Hermes profile 名 · 派发时用 <code>hermes -p &lt;名字&gt;</code> 拉起 worker</span>
+          <span class="kb-fhint-line" id="kb-f-assignee-profiles"></span>
+        </div>
+        <label class="kb-frow"><span>目标看板</span><hm-select id="kb-f-board" class="ui-select"><option value="">当前看板</option></hm-select></label>
+        <label class="kb-frow" id="kb-f-project-row"><span>项目</span><hm-select id="kb-f-project" class="ui-select" aria-label="项目（决定任务工作区）"><option value="">继承看板设置</option></hm-select></label>
+        <div class="kb-fnote" id="kb-f-project-note" hidden></div>
+        <div class="kb-fnote" id="kb-f-note">收集箱不会被派发器直接拉起，但网关的自动分解会补全 spec 并推进到就绪。</div>
+      </form>
+      <form id="kb-form-board" class="kb-form" autocomplete="off" hidden>
+        <label class="kb-frow"><span>标识 slug <i>必填</i></span><input id="kb-b-slug" type="text" maxlength="64" placeholder="例如 ops-2026" /></label>
+        <label class="kb-frow"><span>显示名称</span><input id="kb-b-name" type="text" maxlength="80" placeholder="可留空" /></label>
+        <label class="kb-frow"><span>描述</span><textarea id="kb-b-desc" rows="3" maxlength="400" placeholder="可留空"></textarea></label>
+        <div class="kb-fnote">只创建看板，不会切换 CLI 的当前看板指针；同名标识会返回既有看板。</div>
+      </form>
+      <form id="kb-form-bind" class="kb-form" autocomplete="off" hidden>
+        <label class="kb-frow"><span>绑定项目</span><hm-select id="kb-b-project" class="ui-select" aria-label="绑定到看板的项目"><option value="">不绑定项目</option></hm-select></label>
+        <div class="kb-fnote" id="kb-b-project-note">绑定后：项目主仓库成为看板默认工作目录，该板上的任务默认获得确定性 git worktree（&lt;repo&gt;/.worktrees/&lt;任务id&gt;，分支 = 项目slug + 任务id），多个 worker 并行互不干扰。</div>
+        <div class="kb-fnote">列表里没有想要的项目？用「更多操作 → 新建项目…」创建后再绑定。</div>
+      </form>
+      <!-- 官方 project-dialog 的三种模式共用这一个弹窗：create / rename / add-folder -->
+      <form id="kb-form-project" class="kb-form" autocomplete="off" hidden>
+        <label class="kb-frow" id="kb-p-name-row"><span>项目名称 <i>必填</i></span><input id="kb-p-name" type="text" maxlength="80" placeholder="例如 Skunkworks" /></label>
+        <div class="kb-frow" id="kb-p-folders-row">
+          <span>文件夹 <i>必填</i></span>
+          <div id="kb-p-folders" class="kb-pfolders" role="list"></div>
+        </div>
+        <button id="kb-p-add" class="kb-btn kb-p-add" type="button">＋ 添加文件夹…</button>
+        <div class="kb-p-addnote kb-fnote" id="kb-p-addnote" hidden>选择要加入该项目的文件夹（可多选，已存在的会自动跳过）。选完即写入项目。</div>
+        <div id="kb-p-create-only" class="kb-p-create-only">
+          <label class="kb-frow"><span>想法 <i>可选</i></span><textarea id="kb-p-idea" rows="2" maxlength="4000" placeholder="这个项目是关于什么的？（保存到主文件夹的 IDEA.md）"></textarea></label>
+          <div class="kb-pideas" id="kb-p-ideas">
+            <button class="kb-pchip" type="button" data-idea="一句话目标：要解决什么问题、给谁用、怎样算做成。">🎯 一句话目标</button>
+            <button class="kb-pchip" type="button" data-idea="结构：主要模块、技术选型、目录与命名约定。">🧱 结构约定</button>
+            <button class="kb-pchip" type="button" data-idea="验收：里程碑、测试用例、明确不做什么。">✅ 验收标准</button>
+          </div>
+          <label class="kb-frow"><span>slug</span><input id="kb-p-slug" type="text" maxlength="64" placeholder="可留空，默认由名称生成" /></label>
+          <label class="kb-frow"><span>描述</span><textarea id="kb-p-desc" rows="2" maxlength="400" placeholder="可留空"></textarea></label>
+          <div class="kb-fnote">通过 <code>hermes project create</code> 写入本机项目库（约 5–7 秒）：第一个文件夹为主仓库，创建后设为活动项目并在此目录打开新会话。建完不会自动绑到当前看板，需要时再用「绑定项目…」。</div>
+        </div>
+      </form>
+    </div>
+    <div class="kb-modal-foot">
+      <span class="kb-modal-err" id="kb-modal-err" hidden></span>
+      <button class="kb-btn" id="kb-modal-cancel" type="button">取消</button>
+      <button class="kb-btn primary" id="kb-modal-submit" type="button">创建</button>
+    </div>
+  </div>
+  <!-- /kb-modal-layer -->
 
   <!-- ══════════ 命令面板 ══════════ -->
   <div id="palette" class="palette" hidden>

@@ -1502,8 +1502,8 @@ const togglePage = (page) => toggleSubpage(page, page.hidden);
 $('#btn-plugins2').onclick = () => { setSidebar(true); togglePage($('#plugins-page')); };
 $('#btn-skills2').onclick = () => { setSidebar(true); togglePage($('#skills-page')); };
 $('#btn-kanban').onclick = () => { setSidebar(true); showKanban(); };
-// 侧栏「新建项目」入口：弹窗 DOM 在看板页内，先开页再弹，保持既有 Esc/惰性化处理链
-$('#sb-new-project').onclick = () => { setSidebar(true); showKanban(true); kbModalOpen('project'); };
+// 侧栏「新建项目」入口：弹窗在 #frame 外，直接在当前页面弹出，不跳看板页
+$('#sb-new-project').onclick = () => kbProjectDialog('create');
 // 官方「打开文件夹为项目」：选一个目录即建/进工作空间，不必先填表
 $('#sb-open-folder').onclick = () => openFolderAsProject();
 $('#btn-kanban-ir').onclick = () => showKanban();
@@ -1621,14 +1621,16 @@ function syncPageLead() {
   const lead = $('#page-lead'), head = $('#chat-head');
   if (!lead || !head) return;
   const pageOpen = [...document.querySelectorAll('.subpage')].some((p) => !p.hidden);
-  const modals = [$('#settings-page'), $('#palette'), $('#help-modal')];
+  // 新建弹窗（含项目 / 工作空间）也是 #frame 之外的全局浮层：从聊天页直接打开时，
+  // 同样要把 frame 锁进 inert，并纳入下面的焦点归还链。
+  const modals = [$('#settings-page'), $('#palette'), $('#help-modal'), $('#kb-modal')];
   const modalOpen = modals.some((m) => m && !m.hidden);
   lead.hidden = !pageOpen;
   // 被整页/模态遮罩盖住的元素不参与 Tab 焦点，读屏也不会读到一层看不见的按钮
   head.inert = pageOpen || modalOpen;
   lead.inert = modalOpen;
   // 模态打开时整块背景 inert：否则 Tab 会跳到遮罩下的侧栏/输入区按钮（WCAG 2.4.3）。
-  // 三个 .palette 浮层都在 #frame 之外，不受影响；整页 .subpage 在 frame 内，故仅模态时隔离。
+  // 三个 .palette 浮层与新建弹窗都在 #frame 之外，不受影响；整页 .subpage 在 frame 内，故仅模态时隔离。
   const frame = $('#frame');
   if (frame) frame.inert = modalOpen;
   // 关闭模态后把焦点还给触发者（Escape / 关闭按钮 / 点遮罩都经 hidden 变更，统一在此收口）。
@@ -1654,7 +1656,7 @@ function syncPageLead() {
 }
 (function watchPageLead() {
   const obs = new MutationObserver(syncPageLead);
-  document.querySelectorAll('.subpage, #settings-page, #palette, #help-modal')
+  document.querySelectorAll('.subpage, #settings-page, #palette, #help-modal, #kb-modal')
     .forEach((p) => obs.observe(p, { attributes: true, attributeFilter: ['hidden'] }));
   syncPageLead();
 })();
@@ -2795,6 +2797,10 @@ window.addEventListener('keydown', (e) => {
     // 其次是看板的「⋯」菜单：它挂在页头，层级高于弹窗，只收它自己
     const kbMoreMenu = $('#kb-more-menu');
     if (kbMoreMenu && !kbMoreMenu.hidden) { kbMoreToggle(false); return; }
+    // 新建弹窗在 #frame 之外，从聊天 / 设置页直接打开时也要优先收它；
+    // 旧链只在 kanban-page 可见时检查弹窗，非看板页下 Esc 会漏掉。
+    const kbModalEl = $('#kb-modal');
+    if (kbModalEl && !kbModalEl.hidden) { kbModalClose(); return; }
     // 统一按「最上层优先」收起：全部浮层关完后，若仍在生成则中断本回合
     let handled = false;
     // 查找条在最上层：先关它，不要顺手把下面的页面一起收掉
@@ -6761,14 +6767,10 @@ function kbSubmitTask(id, host) {
 }
 
 /* ---- 新建弹窗 ---- */
-function kbSetBackgroundInert(on) {
-  // 弹窗在 #frame 内，不能用 frame.inert，否则会把自己也锁住；
-  // 只把看板主体移出交互树，遮罩与弹窗保持可聚焦。
-  const sels = ['.kb-head', '.kb-stats', '.kb-dispatch', '.kb-statusbar', '.kb-toolbar', '.kb-dock',
-    '.kb-dock-confirm', '.kb-scroll', '.kb-drawer', '.kb-drawer-mask', '.kb-message'];
-  const wrap = $('#kanban-page .kb-wrap');
-  if (!wrap) return;
-  sels.forEach((s) => wrap.querySelectorAll(s).forEach((el) => { el.inert = on; }));
+function kbSetBackgroundInert(_on) {
+  // 弹窗已移到 #frame 之外：背景隔离统一交给 syncPageLead 按 modalOpen 计算 frame.inert，
+  // 与设置 / 命令面板 / 帮助层共用一套状态，避免互相覆盖；遮罩与弹窗本身不被锁住。
+  syncPageLead();
 }
 function kbModalErr(text) {
   const e = $('#kb-modal-err');
@@ -6885,15 +6887,16 @@ async function kbSubmitAddFolders(folders) {
     kbSyncProjectSubmit();
   }
 }
-/** 项目行 ⋯ / 侧栏入口统一走这里，避免把弹窗 DOM 搬出看板页。 */
+/** 项目行 ⋯ / 侧栏入口统一走这里。弹窗是全局浮层，不切看板页也能开。 */
 function kbProjectDialog(mode, project) {
-  if (mode === 'create') { setSidebar(true); showKanban(true); kbModalOpen('project'); return; }
-  const p = project || {};
-  KB.projectDialog = {
-    mode, projectId: String(p.id || ''), projectName: String(p.label || p.id || ''),
-  };
-  setSidebar(true); showKanban(true);
-  kbModalOpen(mode === 'rename' ? 'project-rename' : 'project-add-folder');
+  setSidebar(true);
+  if (mode !== 'create') {
+    const p = project || {};
+    KB.projectDialog = {
+      mode, projectId: String(p.id || ''), projectName: String(p.label || p.id || ''),
+    };
+  }
+  kbModalOpen(mode === 'create' ? 'project' : (mode === 'rename' ? 'project-rename' : 'project-add-folder'));
 }
 function kbModalOpen(kind, presetStatus) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
@@ -7059,9 +7062,13 @@ function kbModalSubmit() {
       if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch()); // 侧栏项目树即时收录
       if (kind === 'project') {
         if (r.ideaWarning) toast(r.ideaWarning, 3600);
-        // 官方 createProject(use:true) + enterProject：建完设为活动项目，并回到项目根开新会话
+        // 官方 createProject(use:true) + enterProject：建完设为活动项目，并在项目根开新会话。
+        // 弹窗若是从聊天 / 设置页打开的，不要顺手关掉本来就没显示的看板页。
         const root = payload.folders[0];
-        if (root) { closeKanbanPage(); newTabInProject(root); }
+        if (root) {
+          if (!$('#kanban-page').hidden) closeKanbanPage();
+          newTabInProject(root);
+        }
       }
     } catch (e) {
       if (KB.modal === kind) kbModalErr((e && e.message) || '操作失败');

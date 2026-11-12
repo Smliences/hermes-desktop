@@ -2798,13 +2798,17 @@ body.kb-dragging * { cursor: grabbing !important; }
 }
 
 /* ---- 新建弹窗 ---- */
-.kb-modal-mask { position: absolute; inset: 0; z-index: 10; background: color-mix(in srgb, var(--n-1000) 32%, transparent); }
+/* 弹窗在 #frame 之外的全局浮层：任意页面（聊天 / 设置 / 看板）都能直接打开，
+   不必先切到看板页。遮罩改 fixed 覆盖全窗口；层级低于 toast(200)，创建提示仍可见。 */
+.kb-modal-mask { position: fixed; inset: 0; z-index: 150; background: color-mix(in srgb, var(--n-1000) 32%, transparent); }
 .kb-modal {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 11;
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 151;
   width: min(500px, 92%); max-height: 88%; display: flex; flex-direction: column;
   background: var(--canvas); border: 1px solid var(--line-2);
   border-radius: var(--r-xl); box-shadow: var(--elev);
 }
+/* 弹窗自身是 display:flex；移出看板页后不再被 #kanban-page [hidden] 兜底，显式收回 hidden */
+.kb-modal[hidden], .kb-modal-mask[hidden] { display: none !important; }
 .kb-modal-head {
   display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto;
   padding: 14px 16px; border-bottom: 1px solid var(--line);

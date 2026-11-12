@@ -635,10 +635,11 @@ t('会话分组入口：SVG 图标 + 可聚焦按钮，不再是 12px unicode �
   const ga = cssSrc.slice(cssSrc.indexOf('.sb-ga {'), cssSrc.indexOf('.sb-ga {') + 400);
   assert.ok(/width: 20px; height: 20px/.test(ga), '入口点击区仍过小');
   assert.ok(appSrc.includes("$('#sb-quick-search')"), '搜索入口未接线');
-  // 侧栏「新建项目」入口：必须存在且接线到看板弹窗（弹窗在看板页内，须先开页再弹）
+  // 侧栏「新建项目」入口：弹窗是 #frame 外的全局浮层，直接在当前页面弹出，不许跳看板页
   assert.ok(/id="sb-new-project"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少新建项目入口');
   assert.ok(appSrc.includes("$('#sb-new-project')"), '新建项目入口未接线');
-  assert.ok(/sb-new-project'\)\.onclick[\s\S]{0,120}?kbModalOpen\('project'\)/.test(appSrc), '新建项目入口未落到项目弹窗');
+  assert.ok(/sb-new-project'\)\.onclick[\s\S]{0,120}?kbProjectDialog\('create'\)/.test(appSrc), '新建项目入口未落到项目弹窗');
+  assert.ok(!/sb-new-project'\)\.onclick[\s\S]{0,160}?showKanban\(/.test(appSrc), '新建项目入口仍会跳看板页');
   // 项目类写操作（create / rename / add-folder）都必须即时刷新侧栏项目树
   assert.ok(appSrc.includes("if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch())"),
     '项目写操作后未刷新侧栏树');
@@ -1144,7 +1145,12 @@ t('看板样式只用设计 token，双主题与键盘可达性齐备', () => {
 });
 t('新建弹窗里的每个类都有样式，不许退回浏览器默认正文', () => {
   const start = htmlSrc.indexOf('id="kb-modal-mask"');
-  const block = htmlSrc.slice(start, htmlSrc.indexOf('</section>', start));
+  // 弹窗已移出看板页，截块不能再用 </section> 收尾，否则会把后面的浮层一起算进来
+  const layerEnd = htmlSrc.indexOf('<!-- /kb-modal-layer -->', start);
+  assert.ok(layerEnd > start, '缺少全局弹窗层结束标记');
+  const block = htmlSrc.slice(start, layerEnd);
+  const kanbanEnd = htmlSrc.indexOf('</section>', htmlSrc.indexOf('id="kanban-page"'));
+  assert.ok(start > kanbanEnd, '新建弹窗仍在看板页内，从聊天页打开会跳页');
   const used = new Set();
   for (const m of block.matchAll(/class="([^"]+)"/g)) {
     m[1].split(/\s+/).filter(Boolean).forEach((c) => used.add(c));
@@ -1227,8 +1233,11 @@ t('拖拽派发：投放区齐备、只改指派不越权、真派发仍过二�
   assert.ok(appSrc.includes("'#kb-dock-confirm .op-confirm'"), 'Esc 未处理投放确认卡');
   assert.ok(appSrc.includes("kbDockMsg('', '')") && appSrc.includes("dockCard.innerHTML = ''"),
     '关闭看板未清理投放区状态');
-  assert.ok(kbAppSrc.includes('kbSetBackgroundInert') && kbAppSrc.includes("'.kb-dock-confirm'"),
-    '新建弹窗未把投放区一起移出交互树');
+  // 弹窗在 #frame 之外：整块 frame inert 比逐个元素 inert 更强，投放区自然也在交互树外
+  assert.ok(kbAppSrc.includes('kbSetBackgroundInert') && /frame\.inert\s*=\s*modalOpen/.test(appSrc),
+    '新建弹窗未隔离背景交互树');
+  assert.ok(/const modals = \[[^\]]*'#kb-modal'\)/.test(appSrc),
+    '新建弹窗未纳入 modalOpen 判定，frame.inert 不会生效');
 });
 t('拖拽派发样式：幽灵卡穿透指针、投放目标高亮、双主题无硬编码色', () => {
   for (const s of ['.kb-dock', '.kb-worker', '.kb-drag-ghost', '.kb-dock-confirm', '.kb-card.is-dragging']) {
@@ -2819,7 +2828,8 @@ t('新建项目弹窗：原生文件夹列表 / 三模式 / 硬性校验 / 自�
   assert.ok(appSrc.includes('submit.disabled = !(('), '提交按钮未随校验禁用');
   assert.ok(appSrc.includes('use: true, // 官方 createProject({ use: true })'), '建完未设为活动项目');
   assert.ok(appSrc.includes("idea: ($('#kb-p-idea')?.value || '').trim()"), '想法未进 payload');
-  assert.ok(appSrc.includes('closeKanbanPage(); newTabInProject(root)'), '建完未进入项目根会话');
+  assert.ok(appSrc.includes("if (!$('#kanban-page').hidden) closeKanbanPage();") &&
+    appSrc.includes('newTabInProject(root)'), '建完未进入项目根会话（且不该动本来隐藏的看板页）');
   assert.ok(appSrc.includes("if (KB_PROJECT_KINDS.includes(kind)) await refreshSessions(currentSearch())"),
     '项目类写操作后未刷新侧栏树');
   assert.ok(appSrc.includes("payload = { op: 'rename', id, name: pname }"), 'rename 模式未接维护通道');
@@ -2848,6 +2858,22 @@ t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', 
   assert.ok(appSrc.includes('api.revealPath(p.path)') && appSrc.includes('api.copyText(p.path)'),
     '本机路径动作缺失');
   assert.ok(appSrc.includes('kbProjectDialog(act, p)'), '重命名 / 加文件夹未复用同一弹窗');
+});
+t('创建项目不再跳看板页：弹窗是全局浮层且任意页面可 Esc 关闭', () => {
+  const frameEnd = htmlSrc.indexOf('  </div>\n\n  <!-- ══════════ 新建弹窗');
+  const mask = htmlSrc.indexOf('id="kb-modal-mask"');
+  assert.ok(frameEnd > 0 && mask > frameEnd, '新建弹窗仍在 #frame 内，无法跨页面弹出');
+  assert.ok(/\.kb-modal-mask\s*\{[^}]*position:\s*fixed/.test(cssSrc) &&
+    /\.kb-modal\s*\{[^}]*position:\s*fixed/.test(cssSrc), '弹窗 / 遮罩未改为全窗口 fixed');
+  assert.ok(/\.kb-modal\[hidden\]/.test(cssSrc), '移出看板页后 hidden 兜底缺失');
+  const dialog = appSrc.slice(appSrc.indexOf('function kbProjectDialog('), appSrc.indexOf('function kbModalOpen('));
+  assert.ok(!dialog.includes('showKanban('), '项目弹窗入口仍会切到看板页');
+  assert.ok(dialog.includes('kbModalOpen('), '项目弹窗入口未打开弹窗');
+  assert.ok(appSrc.includes("document.querySelectorAll('.subpage, #settings-page, #palette, #help-modal, #kb-modal')"),
+    '弹窗 hidden 变化未被观察，frame.inert 不会重算');
+  const esc = appSrc.slice(appSrc.indexOf("if (e.key === 'Escape')"), appSrc.indexOf('/* ---------- 插件/技能页'));
+  assert.ok(/if \(kbModalEl && !kbModalEl\.hidden\) \{ kbModalClose\(\); return; \}/.test(esc),
+    '非看板页下 Esc 收不掉全局弹窗');
 });
 
 console.log('\n' + '─'.repeat(56));
