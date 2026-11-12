@@ -2707,6 +2707,34 @@ t('5 列自适应：列宽恒等分，空列不许抢宽度', () => {
   assert.ok(!/flex:|min-width:|width:/.test(emptyRule), '空列不得单独指定宽度，五列必须等分');
 });
 
+t('显示已归档＝在五列右侧追加一列，不重新切六份', () => {
+  // 六列曾经直接走 flex 等分：容器固定，每列从 207px 掉到 171px，卡片标题多折一行，
+  // 而 min-width 只有 160px，够不到触发横向滚动的门槛 —— 观感就是「多开一列，五列全乱」。
+  assert.ok(/\.kb-columns \{[^}]*--kb-gap: 10px/.test(kbCss), '列间距必须收敛成 --kb-gap 变量，宽度公式要用同一个值');
+  assert.ok(/\.kb-columns \{[^}]*gap: var\(--kb-gap\)/.test(kbCss), 'gap 未引用 --kb-gap');
+  const rule = (kbCss.match(/\.kb-columns\.has-archived \.kb-col \{[^}]*\}/) || [''])[0];
+  assert.ok(rule, '缺少「六列保持五列宽度」的规则');
+  assert.ok(/flex: 0 0 calc\(\(100% - var\(--kb-gap\) \* 4\) \/ 5\)/.test(rule),
+    '六列时列宽必须是「五列时的宽度」而不是等分成六份');
+  assert.ok(/min-width: 200px/.test(rule), '六列时列宽下限要抬到 200px，否则容器一窄卡片就读不了');
+  // 宽度策略挂在容器上：容器不随 innerHTML 重建，class 不会被冲掉
+  assert.ok(kbAppSrc.includes("colsHost.classList.toggle('has-archived', !!KB.filters.archived && !KB.status)"),
+    '渲染层未按「显示已归档 + 未按分组筛选」挂 has-archived');
+});
+
+t('切「显示已归档」只滚一次，日常渲染不抢滚动位置', () => {
+  const fn = kbAppSrc.slice(kbAppSrc.indexOf('function kbScrollToArchived('), kbAppSrc.indexOf('function renderKanban('));
+  assert.ok(fn, '缺少 kbScrollToArchived');
+  assert.ok(fn.includes('sc.scrollWidth <= sc.clientWidth + 1'), '没有溢出时不该滚动');
+  assert.ok(fn.includes('prefers-reduced-motion: reduce'), '滚动未尊重 reduced-motion');
+  const off = kbAppSrc.slice(kbAppSrc.indexOf("$('#kb-archived')"), kbAppSrc.indexOf("$('#kb-archived')") + 700);
+  assert.ok(off.includes('kanbanLoad(false).then(() => kbScrollToArchived(KB.filters.archived))'),
+    '切换「显示已归档」后未把第 6 列带进视野（渲染完才滚，此时 scrollWidth 才是六列的值）');
+  // 轮询 / 聚焦刷新都会重渲染，滚动位置必须留在用户手上
+  const poll = kbAppSrc.slice(kbAppSrc.indexOf('function kanbanStartPolling('), kbAppSrc.indexOf('async function kanbanLoad('));
+  assert.ok(!poll.includes('kbScrollToArchived'), '轮询渲染不得改动滚动位置');
+});
+
 t('卡片只留有色语义 chip，弱信息合成一行灰字', () => {
   // 列宽 160px 是常态：状态（列头已写）、评论数、子任务、时间各占一个 chip，
   // 会折成两三行小方块，一张卡大半面积在做噪声。状态改由列头承担，

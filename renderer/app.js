@@ -6682,6 +6682,11 @@ function renderKanbanBody() {
   wanted.forEach((g) => { shown += g.tasks.length; });
 
   const isGrid = KB.view === 'grid';
+  // 「显示已归档」＝在五列右侧追加一列。类挂在容器上而不是列上有两个原因：
+  //  ① 容器不随 innerHTML 重建，class 不会被冲掉；
+  //  ② 宽度策略由 CSS 一处决定，列自己不必知道自己是第几列。
+  // 按分组筛选时只剩一列，那一列应该独占宽度，所以此时不加这个类。
+  if (colsHost) colsHost.classList.toggle('has-archived', !!KB.filters.archived && !KB.status);
   if (groupsHost) groupsHost.hidden = !isGrid;
   if (colsHost) colsHost.hidden = isGrid;
 
@@ -6735,6 +6740,22 @@ function renderKanbanBody() {
   const count = $('#kb-count');
   if (count) count.textContent = (shown !== total && total) ? `筛选出 ${shown} / ${total} 张` : '';
   return { shown, total };
+}
+
+/** 打开「显示已归档」后把第 6 列带进视野：用户刚点开归档却什么都没变（那列在右侧
+ *  视口外），等于按钮失灵。只在切开关这一次滚，日常渲染绝不抢滚动位置。
+ *  关掉时回到最左：第六列没了，留在右端的空白位置看起来像五列丢了内容。 */
+function kbScrollToArchived(on) {
+  const sc = $('#kb-scroll') || document.querySelector('.kb-scroll');
+  if (!sc) return;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const go = (left) => {
+    try { sc.scrollTo({ left, behavior: reduce ? 'auto' : 'smooth' }); }
+    catch { sc.scrollLeft = left; }
+  };
+  if (!on) { if (sc.scrollLeft > 0) go(0); return; }
+  if (sc.scrollWidth <= sc.clientWidth + 1) return;
+  go(sc.scrollWidth);
 }
 
 function renderKanban() {
@@ -7872,7 +7893,11 @@ function setupKanban() {
     kanbanLoad(true);
   };
   const archived = $('#kb-archived');
-  if (archived) archived.onchange = () => { KB.filters.archived = !!archived.checked; kanbanLoad(false); };
+  if (archived) archived.onchange = () => {
+    KB.filters.archived = !!archived.checked;
+    // 渲染完再滚：此时第 6 列才存在，scrollWidth 才是六列的值
+    kanbanLoad(false).then(() => kbScrollToArchived(KB.filters.archived));
+  };
 
   const scroll = $('#kb-scroll');
   if (scroll) {

@@ -2716,7 +2716,10 @@ body.kb-dragging * { cursor: grabbing !important; }
    列宽恒等分：flex 1 1 0 + min-width 160px。五个分组是平权的，任何一列都不该
    因为「恰好只有它有卡」而吃掉其余四列的宽度 —— 那会让首屏看出一边倒的错觉。
    主区不够宽（右侧 rail 全开 / 窄窗口）时整行横向滚动，绝不把卡片压到读不了。 */
-.kb-columns { display: flex; gap: 10px; align-items: stretch; height: 100%; min-height: 0; padding-bottom: 2px; }
+.kb-columns {
+  --kb-gap: 10px;
+  display: flex; gap: var(--kb-gap); align-items: stretch; height: 100%; min-height: 0; padding-bottom: 2px;
+}
 .kb-col {
   --kb-dot: var(--n-400);
   position: relative;
@@ -2733,6 +2736,16 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-col[data-dot="green"] { --kb-dot: var(--green); }
 .kb-col[data-dot="red"] { --kb-dot: var(--red); }
 .kb-col[data-dot="muted"] { --kb-dot: var(--n-400); }
+/* 「显示已归档」＝在第 5 列右侧追加一列，不是把五列重新切六份。
+   以前六列直接走 flex 等分，容器固定 → 每列从 207px 掉到 171px，卡片标题多折一行、
+   列头也发挤；而 .kb-col 的 min-width 只有 160px，够不到触发横向滚动的门槛。
+   这里把「五列时的宽度」算成固定基准（容器宽 - 4 个 gap，再除以 5），第六列自然溢出到
+   右侧由 .kb-scroll 横向滚动，五列的版式与没开归档时逐像素一致。
+   最小 200px：容器再窄也不把卡片压到读不了，此时六列一起横向滚动。 */
+.kb-columns.has-archived .kb-col {
+  flex: 0 0 calc((100% - var(--kb-gap) * 4) / 5);
+  min-width: 200px;
+}
 .kb-col-head {
   display: flex; align-items: center; gap: 7px; padding: 9px 11px;
   border-bottom: 1px solid var(--line); flex: 0 0 auto;
