@@ -1620,6 +1620,33 @@ async function run() {
     assert.strictEqual(s.mode, 'semi');
   });
 
+  section('10b. 删除项目：官方 projects.delete RPC（只删记录，不动磁盘）');
+  await t('非法项目 id 在发 RPC 前被拒绝，且错误不泄漏内部信息', async () => {
+    const h = makeChat();
+    for (const bad of ['', '../../etc/passwd', 'a b', '-x', 'x'.repeat(200)]) {
+      const r = await h.chat.deleteProject(bad);
+      assert.strictEqual(r.ok, false, '非法 id 不应成功：' + JSON.stringify(bad));
+      assert.strictEqual(r.error, '项目标识无效');
+    }
+    assert.strictEqual(h.gw.calls.length, 0, '非法 id 不得发起任何 RPC');
+  });
+  await t('删除走 projects.delete（带 profile），只回 activeId 不透出项目表', async () => {
+    const h = makeChat();
+    const r = await h.chat.deleteProject('pj_abc-1');
+    assert.strictEqual(r.ok, true);
+    const call = h.gw.calls.find((c) => c.method === 'projects.delete');
+    assert.ok(call, '未调用 projects.delete');
+    assert.strictEqual(call.params.id, 'pj_abc-1');
+    assert.ok(String(call.params.profile || '').length > 0, 'projects RPC 必须带 profile');
+    assert.ok(!('projects' in r), '不得把全量项目表回传给渲染层');
+  });
+  await t('RPC 失败收敛成 {ok:false,error}，不向 IPC 抛异常', async () => {
+    const h = makeChat({ gw: fakeGateway({ failMethods: ['projects.delete'] }) });
+    const r = await h.chat.deleteProject('pj_abc-1');
+    assert.strictEqual(r.ok, false);
+    assert.ok(String(r.error || '').length > 0);
+  });
+
   // 清理：仅删除本测试自建的临时目录
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 

@@ -2859,6 +2859,30 @@ t('打开文件夹为项目 + 项目行 ⋯ 菜单：官方工作空间操作', 
     '本机路径动作缺失');
   assert.ok(appSrc.includes('kbProjectDialog(act, p)'), '重命名 / 加文件夹未复用同一弹窗');
 });
+t('删除项目：官方 projects.delete RPC、两次点击确认、不删磁盘文件', () => {
+  // CLI 没有 `project delete` 子命令 → 唯一官方写口是 serve 的 projects.delete RPC
+  assert.ok(chatSrc.includes("rpc('projects.delete'") && chatSrc.includes('profile: profile.current()'),
+    '删除项目未走官方 projects.delete RPC（且必须是 profile-scoped）');
+  assert.ok(chatSrc.includes('PROJECT_ID_RE.test(id)') && chatSrc.includes("id.includes('..')"),
+    '删除项目缺少 id 白名单校验');
+  assert.ok(chatSrc.includes('async deleteProject(projectId)') && chatSrc.includes('{ ok: true, activeId'),
+    '服务层缺少 deleteProject');
+  assert.ok(!chatSrc.includes("rpc(method"), '不得暴露可传任意方法名的通用 RPC 入口');
+  // 通道：main ↔ preload ↔ renderer
+  assert.ok(mainSrc.includes("handle('project:delete'"), '主进程缺少 project:delete');
+  assert.ok(preloadSrc.includes("ipcRenderer.invoke('project:delete'"), 'preload 缺少 project:delete');
+  assert.ok(appSrc.includes('api.deleteProject(p.id)'), '删除项目未接通道');
+  // 菜单项 + 破坏性样式 + 二次确认（复用会话删除的 confirm 模式）
+  assert.ok(/data-pact="delete"[^>]*class="danger"[^>]*>✕ 删除项目…/.test(appSrc), '项目菜单缺少删除入口');
+  assert.ok(appSrc.includes("b.dataset.confirm !== '1'") && appSrc.includes('b.classList.add(\'confirm\')'),
+    '删除项目缺少二次确认');
+  assert.ok(appSrc.includes('只移除项目记录，不删磁盘文件'), '确认文案必须说明不动磁盘文件');
+  // 删完刷新侧栏树，并把落在被删项目里的 cwd 回落
+  assert.ok(appSrc.includes('async function deleteProjectFromSidebar('), '缺少删除项目实现');
+  assert.ok(appSrc.includes('await refreshSessions(currentSearch())') && appSrc.includes('syncComposerProject();'),
+    '删除后未刷新树 / 未同步项目下拉');
+  assert.ok(appSrc.includes('delete tab.cwd'), '被删项目的 cwd 未回落');
+});
 t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、cwd 写口', () => {
   // 位置：权限胶囊之后、spacer 之前，属于左侧工具组
   assert.ok(/id="chip-yolo"[\s\S]{0,400}?id="chip-project"[\s\S]{0,300}?class="cr-spacer"/.test(htmlSrc),

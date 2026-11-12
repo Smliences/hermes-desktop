@@ -594,8 +594,27 @@ function closeSessionMenu() {
   const m = $('#session-menu');
   if (m) { m.hidden = true; m.innerHTML = ''; }
 }
+/** 官方 deleteProject：删除项目记录（`projects.delete` RPC），**不动磁盘上的文件 / 仓库 / 工作树**。
+ *  删完刷新侧栏树；当前页签的 cwd 若正落在被删项目里，回落到默认工作目录。 */
+async function deleteProjectFromSidebar(p) {
+  const label = String(p.label || p.id || '');
+  if (typeof api.deleteProject !== 'function') { toast('当前环境不支持删除项目', 2600); return; }
+  toast('正在删除项目…', 1600);
+  let r = null;
+  try { r = await api.deleteProject(p.id); } catch (e) { r = { ok: false, error: (e && e.message) || String(e) }; }
+  if (!r || !r.ok) { toast('删除失败：' + ((r && r.error) || '未知错误'), 3600); return; }
+  const tab = activeTab();
+  const root = String(p.path || '').replace(/\/+$/, '');
+  if (tab && tab.cwd && root && (String(tab.cwd) === root || String(tab.cwd).startsWith(root + '/'))) {
+    delete tab.cwd;
+  }
+  await refreshSessions(currentSearch());
+  syncComposerProject();
+  toast(`已删除项目「${label}」`, 2200);
+}
+
 /** 官方 project-menu.tsx：项目行 ⋯ / 右键共用的操作菜单。
- *  显式项目才有重命名 / 加文件夹 / 设为活动；另外两项是本机路径动作，不写 CLI。 */
+ *  显式项目有重命名 / 加文件夹 / 设为活动 / 删除；后两项是本机路径动作，不写 CLI。 */
 function openProjectMenu(p, anchor) {
   const m = $('#session-menu'); if (!m) return;
   const r = anchor.getBoundingClientRect();
@@ -606,12 +625,26 @@ function openProjectMenu(p, anchor) {
     <button data-pact="use">◎ 设为活动项目</button>
     <div class="sess-menu-sep"></div>
     <button data-pact="reveal">⌸ 在访达中显示</button>
-    <button data-pact="copy">⧉ 复制路径</button>`;
+    <button data-pact="copy">⧉ 复制路径</button>
+    <div class="sess-menu-sep"></div>
+    <button data-pact="delete" class="danger">✕ 删除项目…</button>`;
   m.hidden = false;
   m.onclick = async (e) => {
     const b = e.target.closest && e.target.closest('button');
     if (!b || !b.dataset.pact) return;
     const act = b.dataset.pact;
+    // 删除是破坏性动作：第一次点击只把按钮切成确认态（复用会话删除的两次点击模式），
+    // 第二次才真正写。官方 deleteConfirm 文案：只移除项目记录，文件/仓库/工作树不变。
+    if (act === 'delete') {
+      if (b.dataset.confirm !== '1') {
+        b.dataset.confirm = '1'; b.classList.add('confirm');
+        b.textContent = '⚠ 确认删除？只移除项目记录，不删磁盘文件';
+        return;
+      }
+      closeSessionMenu();
+      await deleteProjectFromSidebar(p);
+      return;
+    }
     closeSessionMenu();
     try {
       if (act === 'rename' || act === 'add-folder') { kbProjectDialog(act, p); return; }

@@ -19,7 +19,11 @@ const os = require('os');
 const path = require('path');
 const { HermesBackend, resolveHermesBin, DEFAULT_HERMES } = require('./hermes-backend');
 const { GatewayConnection } = require('./gateway-client');
+const profile = require('./hermes-profile');
 const log = require('./logger');
+
+/** 树投影里的项目 id（slug / p_xxx / 绝对路径）只允许这些字符，且不许 .. 跳出。 */
+const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 
 /** 附件走网关的三种 RPC：图片可多模态、PDF 解析成页、其余按文件引用。 */
 const ATTACH_LIMIT = 8;
@@ -375,6 +379,27 @@ class ChatChannel {
       generation: Number(b?.generation) || 0,
       state: b ? String(b.state || 'idle') : 'idle',
     };
+  }
+
+  /**
+   * 删除项目（官方 `projects.delete` JSON-RPC）：只删 projects.db 里的项目记录与文件夹关联，
+   * **不删磁盘上的文件 / git 仓库 / 工作树**。走常驻 serve 的 RPC，方法名写死、id 先校验，
+   * 渲染层拿不到任意 RPC 调用能力。CLI 没有 `project delete` 子命令，这是唯一官方写口。
+   */
+  async deleteProject(projectId) {
+    const id = String(projectId || '').trim();
+    if (!PROJECT_ID_RE.test(id) || id.includes('..')) return { ok: false, error: '项目标识无效' };
+    try {
+      await this._ensureGateway();
+      const gw = this.gateway;
+      if (!gw) return { ok: false, error: 'gateway 连接已重置，请重试' };
+      const res = await gw.rpc('projects.delete', { id, profile: profile.current() }, 20000);
+      return { ok: true, activeId: String((res && res.active_id) || '') };
+    } catch (err) {
+      const msg = String((err && err.message) || err || '删除失败');
+      log.warn('chat', `projects.delete: ${msg}`);
+      return { ok: false, error: msg };
+    }
   }
 
   /** 应用启动时预热后端（不阻塞窗口） */

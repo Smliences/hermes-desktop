@@ -134,6 +134,13 @@
     async projectAction(input = {}) {
       return { ok: true, text: `[mock] project ${String(input.op || '')}` };
     },
+    // Demo 里真的把项目从内存树里摘掉，方便验证「删完侧栏即时消失」
+    async deleteProject(id) {
+      const pid = String(id || '');
+      if (!pid) return { ok: false, error: '项目标识无效' };
+      DELETED_PROJECTS.add(pid);
+      return { ok: true, activeId: '' };
+    },
     async copyText() { return true; },
     async kanbanDeleteTask(taskId) {
       const i = KB_TASKS.findIndex((x) => x.id === taskId);
@@ -192,7 +199,8 @@
       const home = { id: '__no_project__', label: '未归类', path: null, color: '', icon: '',
         isAuto: true, isNoProject: true, sessionCount: 1, lastActive: now - 7200,
         previewSessions: [mk(2)], sessionIds: ['s_demo_2'] };
-      return { ok: true, generation: 1, projects: [demo, home], errors: [] };
+      return { ok: true, generation: 1,
+        projects: [demo, home].filter((p) => !DELETED_PROJECTS.has(p.id)), errors: [] };
     },
     // 编排模式：Demo 里只是内存态，语义与真实一致（三档是两个布尔的派生值）
     async kanbanOrchestration() {
@@ -228,6 +236,8 @@
     { id: 'manual', label: '全手动', dispatch: false, decompose: false, needsRestart: true,
       summary: '派发器整体停止，只有手动派发才会执行', detail: '演示数据：改这一档需要重启 gateway。' },
   ];
+  // Demo 内删除过的项目 id：projectsTree 过滤掉，模拟真实后端删库后的树
+  const DELETED_PROJECTS = new Set();
   const KB_MODE_STATE = {
     mode: 'auto', modeLabel: '全自动',
     dispatchInGateway: true, autoDecompose: true, autoPromoteChildren: true,

@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   // 官方新建项目 / 打开文件夹为项目：原生目录选择器 + 既有项目维护（主进程拼 argv）
   pickProjectFolders: (opts) => ipcRenderer.invoke('project:pick-folders', opts || {}),
   projectAction: (input) => ipcRenderer.invoke('project:action', input || {}),
+  // 删除项目：官方 projects.delete RPC（只删项目记录，不动磁盘文件），必须二次确认
+  deleteProject: (id) => ipcRenderer.invoke('project:delete', String(id || '')),
   copyText: (text) => ipcRenderer.invoke('app:copy', String(text || '')),
   // 编排模式：读回生效值；set 改 CLI config.yaml 的 kanban 段（UI 必须二次确认）
   kanbanOrchestration: () => ipcRenderer.invoke('kanban:orchestration'),

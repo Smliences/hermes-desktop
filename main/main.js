@@ -698,6 +698,9 @@ function boot() {
   handle('project:action', async (_e, input) => {
     return require('./services/hermes-project-cli').projectAction(input || {});
   });
+  // 删除项目：CLI 没有 delete 子命令，官方桌面版走 `projects.delete` RPC。只删项目记录，
+  // 不动磁盘文件；复用常驻 serve 的 WS 连接，方法名在服务层写死。
+  handle('project:delete', (_e, id) => chat.deleteProject(id));
   handle('app:copy', (_e, text) => {
     const s = String(text || '').slice(0, 512);
     if (!s) return false;
