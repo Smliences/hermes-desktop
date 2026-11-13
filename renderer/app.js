@@ -152,48 +152,97 @@ document.addEventListener('error', (e) => {
   if (img.parentNode) img.parentNode.replaceChild(a, img);
 }, true);
 
-/* 工具行的小图标：一枚圆角方框里带 `>_`，与 WorkBuddy 同款。
-   所有工具共用一个字形 —— 按工具换图标看着丰富，实际是十几行花里胡哨的符号，
-   真正该读的是后面那句话。 */
-const TOOL_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.7" y="2.6" width="12.6" height="10.8" rx="3.2"></rect><path d="M5.15 6.35 6.85 8.05 5.15 9.75"></path><path d="M8.85 9.85h2.2"></path></svg>';
-/* 工具名 → 一句人话的动词短语。只做本地映射、不调模型：CLI 的工具名集合是收敛的。
-   顺序有意义（读在前、写在后）：`list_files` 归「搜索代码」，`read_file` 归「查看文件」。 */
-const TOOL_PHRASES = [
-  [/^(read_file|view_file|cat|skill_view|drive_preview|desktop_preview)/, '查看文件'],
-  [/^(write_file|patch|edit_file|multi_edit|apply_layout|annotate_preview)/, '修改文件'],
-  [/^(search_files|grep|rg|glob|find_files|list_files|ls|tree)/, '搜索代码'],
-  [/^(terminal|bash|shell|exec_command|run_command|execute_code|process_manage|read_terminal|close_terminal|cronjob_manage)/, '运行命令'],
-  [/^(web_search|x_search|search_web)/, '搜索网络'],
-  [/^(web_fetch|web_extract|http_request|fetch_url)/, '抓取网页'],
-  [/^browser_/, '操作浏览器'],
-  [/^(image_generate|video_generate|text_to_speech)/, '生成素材'],
-  [/^(vision_analyze|video_analyze)/, '分析素材'],
-  [/^(delegate_task|subagent)/, '派发子任务'],
-  [/^(todo_list|todo_write|update_plan)/, '更新清单'],
-  [/^(memory|memory_store)/, '记录要点'],
-  [/^(session_search|conversation_search)/, '翻查会话'],
-  [/^(skill_manage|skills_list|plugins_manage|desktop_project)/, '管理技能'],
-  [/^feishu_/, '操作飞书'],
+/* ══════════ 工具行 ══════════
+   直接照搬运 WorkBuddy 的 single-line-tool-header：一行五段
+     [图标 14px] [状态词] [对象] [次要信息] [箭头 16px]
+   拦包看过它的实现（renderer/assets/src-*.css + i18n 的 tool.* 表），要点：
+   · 状态词不是一个泛泛的「完成」，每类工具各有一套三态词（读取 / 已读取 / 读取失败）；
+   · 运行中的状态词走渐变扫光（background-clip:text + 2.2s 线性往复），不是转圈图标；
+   · 箭头默认朝右（rotate(-90deg)），展开转正朝下；WorkBuddy 里 hover 才显，这里改成常显；
+   · 折叠只切 card-content 的 hidden，行本身不做动画。
+   图标按工具类型分（读/写/命令/搜索/列表/网页/生成/派发/清单/记忆），lucide 线性字形。 */
+const TOOL_ICONS = {
+  read: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"></circle><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"></circle></svg>',
+  write: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.1 2.4a1.6 1.6 0 0 1 2.3 2.3L5.6 12.5 2.4 13.4l.9-3.2Z"></path><path d="M9.9 3.6a1.6 1.6 0 0 1 2.3 2.3"></path></svg>',
+  create: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.4 2.1H4.6c-.8 0-1.5.7-1.5 1.5v8.8c0 .8.7 1.5 1.5 1.5h6.8c.8 0 1.5-.7 1.5-1.5V5.6Z"></path><path d="M9.3 2.2v3.5h3.6"></path><path d="M8 8.1v3.4M6.3 9.8h3.4"></path></svg>',
+  cmd: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.8" y="2.7" width="12.4" height="10.6" rx="2.1"></rect><path d="M4.9 6.4 6.5 8 4.9 9.6"></path><path d="M8.4 9.9h2.4"></path></svg>',
+  list: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.4 4.2h8.2M5.4 8h8.2M5.4 11.8h8.2"></path><path d="M2.4 4.2h.6M2.4 8h.6M2.4 11.8h.6"></path></svg>',
+  search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.2" cy="7.2" r="4.9"></circle><path d="m10.9 10.9 2.6 2.6"></path></svg>',
+  web: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"></circle><path d="M1.9 8h12.2"></path><path d="M8 1.8c1.7 1.9 2.6 4 2.6 6.2S9.7 12.3 8 14.2C6.3 12.3 5.4 10.2 5.4 8S6.3 3.7 8 1.8Z"></path></svg>',
+  gen: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 1.9 1.5 4 4 1.5-4 1.5L8 12.9l-1.5-4-4-1.5 4-1.5Z"></path><path d="M12.6 11.4l.7 1.7 1.7.7-1.7.7-.7 1.7-.7-1.7-1.7-.7 1.7-.7Z"></path></svg>',
+  dispatch: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.2 1.8 7 9M14.2 1.8 9.6 14.2l-2.6-5.2L1.8 6.4Z"></path></svg>',
+  todo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 4.1h7.2M6.6 8h7.2M6.6 11.9h7.2"></path><path d="m2.1 4 1.1 1.1 1.9-2M2.1 8l1.1 1.1L5.1 7"></path></svg>',
+  memory: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="8" cy="4" rx="5.6" ry="2.2"></ellipse><path d="M2.4 4v8c0 1.2 2.5 2.2 5.6 2.2s5.6-1 5.6-2.2V4"></path><path d="M2.4 8c0 1.2 2.5 2.2 5.6 2.2s5.6-1 5.6-2.2"></path></svg>',
+  ask: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.8 7.3c0 3-2.6 5.4-5.8 5.4-.8 0-1.6-.1-2.3-.4L2.2 13.4l1.2-3a5 5 0 0 1-1-3.1C2.4 4.3 5 1.9 8.2 1.9s5.6 2.4 5.6 5.4Z"></path><path d="M6.3 6.6a1.8 1.8 0 1 1 2.4 1.7c-.4.2-.6.5-.6.9M8 11h.01"></path></svg>',
+  unknown: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"></circle><path d="M8 11.2h.01M6.5 6.2a1.6 1.6 0 1 1 2.2 1.5c-.3.1-.5.5-.5.8"></path></svg>',
+};
+/* 每类工具的三态词，照 WorkBuddy i18n 的 tool.* 表逐条对：它是
+   「动作 / 已动作 / 失败了」三种说法，而不是一个笼统的完成态。 */
+const TOOL_SPECS = [
+  { re: /^(read_file|view_file|cat|skill_view|skills_list|drive_preview|desktop_preview|session_search)/,
+    kind: 'read', running: '读取', done: '已读取', error: '读取失败' },
+  { re: /^(write_file|apply_layout|annotate_preview)/,
+    kind: 'create', running: '生成中', done: '创建', error: '生成失败' },
+  { re: /^(patch|edit_file|multi_edit)/,
+    kind: 'write', running: '编辑中', done: '编辑', error: '修改失败' },
+  { re: /^(terminal|bash|shell|exec_command|run_command|execute_code|process_manage|cronjob_manage)/,
+    kind: 'cmd', running: '执行中…', done: '运行成功', error: '执行失败' },
+  { re: /^(glob|find_files)/,
+    kind: 'search', running: '搜索中', done: '搜索文件', error: '搜索失败' },
+  { re: /^(grep|search_files|rg)/,
+    kind: 'search', running: '搜索中', done: '搜索文件内容', error: '搜索失败' },
+  { re: /^(list_files|ls|tree)/,
+    kind: 'list', running: '列出中', done: '已列出', error: '读取失败' },
+  { re: /^(web_search|x_search|search_web)/,
+    kind: 'web', running: '搜索网页中…', done: '搜索网页', error: '搜索失败' },
+  { re: /^(web_fetch|web_extract|http_request|fetch_url)/,
+    kind: 'web', running: '读取中', done: '读取网页内容', error: '读取失败' },
+  { re: /^browser_/,
+    kind: 'web', running: '操作浏览器中', done: '已操作浏览器', error: '浏览器操作失败' },
+  { re: /^(image_generate|video_generate|text_to_speech)/,
+    kind: 'gen', running: '生成中', done: '已生成', error: '生成失败' },
+  { re: /^(vision_analyze|video_analyze)/,
+    kind: 'read', running: '分析中', done: '已分析', error: '分析失败' },
+  { re: /^(delegate_task|subagent)/,
+    kind: 'dispatch', running: '派发中', done: '已派发', error: '派发失败' },
+  { re: /^(todo_list|todo_write|update_plan)/,
+    kind: 'todo', running: '更新计划中', done: '已更新计划', error: '计划处理失败' },
+  { re: /^(memory|memory_store)/,
+    kind: 'memory', running: '写入记忆中', done: '已更新记忆', error: '记忆操作失败' },
+  { re: /_(ask|question|confirm)$|^ask/,
+    kind: 'ask', running: '等待你的回答…', done: '已回答', error: '提问失败' },
 ];
-/** 一句话说明这次调用做了什么：`动词短语：对象`（WorkBuddy 就是「定位代码、查看文件：app.js」）。
-    对象取最能代表本次调用的那个参数：文件名取末段、命令取首行。 */
-function toolMeta(name, input) {
-  const n = String(name || '');
+const TOOL_SPEC_FALLBACK = { kind: 'unknown', running: '执行中', done: '已完成', error: '执行失败' };
+/** 对象：这次调用最该被看见的那个参数（文件名取末段、命令取首行、搜索取关键词） */
+function toolObject(input) {
+  if (!input || typeof input !== 'object') return '';
+  const f = input.file_path || input.path || input.filename || input.notebook_path;
+  const c = input.command || input.cmd || input.script;
+  const q = input.query || input.pattern || input.url || input.skill || input.topic || input.action;
   let obj = '';
-  if (input && typeof input === 'object') {
-    const f = input.file_path || input.path || input.filename || input.notebook_path;
-    const c = input.command || input.cmd || input.script;
-    const q = input.query || input.pattern || input.url || input.skill || input.topic || input.action;
-    if (f) obj = String(f).split('/').filter(Boolean).pop() || String(f);
-    else if (c) obj = String(c).split('\n')[0].replace(/\s+/g, ' ').trim();
-    else if (q) obj = String(q).replace(/\s+/g, ' ').trim();
+  if (f) obj = String(f).split('/').filter(Boolean).pop() || String(f);
+  else if (c) obj = String(c).split('\n')[0].replace(/\s+/g, ' ').trim();
+  else if (q) obj = String(q).replace(/\s+/g, ' ').trim();
+  return obj.length > 60 ? obj.slice(0, 60) + '…' : obj;
+}
+/** 次要信息：编辑类的增删行数（WorkBuddy 的 +7 −0 就是这一格），其余留空 */
+function toolExtra(name, input) {
+  if (!input || typeof input !== 'object') return null;
+  if (Array.isArray(input.edits) && input.edits.length) return { text: `${input.edits.length} 处修改` };
+  const o = input.old_string, n = input.new_string;
+  if (typeof o === 'string' && typeof n === 'string') {
+    const b = o ? o.split('\n').length : 0;
+    const a = n ? n.split('\n').length : 0;
+    return { add: Math.max(0, a - b), del: Math.max(0, b - a) };
   }
-  if (obj.length > 52) obj = obj.slice(0, 52) + '…';
-  let verb = '';
-  for (const [re, p] of TOOL_PHRASES) if (re.test(n)) { verb = p; break; }
-  // 未知工具：原始英文名塞进句子里读不通（「调用 web_crawl_v2：…」），只留动作。
-  if (!verb) verb = '调用工具';
-  return { verb, obj, label: obj ? `${verb}：${obj}` : verb };
+  return null;
+}
+/** state: 'running' | 'done' | 'error' —— 三种状态换的是词，不是图标颜色 */
+function toolMeta(name, input, state) {
+  const n = String(name || '');
+  const spec = TOOL_SPECS.find((s) => s.re.test(n)) || TOOL_SPEC_FALLBACK;
+  const label = state === 'running' ? spec.running : state === 'error' ? spec.error : spec.done;
+  return { icon: TOOL_ICONS[spec.kind] || TOOL_ICONS.unknown, label, obj: toolObject(input), extra: toolExtra(n, input) };
 }
 /** 详情里的参数：浅层标量铺成「键 值」两列，比一整段 JSON 好读；
     嵌套太深或值太长就退回等宽 JSON，免得键被挤成一条。 */
@@ -1557,34 +1606,41 @@ function renderItem(item, header = false) {
       : '';
     el.innerHTML = `${meta}<div class="content md">${renderMarkdown(item.text)}${cursor}</div>${msgActionBar(item, false)}`;
   } else if (item.kind === 'tool') {
-    /* WorkBuddy 版式：一行「做了什么：对象」，前面一枚小图标。没有底色、没有边框、
-       没有行尾箭头、没有每行耗时 —— 工具是过程，不该抢正文的注意力。
-       旧版是五列 grid（图标/动作/对象/耗时/箭头），固定 44px 动作列把中文动作截成
-       省略号，耗时与箭头每行重复一遍，十几行下来就像一张表格。 */
+    /* WorkBuddy 的 single-line-tool-header：图标 · 状态词 · 对象 · 次要信息 · 箭头。
+       状态词随三态换（读取 / 已读取 / 读取失败），运行中走渐变扫光而不是转圈；
+       折叠只切 .card-content 的 hidden，行本身不动画。 */
     el.className = 'tool-item' + (item.open ? ' open' : '');
-    const stateCls = item.state === 'running' ? 'running' : item.isError ? 'err' : 'ok';
-    const stateText = item.state === 'running' ? '执行中' : item.isError ? '失败' : '完成';
-    const meta = toolMeta(item.name, item.input);
+    const running = item.state === 'running';
+    const state = running ? 'running' : item.isError ? 'error' : 'done';
+    const meta = toolMeta(item.name, item.input, state);
     const dur = item.durationMs ? (item.durationMs / 1000).toFixed(1) + 's' : '';
-    el.innerHTML = `<div class="tool-row ${stateCls}" role="button" tabindex="0" aria-expanded="${!!item.open}" title="${esc(item.name || '')}">
-        <span class="ticon" aria-hidden="true">${TOOL_ICO}</span>
-        <span class="tlabel">${esc(meta.label)}</span>
-        <span class="tchev" aria-hidden="true">›</span></div>
-      <div class="tool-detail">
+    const extra = meta.extra
+      ? `<span class="tmeta">${meta.extra.text ? esc(meta.extra.text)
+        : `<i class="ta">+${meta.extra.add}</i><i class="td">−${meta.extra.del}</i>`}</span>`
+      : '';
+    el.innerHTML = `<div class="tool-row collapsible ${state}" role="button" tabindex="0" aria-expanded="${!!item.open}" title="${esc(item.name || '')}">
+        <span class="ticon" aria-hidden="true">${meta.icon}</span>
+        <span class="tstate${running ? ' loading-text' : ''}">${esc(meta.label)}</span>
+        ${meta.obj ? `<span class="tobj">${esc(meta.obj)}</span>` : ''}
+        ${extra}
+        <span class="tchev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6.5 4 4 4-4"></path></svg></span></div>
+      <div class="tool-detail card-content${item.open ? '' : ' hidden'}">
         <div class="tool-detail-head">
           <span class="tdh-name">${esc(item.name || '工具')}</span>
-          <span class="tdh-state ${stateCls}">${stateText}${dur ? ' · ' + dur : ''}</span>
+          <span class="tdh-state ${state}">${running ? '执行中' : item.isError ? '失败' : '完成'}${dur ? ' · ' + dur : ''}</span>
         </div>
         ${toolParamsHTML(item.input)}
         ${item.output != null ? `<div class="sec-label">输出</div><pre class="${item.isError ? 'err-text' : ''}">${esc(clip(item.output, 20000))}</pre>` : ''}
         ${item.input == null && item.output == null ? '<div class="sec-label">暂无详情</div>' : ''}
       </div>`;
     // 局部切 class 而不是整页 renderChat：详情是静态 HTML，不需要重绘；
-    // 更重要的是键盘展开时焦点能留在这条工具行上、展开动画也能正常触发。
+    // 更重要的是键盘展开时焦点能留在这条工具行上。
     const row = el.querySelector('.tool-row');
+    const body = el.querySelector('.card-content');
     const toggle = () => {
       item.open = !item.open;
       el.classList.toggle('open', item.open);
+      body.classList.toggle('hidden', !item.open);
       row.setAttribute('aria-expanded', String(item.open));
     };
     row.onclick = toggle;
@@ -1772,8 +1828,9 @@ function routeEvent(evt, explicitTabId) {
   } else if (evt.type === 'tool_use') {
     const last = tab.items[tab.items.length - 1];
     if (last && last.kind === 'assistant') last.done = true;
-    // 状态行也用人话（「运行命令：npm test」），比「执行 bash…」好认
-    const label = toolMeta(evt.name, evt.input).label;
+    // 状态行也用人话（「读取 app.js」「执行中… npm test」），比「执行 bash…」好认
+    const tm = toolMeta(evt.name, evt.input, 'running');
+    const label = tm.obj ? `${tm.label} ${tm.obj}` : tm.label;
     tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', open: false, ts: Date.now() });
     tab.showTyping = true; tab.activity = label;
     if (visible) { renderChat(); setActivity(label); syncActivityBar(); }

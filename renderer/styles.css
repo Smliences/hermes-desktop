@@ -583,72 +583,107 @@ body.resizing #sidebar { transition: none; }
 .md-details-body { font-size: 12px; color: var(--text-3); padding: 6px 0 2px; white-space: pre-wrap; word-break: break-word; }
 
 /* ══════════ 工具调用 ══════════
-   WorkBuddy 版式：一行「做了什么：对象」，前面一枚小图标。没有底色、没有边框、
-   没有行尾箭头（hover 才浮出）、没有每行耗时 —— 工具是过程，不该抢正文的注意力。
-   状态只落在图标上：运行中呼吸 + 文字提亮，失败变红；成功不着色，否则十几行全是绿点。
-   连续调用不画卡片容器，只靠自然行距排成一段（可读性靠「每行都是一句完整的话」）。
-   全部走设计 token，浅/深主题自动适配；只改聊天流内部，不动定版几何。 */
+   照抄 WorkBuddy 的 single-line-tool-header（解包看过 renderer/assets/src-*.css）：
+   一行五段 · 图标 14px · 行内 gap 8px · min-height 25px · 14px/1.75。
+   状态词、对象、次要信息三段各自一档颜色：状态词最弱、对象可读、增删行数上绿下红。
+   运行中的状态词走渐变扫光（background-clip:text + 2.2s 往复），这是 WB 的做法，
+   不是转圈图标 —— 扫光在原地闪，行高不会跳。
+   折叠只切 .card-content.hidden；箭头默认朝右（rotate(-90deg)），展开转正。 */
 .tool-stream { display: flex; flex-direction: column; margin: 2px 0 10px; min-width: 0; }
 .tool-item { min-width: 0; }
 .tool-row {
-  display: flex; align-items: center; gap: 7px; min-width: 0;
-  padding: 1px 0; border-radius: var(--r-sm);
-  color: var(--text-2); font: 400 13px/1.75 var(--sans);
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 25px;
+  font: 400 14px/1.75 var(--sans); color: var(--text-2);
   cursor: pointer; user-select: none;
 }
-.tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-xs); }
 .tool-row .ticon {
-  flex: 0 0 auto; width: 15px; height: 15px;
+  flex: 0 0 auto; width: 14px; height: 14px;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--caption);
 }
-.tool-row .ticon svg { display: block; width: 15px; height: 15px; }
-.tool-row .tlabel {
-  flex: 0 1 auto; min-width: 0;
+.tool-row .ticon svg { display: block; width: 14px; height: 14px; }
+/* 三段文字：状态词（最弱）→ 对象（可读）→ 附加量（弱）。
+   三段都跟 WB 一样是 14px 行内字号，附加量不换等宽字体（WB 的 .secondary-info 也是 14px）。 */
+.tool-row .tstate { flex: 0 0 auto; color: var(--caption); white-space: nowrap; }
+.tool-row .tobj {
+  flex: 0 1 auto; min-width: 0; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  transition: color .14s ease;
 }
-/* 箭头只做「这行可以点开」的暗示，常显会在每行末尾多出一个符号噪声 */
+.tool-row .tmeta {
+  flex: 0 0 auto; display: inline-flex; gap: 4px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tool-row .tmeta .ta { color: var(--green); font-style: normal; }
+.tool-row .tmeta .td { color: var(--red); font-style: normal; }
+/* 箭头常显（WB 原版是 hover 才显），默认朝右，展开转朝下 */
 .tool-row .tchev {
-  flex: 0 0 auto; width: 9px; font: 400 12px/1 var(--sans); color: var(--caption);
-  opacity: 0; transition: transform .16s ease, opacity .16s ease;
+  flex: 0 0 auto; width: 16px; height: 16px; margin-left: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); opacity: .55;
+  transition: color .16s, transform .16s, opacity .16s;
 }
-.tool-row:hover .tlabel { color: var(--text); }
-.tool-row:hover .tchev, .tool-item.open .tchev { opacity: .85; }
-.tool-item.open .tchev { transform: rotate(90deg); }
-/* 运行中用赭黄：本项目 --blue 是陶土橙，与 --red 同色系，「在跑」会看成「失败」 */
-.tool-row.running .ticon { color: var(--yellow); animation: tool-pulse 1.4s ease-in-out infinite; }
-.tool-row.running .tlabel { color: var(--text); }
-.tool-row.err .ticon, .tool-row.err .tlabel { color: var(--red); }
-@keyframes tool-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.tool-row .tchev svg { width: 16px; height: 16px; transform: rotate(-90deg); transition: transform .16s; }
+.tool-item.open .tchev svg { transform: rotate(0deg); }
+.tool-row:hover { color: var(--text); }
+.tool-row:hover .tstate, .tool-row:hover .tobj, .tool-row:hover .tchev { color: var(--text); }
+.tool-row:hover .tchev, .tool-item.open .tchev { opacity: 1; }
+/* 失败：状态词与对象一起变红（WorkBuddy 的 .tool-status.error 就是整段染红） */
+.tool-row.error .tstate, .tool-row.error .tobj { color: var(--red); }
+.tool-row.error .ticon { color: var(--red); }
+/* 运行中：文字做成一条从左扫到右的高光（WB 的 cb-shining-text-sweep） */
+.tool-row .tstate.loading-text {
+  background: linear-gradient(110deg,
+    color-mix(in srgb, var(--text-2) 26%, transparent) 0%,
+    color-mix(in srgb, var(--text-2) 26%, transparent) 35%,
+    color-mix(in srgb, var(--text-2) 62%, transparent) 50%,
+    color-mix(in srgb, var(--text-2) 26%, transparent) 65%,
+    color-mix(in srgb, var(--text-2) 26%, transparent) 100%);
+  background-size: 200% 100%; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  animation: tool-sweep 2.2s linear infinite;
+}
+.tool-row.running .ticon { color: var(--yellow); }
+@keyframes tool-sweep { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 展开详情：与那行文字的左缘对齐（15 图标 + 7 间距 = 22px），软底色块不带描边 */
+/* 展开的详情：WB 的 card-content —— margin 4px 0、padding 8px 12px、圆角 4px、不加左缩进 */
 .tool-detail {
-  display: none; box-sizing: border-box; min-width: 0; max-height: 420px;
-  margin: 2px 0 8px 22px; padding: 8px 10px 9px;
-  border-radius: var(--r-sm);
+  display: block; box-sizing: border-box; min-width: 0; max-height: 420px;
+  margin: 4px 0; padding: 8px 12px;
+  border-radius: 4px;
   background: var(--fill-2); color: var(--text-2);
-  font: 400 11.5px/17px var(--mono);
+  font: 400 12px/1.5 var(--mono);
   word-break: break-word; overflow: auto;
 }
-.tool-item.open .tool-detail { display: block; animation: tool-reveal .14s ease-out; }
-@keyframes tool-reveal { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+.tool-detail.hidden { display: none; }
+/* 标题行：名字 500 字重 + 右侧状态胶囊（WB 的 default-tool-title / .tool-status 2px 8px） */
 .tool-detail-head {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin: 0 0 8px; padding: 0 0 7px; border-bottom: 1px solid var(--line);
-  font: 400 10.5px/1.4 var(--sans); color: var(--caption);
+  margin: 0 0 8px; padding: 0 0 8px; border-bottom: 1px solid var(--line);
+  font: 400 12px/1.4 var(--sans); color: var(--caption);
 }
-.tool-detail-head .tdh-name { color: var(--text-2); font-family: var(--mono); overflow-wrap: anywhere; }
-.tool-detail-head .tdh-state { margin-left: auto; white-space: nowrap; }
+.tool-detail-head .tdh-name {
+  color: var(--text); font-weight: 500; font-family: var(--mono); font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.tool-detail-head .tdh-state {
+  margin-left: auto; white-space: nowrap;
+  border-radius: 3px; padding: 2px 8px; font-size: 12px;
+  background: color-mix(in srgb, var(--text-2) 10%, transparent);
+}
 .tool-detail-head .tdh-state.ok { color: var(--text-2); }
-.tool-detail-head .tdh-state.err { color: var(--red); }
-.tool-detail-head .tdh-state.running { color: var(--yellow); }
+.tool-detail-head .tdh-state.error { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.tool-detail-head .tdh-state.running { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+/* 分段标签：WB 的 .detail-label —— 12px / 600 / 字距 .5px / 下距 6px */
 .tool-detail .sec-label {
-  font: 500 10px/1 var(--mono); letter-spacing: .08em;
-  color: var(--caption); margin: 0 0 5px;
+  font: 600 12px/1 var(--sans); letter-spacing: .5px;
+  color: var(--text-2); opacity: .72; margin: 0 0 6px;
 }
+/* 代码块：WB 的 .detail-content —— 描边 + 圆角 4 + 8/12 内边距 + 最高 300px */
 .tool-detail pre {
-  margin: 0; font-family: var(--mono);
+  margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--canvas); font-family: var(--mono);
+  max-height: 300px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
 }
 /* 参数铺成两列网格：所有值左缘对齐成一列（flex 逐行排版时，键长短不一会让值参差）；
@@ -656,6 +691,8 @@ body.resizing #sidebar { transition: none; }
 .tool-detail .tp-list {
   display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr);
   column-gap: 12px; row-gap: 4px; align-items: baseline;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--canvas); max-height: 300px; overflow: auto;
 }
 .tool-detail .tp-row { display: contents; }
 .tool-detail .tp-k {
@@ -663,17 +700,17 @@ body.resizing #sidebar { transition: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--caption);
 }
 .tool-detail .tp-v { min-width: 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.tool-detail pre + .sec-label { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
-.tool-detail .tp-list + .sec-label { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+/* 分段之间只留 12px 间距（WB 是 .detail-section:not(:last-child){margin-bottom:12px}），不画分隔线 */
+.tool-detail pre,
+.tool-detail .tp-list { margin-bottom: 12px; }
+.tool-detail pre:last-child,
+.tool-detail .tp-list:last-child { margin-bottom: 0; }
 .tool-detail pre.err-text { color: var(--red); }
 
-/* 窄栏：详情卡回到整宽（单行布局本身不依赖列宽，不需要额外的列收缩） */
-@media (max-width: 720px) {
-  .tool-detail { margin-left: 0; }
-}
+/* 详情卡与行同宽（WB 也不缩进），窄栏不需要额外回落；只留减少动效那条 */
 @media (prefers-reduced-motion: reduce) {
-  .tool-row .tchev, .tool-row .tlabel { transition: none; }
-  .tool-row.running .ticon, .tool-item.open .tool-detail { animation: none; }
+  .tool-row .tchev, .tool-row .tchev svg { transition: none; }
+  .tool-row .tstate.loading-text { animation: none; -webkit-text-fill-color: currentColor; color: var(--text-2); background: none; }
 }
 
 /* 错误卡 */
@@ -1919,7 +1956,7 @@ button:active:not(:disabled) { filter: brightness(.96); }
 /* 运行中的图标必须与 --red 分得开：--blue 是陶土橙，和失败同色系，这里用赭黄 */
 .tool-row.running .ticon { color: var(--yellow); }
 .spin { color: var(--blue); }
-.tool-row.err .ticon, .tool-detail pre.err-text, .error-card .e-title, .msg-error .content { color: var(--red); }
+.tool-row.error .ticon, .tool-detail pre.err-text, .error-card .e-title, .msg-error .content { color: var(--red); }
 .error-card { border-color: color-mix(in srgb, var(--red) 32%, transparent); }
 .error-card .e-dot { background: var(--red); }
 .error-card .e-badge { color: var(--red); background: var(--red-soft); }
