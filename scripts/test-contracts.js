@@ -981,9 +981,14 @@ t('默认模型样式只用设计 token，双主题与窄面板自动适配', ()
 
 section('3r. Kanban 看板：受控读写 + 派发、token 不出主进程、代次守卫');
 const kbSrc = read('main/services/hermes-kanban.js');
-// 切片锚点用注释标题而不是某个常量名：常量重构改名时不会让整段断言静默失空
+// 切片锚点用注释标题而不是某个常量名：常量重构改名时不会让整段断言静默失空。
+// 看板已拆成 modules/kanban-*.js：kbAppSrc 现在是「看板相关代码的并集」——
+// app.js 里 app.js 自身的看板段 + 全部 kanban 模块，顺序不影响 includes/slice 断言的有效性。
 const KB_ANCHOR = 'Kanban 看板（CLI 原生任务队列）';
-const kbAppSrc = appSrc.slice(appSrc.indexOf(KB_ANCHOR), appSrc.indexOf('setupSettings();'));
+const kbAppSrc = [
+  appSrc.slice(appSrc.indexOf(KB_ANCHOR), appSrc.indexOf('setupSettings();')),
+  ...rendererModuleFiles.filter((f) => /kanban/.test(f)).map(read),
+].join('\n');
 const kbCss = cssSrc.slice(cssSrc.indexOf('Kanban 看板（CLI 原生任务队列）'));
 
 t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', () => {
@@ -3083,7 +3088,7 @@ t('看板渲染链调用的每个函数都真的有定义', () => {
   for (const m of kbAppSrc.matchAll(/(?<![\w$.])((?:kb|Kb|renderKanban)[A-Za-z0-9_]*)\s*\(/g)) called.add(m[1]);
   assert.ok(called.size > 20, '函数调用扫描失败（正则失效会静默通过）');
   const missing = [...called].filter((name) => !new RegExp(
-    '(?:function\\s+' + name + '\\s*\\(|(?:const|let|var)\\s+' + name + '\\s*=|class\\s+' + name + '\\b)').test(appSrc));
+    '(?:function\\s+' + name + '\\s*\\(|(?:const|let|var)\\s+' + name + '\\s*=|class\\s+' + name + '\\b)').test(rendererAll));
   assert.deepStrictEqual(missing, [], '看板段调用了未定义的函数：' + missing.join(', '));
   assert.ok(kbAppSrc.includes('function renderKanbanHead('), '页头渲染函数缺失');
   assert.ok(kbAppSrc.includes('function renderKanbanBody(') && kbAppSrc.includes('function renderKanbanStatusbar('),
@@ -3796,7 +3801,8 @@ t('栏头带看板切换：换板走同一条 kanbanLoad，不新增通道', () 
   assert.ok(railApp.includes("rkbBoardSel.addEventListener('change'") &&
     railApp.includes("rkbBoardSel.addEventListener('select-action'"),
     '换板 / 新建看板两个入口没接');
-  assert.ok(railApp.includes('KB.filters.board = next') && railApp.includes('kbSelectSig = \'\''),
+  assert.ok(railApp.includes('KB.filters.board = next') &&
+    (railApp.includes("kbSelectSig = ''") || railApp.includes('kbSelectSigRef.v = \'\'')),
     '换板后整页那个下拉的选项缓存没作废');
   assert.ok(railApp.includes("kbModalOpen('board')"), '缺「＋ 新建看板…」入口');
   assert.ok(!rkbApp.includes('kanbanOverview('), '紧凑视图不得自己拉 overview');
