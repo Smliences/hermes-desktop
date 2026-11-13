@@ -18,3 +18,8 @@ scratch/
 .DS_Store
 *.log
 npm-debug.log*
+.idea/
+
+# 本机脚手架：git worktree 检出目录与 WorkBuddy 会话数据
+.worktrees/
+.workbuddy/
