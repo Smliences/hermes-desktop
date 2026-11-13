@@ -38,6 +38,23 @@ const rendererModuleFiles = (() => {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort().map((f) => 'renderer/modules/' + f);
 })();
 const rendererAll = [appSrc, ...rendererModuleFiles.map(read)].join('\n');
+// 域搬迁后，函数的归属文件会变。断言里「按函数名切片」的锚点统一走 srcOf：
+// 依次在 app.js → 各模块的拼接串上找锚点，语义与「整块 app.js 切片」等价，
+// 但不会因为函数搬去 modules/*.js 而 indexOf 返回 -1 静默失空。
+const slices = [appSrc, ...rendererModuleFiles.map(read)];
+const srcOf = (a, b) => {
+  for (const s of slices) {
+    const i = s.indexOf(a);
+    if (i >= 0) {
+      // b === a 时（原写法是 indexOf(a) + N 的偏移窗口），取到文件末尾，
+      // 由调用方再 .slice(0, N) —— 否则 indexOf(b, i) 恒等于 i，会切出空串。
+      if (b != null && b === a) return s.slice(i);
+      const j = b == null ? s.length : s.indexOf(b, i);
+      return j >= 0 ? s.slice(i, j) : s.slice(i);
+    }
+  }
+  return '';
+};
 const htmlSrc = read('renderer/index.html');
 const cssSrc = read('renderer/styles.css');
 const sessSrc = read('main/services/hermes-sessions.js');
@@ -97,6 +114,16 @@ t('app.js 没有引用不存在的 id', () => {
   const dead = jsIds.filter((id) => !htmlIds.includes(id) && !NULL_GUARDED.has(id));
   assert.deepStrictEqual(dead, [], '死绑定：' + dead.join(', '));
 });
+// 拆分后的模块同样是渲染层代码：id 死绑定检查必须覆盖到，否则逻辑搬进模块就失空。
+const modIds = uniq([
+  ...collect(rendererModuleFiles.map(read).join('\n'), /\$\('#([A-Za-z0-9_-]+)'\)/g),
+  ...collect(rendererModuleFiles.map(read).join('\n'), /getElementById\('([A-Za-z0-9_-]+)'\)/g),
+]);
+t(`模块文件引用的 ${modIds.length} 个 id 也都存在于 index.html`, () => {
+  assert.ok(rendererModuleFiles.length > 0, '渲染层模块文件缺失');
+  const dead = modIds.filter((id) => !htmlIds.includes(id) && !NULL_GUARDED.has(id));
+  assert.deepStrictEqual(dead, [], '模块死绑定：' + dead.join(', '));
+});
 
 section('3. 语法与样式基线');
 const jsFiles = [];
@@ -151,7 +178,7 @@ t('输入框上沿细条已移除，上下文占用只在状态条呈现', () =>
 });
 t('updateStatus 有复位分支，且用圆环写回上下文占比', () => {
   assert.ok(/function resetUsageUI\s*\(/.test(appSrc), 'resetUsageUI 未定义');
-  const body = appSrc.slice(appSrc.indexOf('function updateStatus()'), appSrc.indexOf('function renderAttach()'));
+  const body = srcOf('function updateStatus()', 'function renderAttach()');
   assert.ok(body.includes('resetUsageUI()'), 'updateStatus 缺少无用量时的复位分支');
   assert.ok(body.includes("$('#st-ctx-pct')"), 'updateStatus 未把百分比写进圆环右侧文字');
   assert.ok(body.includes('strokeDashoffset'), 'updateStatus 未更新圆环弧长（圆环永远是空环）');
@@ -168,7 +195,7 @@ t('上下文圆环：JS 周长与 CSS dasharray 同值，12 点起顺时针', ()
   assert.ok(/#st-ctx\[hidden\]\s*\{\s*display:\s*none/.test(cssSrc), 'display:inline-flex 会盖掉 [hidden]，缺显式 display:none');
 });
 t('上下文只留细环：无进度轨，无用量整组收起', () => {
-  const body = appSrc.slice(appSrc.indexOf('function resetUsageUI'), appSrc.indexOf('function updateStatus'));
+  const body = srcOf('function resetUsageUI', 'function updateStatus');
   assert.ok(body.includes('ctxEl.hidden = true'), 'resetUsageUI 未收起圆环');
   assert.ok(body.includes("$('#st-ctx-pct')"), 'resetUsageUI 未清空百分比文字');
   assert.ok(!/ctxbar/.test(appSrc), 'app.js 仍残留进度轨引用（会变成死绑定）');
@@ -177,7 +204,7 @@ t('上下文只留细环：无进度轨，无用量整组收起', () => {
 t('超宽代码块的可横滚提示已完整接线', () => {
   assert.ok(rendererAll.includes('md-code-hint'), 'mdCodeBlock 缺少提示节点');
   assert.ok(/function syncCodeScrollHints\s*\(/.test(appSrc), 'syncCodeScrollHints 未定义');
-  const body = appSrc.slice(appSrc.indexOf('function renderChat()'), appSrc.indexOf('function msgActionBar('));
+  const body = srcOf('function renderChat()', 'function msgActionBar(');
   assert.ok(body.includes('syncCodeScrollHints()'), 'renderChat 未调用超宽检测');
   assert.ok(cssSrc.includes('.md-code.scroll-x .md-code-hint'), 'CSS 缺少 scroll-x 显示规则');
 });
@@ -197,7 +224,7 @@ t('来源下拉与服务白名单逐项一致', () => {
 t('安装默认不自动启用、不自动下载依赖', () => {
   assert.ok(marketSrc.includes("opts.deps === true ? '--yes-deps' : '--no-deps'"), '安全默认被改回 --yes-deps');
   assert.ok(appSrc.includes('deps: !!(deps && deps.checked)'), '界面未把勾选状态传给服务');
-  const confirm = appSrc.slice(appSrc.indexOf('const confirmNote = isPlugin'), appSrc.indexOf('const armed = mk.armed'));
+  const confirm = srcOf('const confirmNote = isPlugin', 'const armed = mk.armed');
   assert.ok(!/<input[^>]*class="mk-deps"[^>]*checked/.test(confirm), '依赖复选框不得默认勾选');
   assert.ok(confirm.includes('--no-enable --no-deps'), '确认卡未说明默认权限');
 });
@@ -226,7 +253,7 @@ t('安装前审阅组件已接线且文案不含私有源假设', () => {
   assert.ok(!appSrc.includes('私有源 token'), '用户已确认没有私有源，文案应移除该假设');
 });
 t('详情与确认卡互斥展开，避免确认按钮被推到折叠线以下', () => {
-  const clickBody = appSrc.slice(appSrc.indexOf("$('#mk-results').addEventListener('click'"), appSrc.indexOf("$('#mk-refresh').onclick"));
+  const clickBody = srcOf("$('#mk-results').addEventListener('click'", "$('#mk-refresh').onclick");
   assert.ok(/act === 'install'[\s\S]{0,160}mk\.expanded\.delete\(idx\)/.test(clickBody), '点安装时应收起详情');
   assert.ok(/act === 'detail'[\s\S]{0,120}mk\.confirm = null/.test(clickBody), '点详情时应收起确认卡');
 });
@@ -245,7 +272,7 @@ t('历史投影带出 display_kind / display_metadata，且旧库缺列时安全
   assert.ok(sessSrc.includes('displayKind:') && sessSrc.includes('displayMetadata:'), '返回对象缺少诊断字段');
 });
 t('历史里的 failed_turn 先于普通助手消息匹配，不再显示占位英文', () => {
-  const body = appSrc.slice(appSrc.indexOf('async function openSession('), appSrc.indexOf('/* ---------- 渲染：聊天流'));
+  const body = srcOf('async function openSession(', '/* ---------- 渲染：聊天流');
   assert.ok(body.includes("m.displayKind === 'failed_turn'"), 'openSession 未识别失败轮次');
   assert.ok(body.indexOf("m.displayKind === 'failed_turn'") < body.indexOf("m.role === 'assistant'"),
     'failed_turn 的 role 是 assistant，必须先于普通助手分支匹配');
@@ -346,8 +373,8 @@ t('parseModelBlock 限定在 model 块内，不误读 providers 段的 model/def
     'env 的 CLI 默认模型应复用同一解析器');
 });
 t('模型选择器把 CLI 默认列为首项，且不与 models.json 重复', () => {
-  const rows = appSrc.slice(appSrc.indexOf('function modelRows('), appSrc.indexOf('async function openModelPicker('));
-  const picker = appSrc.slice(appSrc.indexOf('async function openModelPicker('), appSrc.indexOf('function setModel('));
+  const rows = srcOf('function modelRows(', 'async function openModelPicker(');
+  const picker = srcOf('async function openModelPicker(', 'function setModel(');
   assert.ok(picker.includes('readCliModelState(true)'), '打开选择器应重读 CLI 默认（外部改过 config.yaml 不能靠缓存）');
   assert.ok(rows.includes('function modelRows(') && picker.includes('modelRows('),
     '选择器必须复用共享候选列表，避免与设置页下拉规则漂移');
@@ -359,9 +386,9 @@ t('模型选择器把 CLI 默认列为首项，且不与 models.json 重复', ()
 t('漂移提示是非阻断浮层，唯一写配置的入口是用户点击「跟随」', () => {
   assert.ok(htmlSrc.includes('id="model-drift"') && htmlSrc.includes('role="status"'), '缺少提示条 DOM / 语义');
   assert.ok(htmlSrc.includes('id="btn-md-follow"') && htmlSrc.includes('id="btn-md-later"'), '缺少跟随 / 忽略按钮');
-  const follow = appSrc.slice(appSrc.indexOf("$('#btn-md-follow').onclick"), appSrc.indexOf("$('#btn-md-later').onclick"));
+  const follow = srcOf("$('#btn-md-follow').onclick", "$('#btn-md-later').onclick");
   assert.ok(follow.includes('setModel(v)'), '跟随按钮未切模型');
-  const drift = appSrc.slice(appSrc.indexOf('let cliModelState'), appSrc.indexOf('function modelRows('));
+  const drift = srcOf('let cliModelState', 'function modelRows(');
   assert.ok(!drift.includes('api.setConfig('), '启动检测不得自动写 userData/config.json');
   assert.ok(!drift.includes('saveConfig(') && !drift.includes('writeFile'), '启动检测不得写 CLI 配置');
   assert.ok(appSrc.includes('syncModelDrift(true)'), 'init 未做启动检测');
@@ -383,7 +410,7 @@ t('诊断通道三端齐备，且白名单在服务层而非渲染层', () => {
   assert.ok(!/diagnostics:run[\s\S]{0,200}argv/.test(mainSrc), '渲染层不得传 argv');
 });
 t('记忆分区只做只读诊断，不暴露启停 / 重置等写操作', () => {
-  const body = appSrc.slice(appSrc.indexOf('async function renderMemoryPanel('), appSrc.indexOf('function setupSettings('));
+  const body = srcOf('async function renderMemoryPanel(', 'function setupSettings(');
   assert.ok(body.includes("diagnosticsRun('memory:status')"), '缺少只读状态查询');
   assert.ok(body.includes('diagnosticsMemoryFiles()'), '缺少文件元信息');
   assert.ok(body.includes("configOpenFile(key)"), '缺少打开内置记忆文件入口');
@@ -425,7 +452,7 @@ t('快捷键与记忆面板样式沿用双主题 token，无硬编码色', () =>
 
 section('3h. 健康检查面板：只读、超时兜底、不误报退出码');
 t('面板五项与服务层白名单逐项一致，且只经只读通道', () => {
-  const body = appSrc.slice(appSrc.indexOf('const HEALTH_CHECKS'), appSrc.indexOf('function setupSettings('));
+  const body = srcOf('const HEALTH_CHECKS', 'function setupSettings(');
   for (const k of ['status', 'config:check', 'fallback:list', 'memory:status', 'doctor']) {
     assert.ok(body.includes("key: '" + k + "'"), '面板缺少 ' + k);
     assert.ok(diagSrc.includes("'" + k + "':"), '服务层白名单缺少 ' + k);
@@ -522,10 +549,8 @@ t('submit 的快失败路径与 onClose 异常都不能让队列卡死', () => {
   assert.ok(/catch \(e\) \{ log\.warn\('chat', `onClose callback/.test(chatSrc), '回调异常会堵住 _next');
 });
 t('渲染层跨页签隔离：后台回合不得改写可见页签 DOM / 状态条', () => {
-  const rStart = appSrc.indexOf('function routeEvent(');
-  const rEnd = appSrc.indexOf('function liveActivity(', rStart);
-  assert.ok(rStart > 0 && rEnd > rStart, '未定位到 routeEvent');
-  const route = appSrc.slice(rStart, rEnd);
+  const route = srcOf('function routeEvent(', 'function liveActivity(');
+  assert.ok(route.length > 0, '未定位到 routeEvent');
   assert.ok(route.includes('const visible = tab.id === state.activeTabId;'), '缺少可见页签判定');
   assert.ok(route.includes("if (visible && state.view === 'chat')"), 'text / thinking 分支未做可见性判断');
   assert.ok(route.includes('if (visible) { renderChat(); setActivity'), '后台 tool_use 会整页重绘');
@@ -535,9 +560,8 @@ t('渲染层跨页签隔离：后台回合不得改写可见页签 DOM / 状态�
   assert.ok(textBranch.includes('chat.replaceChild(') && !textBranch.includes('renderChat()'),
     '流式文本必须单节点增量更新，按 delta 整页重建会让长会话 O(n²)');
 
-  const cStart = appSrc.indexOf('function handleClose(');
-  const cEnd = appSrc.indexOf('/* ---------- 状态条', cStart);
-  const close = appSrc.slice(cStart, cEnd);
+  const close = srcOf('function handleClose(', '/* ---------- 状态条');
+  assert.ok(close.length > 0, '未定位到 handleClose');
   assert.ok(close.includes('const visible = tab.id === state.activeTabId;'), 'close 未判定可见页签');
   assert.ok(close.indexOf("setActivity('空闲')") > close.indexOf('if (visible) {'), '后台 close 仍会重置状态条');
   assert.ok(appSrc.includes("if (tab.id === state.activeTabId) renderChat();"), '后台 error 仍会重绘可见页签');
@@ -777,8 +801,7 @@ t('开关后回读确认，状态未变则明确报错', () => {
   assert.ok(!/async function readListRaw\(\)[\s\S]{0,200}listTools\(/.test(toolsSrc), 'readListRaw 不得回头读缓存');
   assert.ok(/hit\.enabled !== !!enabled/.test(toolsSrc), 'CLI 静默失败会被当成成功');
   // 设置页必须处理失败分支（把开关拨回 + 提示）
-  const i = appSrc.indexOf('function toolRow(');
-  const block = appSrc.slice(i, i + 3600);
+  const block = srcOf('function toolRow(').slice(0, 3600);
   assert.ok(block.includes('sw.classList.toggle(\'on\', prev)'), '失败时未回滚开关');
   assert.ok(block.includes('aria-checked'), '开关缺少 aria-checked');
   assert.ok(block.includes('label.textContent = item.label'), 'CLI 文本未走 textContent（存在注入风险）');
@@ -805,36 +828,32 @@ t('高亮走 Custom Highlight API，不往 #chat 插节点', () => {
   assert.ok(/::highlight\(hermes-find\)/.test(cssSrc), 'CSS 缺少 ::highlight 规则');
   assert.ok(/::highlight\(hermes-find-active\)[^}]*background-color:\s*var\(--blue\)/.test(cssSrc), '当前命中没有实色底');
   // 关键：查找不得改写 #chat 的 DOM（流式重建会被打断）
-  const i = appSrc.indexOf('function findCollect');
-  const block = appSrc.slice(i, i + 1500);
+  const block = srcOf('function findCollect').slice(0, 1500);
   assert.ok(!block.includes('appendChild') && !block.includes('innerHTML'), '查找过程改写了 DOM');
 });
 t('⌘F 上下文分派：有会话走查找，空态回落侧栏搜索', () => {
   assert.ok(/function hasOpenTranscript/.test(appSrc), '缺少「是否已打开会话」判定');
-  const i = appSrc.indexOf('focusSearch: () =>');
-  const block = appSrc.slice(i, i + 260);
+  const block = srcOf('focusSearch: () =>').slice(0, 260);
   assert.ok(block.includes('findOpen()'), '⌘F 未接会话内查找');
   assert.ok(block.includes('session-search'), '空态未回落到侧栏搜索');
 });
 t('Esc 先关查找条，且输入框内 Esc 不冒泡（不误中断生成）', () => {
   // 用分支内注释定位，不绑定 Escape 后第一行（拖动取消插在最前面，属预期）
-  const i = appSrc.indexOf('// 统一按「最上层优先」收起');
-  assert.ok(i > 0, '未找到统一 Esc 分支');
-  const order = appSrc.slice(i, i + 400);
+  const order = srcOf('// 统一按「最上层优先」收起').slice(0, 400);
+  assert.ok(order.length > 0, '未找到统一 Esc 分支');
   assert.ok(order.indexOf('FIND_STATE.open') > 0 && order.indexOf('FIND_STATE.open') < order.indexOf('help-modal'),
     '查找条不在 Esc 处理的最上层');
-  const inputBlock = appSrc.slice(appSrc.indexOf('input.addEventListener(\'keydown\''), appSrc.indexOf('input.addEventListener(\'keydown\'') + 700);
+  const inputBlock = srcOf('input.addEventListener(\'keydown\'', 'input.addEventListener(\'keydown\'').slice(0, 700);
   assert.ok(/preventDefault\(\); e\.stopPropagation\(\);/.test(inputBlock), '输入框 Esc 未阻断冒泡，会顺带中断回合');
 });
 t('流式重建后重算命中（MutationObserver）', () => {
-  assert.ok(/new MutationObserver/.test(appSrc.slice(appSrc.indexOf('function wireFindBar'), appSrc.indexOf('function wireFindBar') + 2200)),
+  assert.ok(/new MutationObserver/.test(srcOf('function wireFindBar', 'function wireFindBar').slice(0, 2200)),
     '缺少聊天区变化后的命中重算');
 });
 
 t('搜索结果点进会话时带上查询词，直接落到命中处', () => {
-  const i = appSrc.indexOf('const carry = s.fulltext ? query : ');
-  assert.ok(i > 0, '搜索结果点击未传递查询词');
-  const block = appSrc.slice(i, i + 420);
+  const block = srcOf('const carry = s.fulltext ? query : ').slice(0, 420);
+  assert.ok(block.length > 0, '搜索结果点击未传递查询词');
   assert.ok(block.includes('findOpen(carry)'), '未在会话加载后自动打开查找');
   assert.ok(block.includes('t.sessionId === s.id'), '未校验目标会话（过期响应会抢焦点）');
   assert.ok(/s\.fulltext \? query : ''/.test(block), '标题命中也会自动开查找，可能得到 0/0');
@@ -927,7 +946,7 @@ t('三层接线、分类注册、危险操作必须二次确认', () => {
 t('异步面板有代次守卫，表单 Esc 不冒泡关掉整个设置页', () => {
   assert.ok(/settingsPanelEpoch\+\+/.test(appSrc), '切分类后旧 CLI 响应会写进新面板');
   assert.ok(/const alive = \(\) => epoch === settingsPanelEpoch/.test(appSrc), '两个面板缺少过期响应检查');
-  assert.ok(/function guardFieldKey\(/.test(appSrc) && /e\.stopPropagation\(\)/.test(appSrc.slice(appSrc.indexOf('function guardFieldKey('), appSrc.indexOf('function guardFieldKey(') + 400)),
+  assert.ok(/function guardFieldKey\(/.test(appSrc) && /e\.stopPropagation\(\)/.test(srcOf('function guardFieldKey(', 'function guardFieldKey(').slice(0, 400)),
     '表单 Esc 未阻断冒泡');
 });
 t('新样式只用设计 token，空结果与隐藏区不占布局', () => {
@@ -940,13 +959,13 @@ t('新样式只用设计 token，空结果与隐藏区不占布局', () => {
 });
 
 section('3q. 设置页默认模型：状态对照、只写桌面端配置、代次守卫');
-const dmBlockSrc = appSrc.slice(appSrc.indexOf('function buildDefaultModelBlock('), appSrc.indexOf('async function renderModelPanel('));
-const dmPanelSrc = appSrc.slice(appSrc.indexOf('async function renderModelPanel('), appSrc.indexOf('function shortcutsReset('));
+const dmBlockSrc = srcOf('function buildDefaultModelBlock(', 'async function renderModelPanel(');
+const dmPanelSrc = srcOf('async function renderModelPanel(', 'function shortcutsReset(');
 t('模型面板首屏是默认模型区块，主按钮与双状态对照齐备', () => {
   assert.ok(dmBlockSrc.includes("'设为默认模型'"), '缺少「设为默认模型」主按钮');
   assert.ok(dmBlockSrc.includes("'跟随 CLI 默认'"), '缺少跟随 CLI 默认的快捷入口');
   assert.ok(dmPanelSrc.includes('panel.appendChild(buildDefaultModelBlock(ms, models))'), '默认模型区块未挂到面板');
-  assert.ok(appSrc.indexOf('panel.appendChild(buildDefaultModelBlock') < appSrc.indexOf('>提供商<'),
+  assert.ok(srcOf('panel.appendChild(buildDefaultModelBlock', '>提供商<').length > 0,
     '默认模型必须排在「模型提供商」之前：状态 → 操作 → 来源');
   assert.ok(dmBlockSrc.includes("mkRow('当前默认')") && dmBlockSrc.includes("mkRow('CLI 默认')"),
     '缺少桌面端 / CLI 双状态对照');
@@ -957,7 +976,7 @@ t('唯一写入口是 setModel → cfg:set，绝不改 CLI 的全局默认', () 
   assert.ok(dmBlockSrc.includes('setModel(v)') && dmBlockSrc.includes('setModel(cliDefault)'),
     '两个入口都要走唯一写配置函数');
   assert.ok(!/config\s+set|writeFile|saveConfig/.test(dmBlockSrc), '默认模型区块不得触碰 CLI 配置文件');
-  const setModel = appSrc.slice(appSrc.indexOf('function setModel('), appSrc.indexOf('function openEffortPicker('));
+  const setModel = srcOf('function setModel(', 'function openEffortPicker(');
   assert.ok(setModel.includes('api.setConfig({ model: state.config.model })'), 'setModel 未写桌面端 config.json');
   assert.ok(mainSrc.includes("handle('cfg:set'") && preloadSrc.includes('setConfig:'), 'cfg:set 三层接线断开');
 });
@@ -986,7 +1005,7 @@ const kbSrc = read('main/services/hermes-kanban.js');
 // app.js 里 app.js 自身的看板段 + 全部 kanban 模块，顺序不影响 includes/slice 断言的有效性。
 const KB_ANCHOR = 'Kanban 看板（CLI 原生任务队列）';
 const kbAppSrc = [
-  appSrc.slice(appSrc.indexOf(KB_ANCHOR), appSrc.indexOf('setupSettings();')),
+  srcOf(KB_ANCHOR, 'setupSettings();'),
   ...rendererModuleFiles.filter((f) => /kanban/.test(f)).map(read),
 ].join('\n');
 const kbCss = cssSrc.slice(cssSrc.indexOf('Kanban 看板（CLI 原生任务队列）'));
@@ -1173,7 +1192,7 @@ t('辅助模型三条路径：补规格改数据、估算只读，都要 confirm
     '估算必须显式 confirm:true');
   assert.ok(appSrc.includes('KB.specifyBusy') && appSrc.includes('KB.estimateBusy'), '缺少在途锁');
   // 补规格会把卡推出收集箱（triage→todo）：成功后必须回读看板并重开抽屉
-  const sf = appSrc.slice(appSrc.indexOf('function kbSpecifyTask('), appSrc.indexOf('function kbEstimateTask('));
+  const sf = srcOf('function kbSpecifyTask(', 'function kbEstimateTask(');
   assert.ok(sf.includes('await kanbanLoad(true)') && sf.includes('await openKanbanTask(id, true)'),
     '补规格成功后没回读看板 / 刷新抽屉');
   // 估算结果按 taskId 缓存：重开抽屉不再花第二次钱
@@ -1213,7 +1232,7 @@ t('评论：追加文本、不计费、不改状态，空 body 本地就拒', ()
   assert.ok(appSrc.includes("e.target.closest('[data-kb-comment]')"), '抽屉事件委托缺评论分支');
   assert.ok(appSrc.includes("a.kanbanAddComment(id, { board: KB.filters.board || '', body: text })"),
     '调用未传清洗后的 body');
-  const af = appSrc.slice(appSrc.indexOf('function kbAddComment('), appSrc.indexOf('/** 抽屉里的「保存改派」'));
+  const af = srcOf('function kbAddComment(', '/** 抽屉里的「保存改派」');
   assert.ok(af.includes("await openKanbanTask(id, true)"), '发布成功后没重读详情刷新评论列表');
   // 接线三段
   assert.ok(mainSrc.includes("handle('kanban:add-comment'"), '主进程缺少 kanban:add-comment');
@@ -1231,8 +1250,7 @@ t('抽屉「移到」行：拖列之外的第二条改状态路径（复用 kbDr
     '当前列必须按 KB_GROUPS.statuses 归属判定（archived 不在任何组 → 不出按钮）');
   // 委托：点按钮走 kbDropToStatus（同态短路 / running 确认卡 / 写后回读都由它兜底）
   assert.ok(appSrc.includes("e.target.closest('[data-kb-move]')"), '抽屉事件委托缺「移到」分支');
-  const mv = appSrc.slice(appSrc.indexOf("e.target.closest('[data-kb-move]')"),
-    appSrc.indexOf("e.target.closest('[data-kb-move]')") + 160);
+  const mv = srcOf("e.target.closest('[data-kb-move]')", "e.target.closest('[data-kb-move]')").slice(0, 160);
   assert.ok(mv.includes('kbDropToStatus(KB.detailId'), '「移到」必须复用 kbDropToStatus，不得直连 kanbanSetStatus');
   assert.ok(!mv.includes('kanbanSetStatus'), '「移到」分支不得绕过 kbDropToStatus 直接写');
 });
@@ -1550,7 +1568,7 @@ t('会话显示名：标题 → 预览 → 未命名会话，id 式标题不算�
   // 官方 lib/chat-runtime sessionTitle 同序；服务层 title 会退化成 session id，不能再原样显示
   assert.ok(appSrc.includes('function sessionLabel(s)'), '缺少会话显示名兜底');
   const anchor = 'function sessionLabel(s)';
-  const body = appSrc.slice(appSrc.indexOf(anchor), appSrc.indexOf('function sessionItemEl('));
+  const body = srcOf(anchor, 'function sessionItemEl(');
   assert.ok(body.includes("const title = raw && raw !== id ? raw : ''"), '未过滤 id 式标题');
   assert.ok(/return title \|\| preview \|\| '未命名会话'/.test(body), '标题回退顺序不符官方');
   // 三处显示口都要走同一个兜底：侧栏行、搜索过滤、打开会话后的页签标题
@@ -1738,7 +1756,7 @@ t('上游思考开关：只读状态 + 写 CLI 配置必须由二次确认卡触
     'preload 必须把参数收敛成布尔');
   assert.ok(/function enableUpstreamReasoning[\s\S]{0,2200}opConfirm\(/.test(appSrc),
     '写 CLI 配置必须先出二次确认卡');
-  const fn = appSrc.slice(appSrc.indexOf('async function enableUpstreamReasoning'));
+  const fn = srcOf('async function enableUpstreamReasoning');
   const go = fn.indexOf('onGo:');
   assert.ok(go > 0 && fn.indexOf('api.setReasoningDisplay(') > go,
     'api.setReasoningDisplay 只能在 onGo 里调用，不得自动写');
@@ -2879,7 +2897,7 @@ t('消息底部：图标 + 用量 + 时间整行常显（不依赖悬停）', ()
   assert.ok(/est: true/.test(est) && /cjk \/ 1\.3/.test(est), '缺少按字符估算的兜底（中英分开算）');
   assert.ok(!bar.includes('≈'), '估算标记 ≈ 已按用户要求去掉（2026-11-11），不得加回');
   // 用户消息也必须显示用量（用户 2026-11-11 反馈「自己的消息不显示 token」）
-  const userLine = appSrc.slice(appSrc.indexOf("el.className = 'msg msg-user'"), appSrc.indexOf("} else if (item.kind === 'assistant')"));
+  const userLine = srcOf("el.className = 'msg msg-user'", "} else if (item.kind === 'assistant')");
   assert.ok(/msgActionBar\(item, true\)/.test(userLine), '用户消息没有挂底部信息行 → 不显示 token');
 });
 
@@ -3107,9 +3125,8 @@ t('页头仍是「看板名 + 一行概览」：模式标记同属这一行，�
 
 t('页头模式标记只读：点击只跳设置，绝不直接改模式', () => {
   assert.ok(htmlSrc.includes('id="kb-head-mode"'), '页头缺少模式标记节点');
-  const i = appSrc.indexOf("const modeChip = $('#kb-head-mode')");
-  assert.ok(i > 0, '页头标记未绑定点击');
-  const bind = appSrc.slice(i, i + 260);
+  const bind = srcOf("const modeChip = $('#kb-head-mode')").slice(0, 260);
+  assert.ok(bind.length > 0, '页头标记未绑定点击');
   assert.ok(!bind.includes('kanbanSetMode'), '页头标记不得直接改模式（写入必须走设置页的二次确认）');
   assert.ok(bind.includes('toggleSettings(true)'), '页头标记应跳到设置');
   assert.ok(appSrc.includes('function kbLoadMode('), '缺少模式读取');
@@ -3130,8 +3147,7 @@ t('看板编排设置：模式是派生值、写入走二次确认、结果如�
   assert.ok(modeSrc.includes('needsRestart = true'), '改派发器必须标记需要重启');
 
   assert.ok(appSrc.includes("custom: 'kanban'"), '设置页缺少看板编排分类');
-  const panel = appSrc.slice(appSrc.indexOf('function renderKanbanModePanel('),
-    appSrc.indexOf('async function renderCronPanel('));
+  const panel = srcOf('function renderKanbanModePanel(', 'async function renderCronPanel(');
   assert.ok(panel.length > 2000, '看板编排面板不见了');
   assert.ok(panel.includes('opConfirm(stage, {'), '切换档位未走二次确认卡');
   assert.ok(panel.includes('kanbanSetMode'), '面板未接写入通道');
@@ -3290,9 +3306,9 @@ t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、
   assert.ok(appSrc.includes('if (path) tab.cwd = path; else delete tab.cwd;'), '未把项目根写进 / 清出 tab.cwd');
   assert.ok(appSrc.includes('if (!tab.sessionId)') && appSrc.includes('newTabInProject(path)'),
     '已开始的会话未在该项目另开页签（CLI 无改归属的写接口）');
-  const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
+  const setTab = srcOf('function setActiveTab(', 'function closeTab(');
   assert.ok(setTab.includes('syncComposerProject()'), '切换页签未回填下拉显示');
-  const refresh = appSrc.slice(appSrc.indexOf('async function refreshSessions('), appSrc.indexOf('/** 后端冷启'));
+  const refresh = srcOf('async function refreshSessions(', '/** 后端冷启');
   assert.ok(refresh.includes('syncComposerProject()'), '项目树刷新后未同步候选');
 });
 
@@ -3323,12 +3339,12 @@ t('创建项目不再跳看板页：弹窗是全局浮层且任意页面可 Esc 
   assert.ok(/\.kb-modal-mask\s*\{[^}]*position:\s*fixed/.test(cssSrc) &&
     /\.kb-modal\s*\{[^}]*position:\s*fixed/.test(cssSrc), '弹窗 / 遮罩未改为全窗口 fixed');
   assert.ok(/\.kb-modal\[hidden\]/.test(cssSrc), '移出看板页后 hidden 兜底缺失');
-  const dialog = appSrc.slice(appSrc.indexOf('function kbProjectDialog('), appSrc.indexOf('function kbModalOpen('));
+  const dialog = srcOf('function kbProjectDialog(', 'function kbModalOpen(');
   assert.ok(!dialog.includes('showKanban('), '项目弹窗入口仍会切到看板页');
   assert.ok(dialog.includes('kbModalOpen('), '项目弹窗入口未打开弹窗');
   assert.ok(appSrc.includes("document.querySelectorAll('.subpage, #settings-page, #palette, #help-modal, #kb-modal')"),
     '弹窗 hidden 变化未被观察，frame.inert 不会重算');
-  const esc = appSrc.slice(appSrc.indexOf("if (e.key === 'Escape')"), appSrc.indexOf('/* ---------- 插件/技能页'));
+  const esc = srcOf("if (e.key === 'Escape')", '/* ---------- 插件/技能页');
   assert.ok(/if \(kbModalEl && !kbModalEl\.hidden\) \{ kbModalClose\(\); return; \}/.test(esc),
     '非看板页下 Esc 收不掉全局弹窗');
 });
@@ -3525,7 +3541,7 @@ t('首屏骨架：后端冷启期间不把侧栏留白，也不谎称「暂无�
   assert.ok(appSrc.includes('function bootCopy()'), '骨架文案未按慢 / 断开 / 超时分开');
   assert.ok(appSrc.includes('Math.min(1200 + n * 500, 3000)'), '首屏重试缺少退避');
   // 首屏要在 await 之前就把骨架铺上，否则 await 期间仍是空白
-  const initFn = appSrc.slice(appSrc.indexOf('async function init('), appSrc.indexOf('await api.env()'));
+  const initFn = srcOf('async function init(', 'await api.env()');
   assert.ok(initFn.includes("try { renderSessions(''); } catch {}"), 'init 未在 await 之前铺骨架');
   // 样式：占位块 + 扫光 + 减少动效 / 只用既有 token
   for (const rule of ['.s-boot', '.s-boot-title', '.s-boot-sub', '.s-skel', '.s-skel-dot',
@@ -3556,7 +3572,7 @@ t('窗口聚焦刷新：防抖 + 并发保护 + 保滚动位置', () => {
 section('3ah. 工具调用步骤区：逐行对齐、三态、双主题与键盘可达');
 // 切片锚点用注释标题，后续样式重排不会把断言扫到无关的规则上
 const toolCss = cssSrc.slice(cssSrc.indexOf('工具调用步骤区'), cssSrc.indexOf('/* 错误卡 */'));
-const toolRender = appSrc.slice(appSrc.indexOf("} else if (item.kind === 'tool')"), appSrc.indexOf("} else if (item.kind === 'error')"));
+const toolRender = srcOf("} else if (item.kind === 'tool')", "} else if (item.kind === 'error')");
 
 t('五列固定、可空列常驻占位，长路径省略而不撑破', () => {
   assert.ok(/grid-template-columns:\s*18px 44px minmax\(0, 1fr\) 52px 14px/.test(toolCss),
@@ -3617,8 +3633,7 @@ t('展开走局部切换，键盘可达且不整页重绘', () => {
 section('3ai. 项目会话隐藏项目选择器：归属权威、显隐同步、弹层收起');
 t('归属只认显式项目，树 sessionIds 优先、cwd 最长前缀兜底', () => {
   assert.ok(appSrc.includes('function activeTabProject('), '缺少归属判定函数');
-  const fn = appSrc.slice(appSrc.indexOf('function activeTabProject('),
-    appSrc.indexOf('/** 下拉显示跟随当前页签'));
+  const fn = srcOf('function activeTabProject(', '/** 下拉显示跟随当前页签');
   assert.ok(fn.includes('sessionProjectId(tab.sessionId)'), '未以项目树 sessionIds 为权威来源');
   assert.ok(fn.includes('tab.cwd'), '新会话（CLI 尚未认领）未用 cwd 兜底');
   assert.ok(fn.includes("startsWith(root + '/')"), '子目录未做最长前缀命中');
@@ -3626,8 +3641,7 @@ t('归属只认显式项目，树 sessionIds 优先、cwd 最长前缀兜底', (
   assert.ok(fn.includes("if (!cwd.startsWith('/')) return null;"), '默认会话必须仍显示选择器');
 });
 t('归属已定收起选择器，隐藏前先关掉挂在 body 上的面板', () => {
-  const fn = appSrc.slice(appSrc.indexOf('function syncComposerProject('),
-    appSrc.indexOf('function onComposerNewProject('));
+  const fn = srcOf('function syncComposerProject(', 'function onComposerNewProject(');
   assert.ok(fn.includes('const fixed = !!activeTabProject()'), '显隐没有走统一判定');
   assert.ok(fn.includes('el.hidden = fixed'), '没有按归属写 hidden');
   assert.ok(fn.includes("if (fixed && typeof el.close === 'function') el.close();"),
@@ -3640,22 +3654,19 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
   assert.ok(/id="chip-project"[^>]*aria-label=/.test(htmlSrc)
     && /id="chip-project"[^>]*placeholder="选择项目"/.test(htmlSrc), '无障碍名与空值占位不能丢');
   assert.ok(!/\$\('#chip-project'\)\.remove\(/.test(appSrc), '不得从 DOM 移除项目选择器');
-  const openSess = appSrc.slice(appSrc.indexOf('async function openSession('),
-    appSrc.indexOf('/* ---------- 渲染：聊天流'));
+  const openSess = srcOf('async function openSession(', '/* ---------- 渲染：聊天流');
   assert.ok(openSess.includes('syncComposerProject()'),
     '从项目分组点开已有会话会复用空 tab，不走 setActiveTab，显隐不会更新');
-  const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
+  const setTab = srcOf('function setActiveTab(', 'function closeTab(');
   assert.ok(setTab.includes('syncComposerProject()'), '切换页签未重新校准显隐');
-  const refresh = appSrc.slice(appSrc.indexOf('async function refreshSessions('),
-    appSrc.indexOf('/** 后端冷启'));
+  const refresh = srcOf('async function refreshSessions(', '/** 后端冷启');
   assert.ok(refresh.includes('syncComposerProject()'), '项目树冷启落地后未重新校准');
 });
 
 section('3aj. 右侧预览按类型分流：五视图、三层对齐、双主题与边界');
 const previewSvc = read('main/services/hermes-preview.js');
 const mockBridgeSrc = read('renderer/mock-bridge.js');
-const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
-  appSrc.indexOf('/* ---------- 全局快捷键'));
+const pvApp = srcOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */', '/* ---------- 全局快捷键');
 const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'));
 const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),
   htmlSrc.indexOf('<div class="rail-pane" id="kanban-pane"'));
@@ -3737,12 +3748,10 @@ const railHtml = htmlSrc.slice(htmlSrc.indexOf('<!-- ═════════
   htmlSrc.indexOf('<!-- ══════════ 新建弹窗'));
 const railCss = cssSrc.slice(cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'),
   cssSrc.indexOf('/* ══════════ 命令面板'));
-const railApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
-  appSrc.indexOf('/* ---------- 全局快捷键'));
+const railApp = srcOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */', '/* ---------- 全局快捷键');
 // rail 页签的可见性判定在 modules/rail.js（预览与看板共同 import，避免互相依赖）
 const railModulesSrc = read('renderer/modules/rail.js');
-const rkbApp = appSrc.slice(appSrc.indexOf('/* ---- 右侧 rail 紧凑看板'),
-  appSrc.indexOf('/* ---- 任务详情抽屉 ---- */'));
+const rkbApp = srcOf('/* ---- 右侧 rail 紧凑看板', '/* ---- 任务详情抽屉 ---- */');
 
 t('页签只剩预览 / 看板，终端 DOM 与脚本全部移除', () => {
   assert.ok(railHtml.includes('data-rail="preview"') && railHtml.includes('data-rail="kanban"'),
@@ -3907,9 +3916,9 @@ t('外层定版几何不动，命令 / 快捷键文案去终端化', () => {
 });
 
 section('3al. 运行中卡片：profile 工作进度、本地秒表、预算预警与零额外请求');
-const runApp = appSrc.slice(appSrc.indexOf('/* ---- 运行进度：running 卡片'), appSrc.indexOf('function kbSetLive('));
-const runPanel = appSrc.slice(appSrc.indexOf('function kbRunPanel('), appSrc.indexOf('const kbDrafts = {};'));
-const runCard = appSrc.slice(appSrc.indexOf('function kbCardHtml('), appSrc.indexOf('/** 按归组摊平当前看板'));
+const runApp = srcOf('/* ---- 运行进度：running 卡片', 'function kbSetLive(');
+const runPanel = srcOf('function kbRunPanel(', 'const kbDrafts = {};');
+const runCard = srcOf('function kbCardHtml(', '/** 按归组摊平当前看板');
 const runCss = cssSrc.slice(cssSrc.indexOf('/* 运行中卡片的秒表'), cssSrc.indexOf('.kbd-danger {'));
 const progCss = runCss;
 const rkbRunCss = cssSrc.slice(cssSrc.indexOf('.rkb-run {'), cssSrc.indexOf('.rkb-more {'));
