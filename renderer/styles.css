@@ -584,25 +584,34 @@ body.resizing #sidebar { transition: none; }
 
 /* ══════════ 工具调用 ══════════
    照抄 WorkBuddy 的 single-line-tool-header（解包看过 renderer/assets/src-*.css）：
-   一行五段 · 图标 14px · 行内 gap 8px · min-height 25px · 14px/1.75。
+   一行五段 · gap 8px · min-height 1.75em · 字号 = 正文 · 行距 1.75 · 行间 12px。
+   WB 自己的取值是 icon 14 / 字号 14 / 箭头 16 / min-height 25 —— 全部相对字号，
+   所以这里用 em 派生（icon 1em、箭头 1.14em），换字号不跑比例。
    状态词、对象、次要信息三段各自一档颜色：状态词最弱、对象可读、增删行数上绿下红。
    运行中的状态词走渐变扫光（background-clip:text + 2.2s 往复），这是 WB 的做法，
    不是转圈图标 —— 扫光在原地闪，行高不会跳。
    折叠只切 .card-content.hidden；箭头默认朝右（rotate(-90deg)），展开转正。 */
-.tool-stream { display: flex; flex-direction: column; margin: 2px 0 10px; min-width: 0; }
-.tool-item { min-width: 0; }
+.tool-stream { display: flex; flex-direction: column; margin: 2px 0 0; min-width: 0; }
+/* 行间距 12px：WB 的 .cb-task-tool-item{margin-bottom:12px}。实测也是这个数 ——
+   顶层行 14×1.75=24.5 → min-height 25 + 容器 padding-bottom 2 + 12 = 39（截图量到 38.5），
+   子行 13×1.5=19.5 + 12 = 31.5（量到 32）。两条独立路径都对上，不是估的。 */
+.tool-item { min-width: 0; margin-bottom: 12px; }
+/* 字号跟正文同一档（WB 的工具行和正文都是 14px，比例 1:1）。
+   本项目正文是 --msg-font-size（默认 16），所以这里不能再写死 14 —— 写死就变成
+   0.875 倍，工具行比正文小一号，长会话里像脚注。几何按 em 派生，icon/箭头/行高
+   与 WB 的比例完全一致（WB：icon 14/字号 14 = 1em，箭头 16/14 = 1.14em）。 */
 .tool-row {
-  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 25px;
-  font: 400 14px/1.75 var(--sans); color: var(--text-2);
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 1.75em;
+  font: 400 var(--msg-font-size)/1.75 var(--sans); color: var(--text-2);
   cursor: pointer; user-select: none;
 }
 .tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-xs); }
 .tool-row .ticon {
-  flex: 0 0 auto; width: 14px; height: 14px;
+  flex: 0 0 auto; width: 1em; height: 1em;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--caption);
 }
-.tool-row .ticon svg { display: block; width: 14px; height: 14px; }
+.tool-row .ticon svg { display: block; width: 1em; height: 1em; }
 /* 三段文字：状态词（最弱）→ 对象（可读）→ 附加量（弱）。
    三段都跟 WB 一样是 14px 行内字号，附加量不换等宽字体（WB 的 .secondary-info 也是 14px）。 */
 .tool-row .tstate { flex: 0 0 auto; color: var(--caption); white-space: nowrap; }
@@ -618,12 +627,12 @@ body.resizing #sidebar { transition: none; }
 .tool-row .tmeta .td { color: var(--red); font-style: normal; }
 /* 箭头常显（WB 原版是 hover 才显），默认朝右，展开转朝下 */
 .tool-row .tchev {
-  flex: 0 0 auto; width: 16px; height: 16px; margin-left: 4px;
+  flex: 0 0 auto; width: 1.14em; height: 1.14em; margin-left: 4px;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--text-3); opacity: .55;
   transition: color .16s, transform .16s, opacity .16s;
 }
-.tool-row .tchev svg { width: 16px; height: 16px; transform: rotate(-90deg); transition: transform .16s; }
+.tool-row .tchev svg { width: 1.14em; height: 1.14em; transform: rotate(-90deg); transition: transform .16s; }
 .tool-item.open .tchev svg { transform: rotate(0deg); }
 .tool-row:hover { color: var(--text); }
 .tool-row:hover .tstate, .tool-row:hover .tobj, .tool-row:hover .tchev { color: var(--text); }
@@ -646,38 +655,47 @@ body.resizing #sidebar { transition: none; }
 .tool-row.running .ticon { color: var(--yellow); }
 @keyframes tool-sweep { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 展开的详情：WB 的 card-content —— margin 4px 0、padding 8px 12px、圆角 4px、不加左缩进 */
+/* 展开的详情：WB 的 .card-content —— margin 4px 0、padding 8px 12px、圆角 4px、不加左缩进。
+   字体族是 sans（WB 的 card-content 不换字体，等宽只给里面的 .detail-content）；
+   字号 = 正文 × 0.86，对齐 WB 的 12/14。 */
 .tool-detail {
   display: block; box-sizing: border-box; min-width: 0; max-height: 420px;
   margin: 4px 0; padding: 8px 12px;
   border-radius: 4px;
   background: var(--fill-2); color: var(--text-2);
-  font: 400 12px/1.5 var(--mono);
+  font: 400 calc(var(--msg-font-size) * 0.86)/1.5 var(--sans);
   word-break: break-word; overflow: auto;
 }
 .tool-detail.hidden { display: none; }
-/* 标题行：名字 500 字重 + 右侧状态胶囊（WB 的 default-tool-title / .tool-status 2px 8px） */
+/* 标题行：WB 的 .default-tool-title —— gap 8、无描边无下距，靠段间距 12 分隔。
+   名字按 .tool-name：500 字重、继承正文字号与字体（不是等宽）。 */
 .tool-detail-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin: 0 0 8px; padding: 0 0 8px; border-bottom: 1px solid var(--line);
-  font: 400 12px/1.4 var(--sans); color: var(--caption);
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 12px;
+  color: var(--caption);
 }
 .tool-detail-head .tdh-name {
-  color: var(--text); font-weight: 500; font-family: var(--mono); font-size: 14px;
+  color: var(--text); font-weight: 500;
   overflow-wrap: anywhere;
 }
+/* 状态胶囊：WB 的 .tool-status —— 2px 8px、圆角 3、12px；成功是绿底绿字
+   （不是中性灰），失败红，进行中赭黄。
+   类名跟渲染层对齐：tool-item 的三态是 running / error / done（不是 ok）。 */
 .tool-detail-head .tdh-state {
   margin-left: auto; white-space: nowrap;
-  border-radius: 3px; padding: 2px 8px; font-size: 12px;
+  border-radius: 3px; padding: 2px 8px; font-size: 1em;
   background: color-mix(in srgb, var(--text-2) 10%, transparent);
 }
-.tool-detail-head .tdh-state.ok { color: var(--text-2); }
+.tool-detail-head .tdh-state.done { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .tool-detail-head .tdh-state.error { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .tool-detail-head .tdh-state.running { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
-/* 分段标签：WB 的 .detail-label —— 12px / 600 / 字距 .5px / 下距 6px */
+/* 分段标签：WB 的 .detail-label —— 12px / 600 / 大写 / 字距 .5px / 下距 6px
+   （WB 里标签字号与详情正文同为 12px，所以这里是 1em 而不是再小一档）。
+   颜色取 WB 的 text-secondary，在暖色板里对应 --text-3：比正文暗一档，不抢内容。 */
 .tool-detail .sec-label {
-  font: 600 12px/1 var(--sans); letter-spacing: .5px;
-  color: var(--text-2); opacity: .72; margin: 0 0 6px;
+  font: 600 1em/1 var(--sans); letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--text-3); margin: 0 0 6px;
 }
 /* 代码块：WB 的 .detail-content —— 描边 + 圆角 4 + 8/12 内边距 + 最高 300px */
 .tool-detail pre {
@@ -691,6 +709,7 @@ body.resizing #sidebar { transition: none; }
 .tool-detail .tp-list {
   display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr);
   column-gap: 12px; row-gap: 4px; align-items: baseline;
+  font-family: var(--mono);
   padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
   background: var(--canvas); max-height: 300px; overflow: auto;
 }

@@ -3548,8 +3548,12 @@ const toolRender = appSrc.slice(appSrc.indexOf("} else if (item.kind === 'tool')
 t('五段单行：图标 / 状态词 / 对象 / 次要信息 / 箭头，几何照 WB', () => {
   const rowRule = (toolCss.match(/\.tool-row \{[^}]*\}/) || [''])[0];
   assert.ok(/display: flex/.test(rowRule) && /gap: 8px/.test(rowRule), '工具行不是 WB 的 gap 8px 单行 flex');
-  assert.ok(/min-height: 25px/.test(rowRule) && /font: 400 14px\/1\.75/.test(rowRule),
-    '行高字号与 WB 的 min-height 25px / 14px 1.75 不一致');
+  // 字号必须跟正文同一档：WB 的工具行与正文都是 14px（比例 1:1）。写死 14px 会让它
+  // 相对 16px 的正文缩成 0.875 倍，正是「工具行比正文小一号」的根源。
+  assert.ok(/font: 400 var\(--msg-font-size\)\/1\.75/.test(rowRule),
+    '工具行字号没跟正文同档（--msg-font-size），会比正文小一号');
+  assert.ok(/min-height: 1\.75em/.test(rowRule), 'min-height 没按 em 派生，换字号后行高会跑');
+  assert.ok(!/font: 400 14px/.test(rowRule), '字号又写死成 14px 了');
   assert.ok(!/grid-template-columns/.test(rowRule), '又回到多列网格：固定动作列会把中文动作截成省略号');
   for (const c of ['ticon', 'tstate', 'tobj', 'tmeta', 'tchev']) {
     assert.ok(toolRender.includes(`class="${c}"`) || toolRender.includes(`class="${c} `)
@@ -3560,6 +3564,18 @@ t('五段单行：图标 / 状态词 / 对象 / 次要信息 / 箭头，几何�
   const iconBlock = appSrc.slice(appSrc.indexOf('const TOOL_ICONS'), appSrc.indexOf('const TOOL_SPECS'));
   const kinds = (iconBlock.match(/^\s{2}(\w+):/gm) || []).length;
   assert.ok(kinds >= 8, '图标类型不足（读/写/命令/搜索/列表/网页/生成/派发…），又退回一个通用字形');
+});
+
+t('行间距 12px 与 em 派生几何：与 WB 的实测节奏一致', () => {
+  // WB：顶层行 min-height 25 + 容器 padding-bottom 2 + 行间 12 = 39（截图量到 38.5）；
+  // 子行 13×1.5=19.5 + 12 = 31.5（量到 32）。行间没有 12px 就会挤成一坨。
+  const itemRule = (toolCss.match(/\.tool-item \{[^}]*\}/) || [''])[0];
+  assert.ok(/margin-bottom: 12px/.test(itemRule), '工具行之间没有 12px 间距，连续调用会挤成一段');
+  const iconRule = (toolCss.match(/\.tool-row \.ticon \{[^}]*\}/) || [''])[0];
+  assert.ok(/width: 1em/.test(iconRule) && !/width: 14px/.test(iconRule),
+    '图标没按字号派生（WB 是 icon 14 / 字号 14 = 1em）；写死 14px 换字号后比例会跑');
+  const chevSvg = (toolCss.match(/\.tool-row \.tchev svg \{[^}]*\}/) || [''])[0];
+  assert.ok(/width: 1\.14em/.test(chevSvg), '箭头没按 16/14 的比例派生');
 });
 
 t('状态词三态：每类工具各有 running/done/error 三种说法', () => {
@@ -3597,8 +3613,8 @@ t('运行中走渐变扫光，不是转圈；失败整段染红', () => {
 t('箭头常显、默认朝右、展开转正；折叠只切 hidden', () => {
   const chevRule = (toolCss.match(/\.tool-row \.tchev \{[^}]*\}/) || [''])[0];
   assert.ok(/opacity: \.55/.test(chevRule), '箭头要常显（低透明度），hover 才出现的箭头等于没有');
-  assert.ok(toolCss.includes('.tool-row .tchev svg { width: 16px; height: 16px; transform: rotate(-90deg);'),
-    '箭头默认应朝右（WB 是 rotate(-90deg)）');
+  assert.ok(toolCss.includes('.tool-row .tchev svg { width: 1.14em; height: 1.14em; transform: rotate(-90deg);'),
+    '箭头默认应朝右（WB 是 rotate(-90deg)）且按 16/14 派生');
   assert.ok(toolCss.includes('.tool-item.open .tchev svg { transform: rotate(0deg); }'), '展开时箭头没有转正');
   assert.ok(toolCss.includes('.tool-detail.hidden { display: none; }') && toolRender.includes("' hidden'"),
     '折叠没走 card-content 的 hidden 类');
@@ -3616,8 +3632,21 @@ t('详情：WB 的分段结构 —— 名称 + 状态胶囊、参数两列、结
   assert.ok(/\.tool-detail \{[^}]*margin: 4px 0; padding: 8px 12px/.test(toolCss),
     '详情外距/内边距不是 WB 的 4px 0 + 8px 12px');
   assert.ok(/\.tool-detail \{[^}]*border-radius: 4px/.test(toolCss), '详情圆角不是 WB 的 4px');
-  assert.ok(/\.tool-detail \.sec-label \{[^}]*font: 600 12px\/1[^}]*letter-spacing: \.5px/.test(toolCss),
-    '分段标签字号/字重/字距没照 WB 的 12px 600 .5px');
+  assert.ok(/\.tool-detail \.sec-label \{[^}]*font: 600 1em\/1[^}]*letter-spacing: \.5px/.test(toolCss),
+    '分段标签字号/字重/字距没照 WB（与详情正文同字号、600、字距 .5px）');
+  // 字体族：WB 的 .card-content 不换字体（sans），等宽只给里面的 .detail-content。
+  // 整块套等宽会把工具名和「参数/输出」标签也变成代码，读起来像终端 dump。
+  const detailRule = (toolCss.match(/\.tool-detail \{[^}]*\}/) || [''])[0];
+  assert.ok(/var\(--sans\)/.test(detailRule) && !/var\(--mono\)/.test(detailRule),
+    '详情块整体换成了等宽字体，WB 只有代码块是等宽');
+  const nameRule = (toolCss.match(/\.tool-detail-head \.tdh-name \{[^}]*\}/) || [''])[0];
+  assert.ok(!/--mono/.test(nameRule), '详情头的工具名又用上等宽了（WB 的 .tool-name 只设字重）');
+  assert.ok(/\.tool-detail-head \.tdh-state\.done \{[^}]*var\(--green\)/.test(toolCss),
+    '成功胶囊不是 WB 的绿底绿字');
+  // 类名必须跟渲染层一致：tool-item 三态是 running / error / done，写 .ok 会永远匹配不上
+  assert.ok(!/\.tdh-state\.ok\b/.test(toolCss), 'CSS 用了 .ok，但渲染层产出的是 .done，胶囊样式不会生效');
+  assert.ok(toolRender.includes("const state = running ? 'running' : item.isError ? 'error' : 'done'"),
+    '三态类名变了，胶囊与行状态色会全部失配');
   assert.ok(/\.tool-detail pre \{[^}]*max-height: 300px/.test(toolCss), '代码块没照 WB 的 300px 上限');
   assert.ok(toolCss.includes('margin-bottom: 12px'), '分段间距不是 WB 的 12px');
   assert.ok(appSrc.includes('function toolParamsHTML(') && toolRender.includes('toolParamsHTML(item.input)'),
