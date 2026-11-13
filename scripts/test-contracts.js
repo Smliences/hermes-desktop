@@ -2475,7 +2475,9 @@ t('下拉全部自绘：HTML 无原生 select / datalist，动态创建也走 hm
   assert.ok(!/<select\b/.test(htmlSrc), '还留着 macOS 原生 <select>');
   assert.ok(!/<datalist\b/.test(htmlSrc), '还留着原生 datalist 弹层');
   assert.ok(!/createElement\('select'\)/.test(appSrc), '设置页默认模型仍是原生下拉');
-  assert.ok(/<script src="ui-select\.js"><\/script>[\s\S]{0,200}<script src="app\.js">/.test(htmlSrc),
+  // app.js 是 ES module：script 标签带 type="module"，加载语义从「同步」变成「defer」，
+  // 但相对顺序不变 —— 组件脚本仍必须先于 app.js，否则 app.js 注册 <hm-select> 时拿不到定义。
+  assert.ok(/<script src="ui-select\.js"><\/script>[\s\S]{0,200}<script(?: type="module")? src="app\.js">/.test(htmlSrc),
     '组件脚本必须在 app.js 之前加载');
   assert.ok(/customElements\.define\('hm-select'/.test(uiSelectSrc));
   assert.ok(/txt\.textContent = it\.label/.test(uiSelectSrc), '候选文本必须走 textContent');

@@ -2996,6 +2996,7 @@ function kanbanAnyVisible() {
 }
 function setRailTab(tab) {
   railTab = tab === 'kanban' ? 'kanban' : 'preview';
+  RAIL_TAB_REF.set(railTab);   // 让 window.railTab 跟着走（冒烟脚本按全局名断言页签）
   document.querySelectorAll('#rail-tabs .rt').forEach((b) => b.classList.toggle('active', b.dataset.rail === railTab));
   $('#preview-pane').hidden = railTab !== 'preview';
   $('#kanban-pane').hidden = railTab !== 'kanban';
@@ -6372,6 +6373,10 @@ function kbFullTime(v) {
    另开接口：卡片和抽屉都只读这两个字段，本地每秒推一次秒表，事件驱动的轮询再补
    文字更新（最近活动 / 最新回报 / 子任务）。时间戳兼容秒与毫秒两种量级。 */
 let kbRunTimer = null;
+/** 秒表句柄要能被外部（冒烟脚本断言「有没有空转定时器」）读到最新值。
+ *  模块作用域不是全局，所以 window.kbRunTimer 的读取器直接转读这个活对象。 */
+const RUN_TIMER_REF = { peek: () => kbRunTimer };
+const RAIL_TAB_REF = { get: () => railTab, set: (v) => { railTab = v; } };
 function kbRunStart(t) {
   const n = Number(t && (t.current_run_started_at || t.started_at));
   if (!Number.isFinite(n) || n <= 0) return 0;
@@ -9176,6 +9181,32 @@ function setupKanban() {
 setupKanban();
 
 setupSettings();
+
+// app.js 是 ES module：模块作用域不再是全局。但两处外部消费者仍然按全局名访问渲染层：
+//   1. `scripts/test-ui.js` —— headless Chrome 的 Runtime.evaluate（冒烟断言直接调入口函数）
+//   2. 人工调试台（DevTools 里手敲 showKanban() / KB.xxx）
+// 这里显式登记，模块内部之间仍一律走 import，不靠全局传递。
+const expose = (name, get, set) => {
+  // 重载页面时同名属性可能已存在，忽略即可
+  try { Object.defineProperty(window, name, set ? { get, set, configurable: true } : { get, configurable: true }); }
+  catch { /* noop */ }
+};
+// 模块级可变绑定量：必须给 getter/setter，否则外部读到的是加载那一刻的快照
+const hot = { chipMenuCleanup, kbSelectSig, rkbBoardSig, pv };
+for (const k of Object.keys(hot)) expose(k, () => hot[k], (v) => { hot[k] = v; });
+// 单值绑定量：读取器直通模块里的活变量（每次取值都是最新状态，不是快照）
+expose('kbRunTimer', RUN_TIMER_REF.peek);
+expose('railTab', RAIL_TAB_REF.get, RAIL_TAB_REF.set);
+// 对象 / 函数引用：登记一次即可（对象自身是可变的，不需要 setter）
+for (const [name, v] of Object.entries({ KB, KbDrag, state, api })) expose(name, () => v);
+for (const fn of [
+  showKanban, closeKanbanPage, renderKanban, renderRailKanban, kanbanLoad, openKanbanTask,
+  closeKanbanDrawer, kbMoreToggle, kbModeChip, kbRunTick, railKanbanVisible,
+  setRailTab, toggleRail, loadPreviewInput,
+  activeTab, setActiveTab, activeTabProject, newTab, newTabInProject, setView, openSession,
+  closeSubpages, syncComposerProject, composerProjectOptions,
+  openChipMenu, slashClose,
+]) expose(fn.name, () => fn);
 
 /* ---------- 初始化 ---------- */
 async function init() {
