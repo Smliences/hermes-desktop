@@ -10,6 +10,7 @@ import { state, hasNative, api, activeTab } from './modules/state.js';
 import {
   toast, renderInline, mdCodeBlock, mdTable, renderMarkdown, toolBrief, toolMeta, errorCodeOf,
 } from './modules/dom.js';
+import { RAIL_TAB_REF, railKanbanVisible, kanbanAnyVisible } from './modules/rail.js';
 
 /* ---------- 失败轮次：把 CLI 的占位英文还原成可读的结构化错误 ----------
  * 后端在请求失败时会补写一条 display_kind='failed_turn' 的助手消息，正文恒为
@@ -2753,7 +2754,10 @@ $('#gateway-page').addEventListener('click', async (e) => {
 });
 
 /* ---------- 右侧 rail：预览 | 看板 ---------- */
-let railTab = 'preview';
+// 页签状态在 modules/rail.js（预览与看板两个域的共同地基，避免互相 import）。
+// 这里保留一个本域内的镜像变量：setRailTab 是「切页签时的渲染编排」，
+// 它读的必须是刚写进去的值，跨模块再取一次没必要，也容易和渲染顺序脱节。
+let railTab = RAIL_TAB_REF.get();
 const pv = {
   url: '', filePath: '', label: '', kind: '', type: '', view: '', ext: '',
   baseDir: '', text: '', textLoadedFor: '', srcdoc: '',
@@ -2773,18 +2777,11 @@ const PV_VIEWS = {
 const pvViews = (type) => PV_VIEWS[type] || [['render', '渲染']];
 
 /** 看板页签是否被看见。整页看板与 rail 看板共用一份 KB.board、一个轮询，
- *  谁可见谁就驱动刷新；两个都不可见时轮询彻底停掉，不空转打 REST。 */
-function railKanbanVisible() {
-  const rail = $('#rail');
-  return !!rail && !rail.hidden && railTab === 'kanban';
-}
-function kanbanAnyVisible() {
-  const page = $('#kanban-page');
-  return (!!page && !page.hidden) || railKanbanVisible();
-}
+ *  谁可见谁就驱动刷新；两个都不可见时轮询彻底停掉，不空转打 REST。
+ *  实现放在 modules/rail.js（两个域的共同地基），这里只做转发。 */
 function setRailTab(tab) {
   railTab = tab === 'kanban' ? 'kanban' : 'preview';
-  RAIL_TAB_REF.set(railTab);   // 让 window.railTab 跟着走（冒烟脚本按全局名断言页签）
+  RAIL_TAB_REF.set(railTab);   // window.railTab 的读取器直通这个活变量
   document.querySelectorAll('#rail-tabs .rt').forEach((b) => b.classList.toggle('active', b.dataset.rail === railTab));
   $('#preview-pane').hidden = railTab !== 'preview';
   $('#kanban-pane').hidden = railTab !== 'kanban';
@@ -2811,7 +2808,7 @@ function toggleRail(force) {
     return;
   }
   rail.hidden = false;
-  setRailTab(railTab);
+  setRailTab(RAIL_TAB_REF.get());
 }
 
 function pvState(msg, isErr) {
@@ -6063,7 +6060,6 @@ let kbRunTimer = null;
 /** 秒表句柄要能被外部（冒烟脚本断言「有没有空转定时器」）读到最新值。
  *  模块作用域不是全局，所以 window.kbRunTimer 的读取器直接转读这个活对象。 */
 const RUN_TIMER_REF = { peek: () => kbRunTimer };
-const RAIL_TAB_REF = { get: () => railTab, set: (v) => { railTab = v; } };
 function kbRunStart(t) {
   const n = Number(t && (t.current_run_started_at || t.started_at));
   if (!Number.isFinite(n) || n <= 0) return 0;

@@ -3739,6 +3739,8 @@ const railCss = cssSrc.slice(cssSrc.indexOf('/* ══════════ �
   cssSrc.indexOf('/* ══════════ 命令面板'));
 const railApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
   appSrc.indexOf('/* ---------- 全局快捷键'));
+// rail 页签的可见性判定在 modules/rail.js（预览与看板共同 import，避免互相依赖）
+const railModulesSrc = read('renderer/modules/rail.js');
 const rkbApp = appSrc.slice(appSrc.indexOf('/* ---- 右侧 rail 紧凑看板'),
   appSrc.indexOf('/* ---- 任务详情抽屉 ---- */'));
 
@@ -3754,7 +3756,8 @@ t('页签只剩预览 / 看板，终端 DOM 与脚本全部移除', () => {
   assert.ok(!htmlSrc.includes('term-screen.js'), '终端字符屏幕脚本仍在加载');
 });
 t('rail 与整页共用 KB.board，一个轮询，不另开 REST', () => {
-  assert.ok(railApp.includes('function railKanbanVisible(') && railApp.includes('function kanbanAnyVisible('),
+  // 可见性判定是预览与看板的共同地基，已拆到 modules/rail.js
+  assert.ok(railModulesSrc.includes('function railKanbanVisible(') && railModulesSrc.includes('function kanbanAnyVisible('),
     '缺少双视图可见性判定');
   assert.ok(railApp.includes("railTab = tab === 'kanban' ? 'kanban' : 'preview'"), '页签状态仍认 terminal');
   assert.ok(railApp.includes("if (railTab === 'kanban')") && railApp.includes('kanbanLoad(true)')
