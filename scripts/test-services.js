@@ -2157,6 +2157,19 @@ async function run() {
     assert.deepStrictEqual(commands.normalizeCatalog({}).commands, [], '空对象未降级');
   });
 
+  await t('目录归一化：TUI 专属命令（/density、/mouse）不得进桌面菜单', () => {
+    // 它们改的是终端显示形态，对桌面端毫无作用；出现在菜单里只会让人困惑
+    const out = commands.normalizeCatalog({
+      categories: [
+        { name: 'TUI', pairs: [['/density', 'Toggle compact display mode'], ['/mouse', 'Set mouse tracking preset'], ['/logs', 'Show recent gateway log lines']] },
+      ],
+    });
+    const names = out.commands.map((c) => c.cmd);
+    assert.ok(!names.includes('/density'), '/density 是终端显示开关，不该出现在桌面菜单');
+    assert.ok(!names.includes('/mouse'), '/mouse 是终端鼠标跟踪，不该出现在桌面菜单');
+    assert.deepStrictEqual(names, ['/logs'], '/logs 有真实输出，要保留：' + names.join(','));
+  });
+
   await t('目录缓存按 profile 隔离，切 profile 后必须重拉', async () => {
     const profileSvc = loaded['hermes-profile.js'];
     // 先绑定 userData：否则 setCurrent 写盘会落到仓库根（storePath 为空 → 生成 .tmp）

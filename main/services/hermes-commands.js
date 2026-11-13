@@ -37,6 +37,12 @@ const DESKTOP_OWN = new Set([
   '/export', '/copy', '/help', '/gateway', '/kanban', '/orb',
 ]);
 
+/** TUI 专属命令：它们改的是**终端**的显示形态（紧凑排版、鼠标跟踪），
+    对桌面客户端界面毫无作用，出现在菜单里只会让人困惑（/density 被当成
+    「压缩相关」的命令就是一个实例）。这里显式点名，而不是按 TUI 分类过滤，
+    免得 CLI 以后给别的分类挂上 TUI 命令时被误伤。 */
+const DESKTOP_HIDE = new Set(['/density', '/mouse']);
+
 let _cache = null; // { key, at, data }
 let _inflight = null;
 /** stored session id → live session id。slash.exec 要的是 live id，而渲染层只有 stored id
@@ -83,7 +89,7 @@ function normalizeCatalog(raw) {
       if (DESKTOP_OWN.has(key) || seen.has(key)) continue;
       const meta = metas[cmd] || metas[key] || {};
       // desktop:'hidden' 是 CLI 明确要求桌面端不展示的（内部命令）
-      if (meta.desktop === 'hidden') continue;
+      if (meta.desktop === 'hidden' || DESKTOP_HIDE.has(key)) continue;
       const bare = cmd.slice(1);
       const subList = Array.isArray(subs[bare]) ? subs[bare].map(cleanDesc).filter(Boolean).slice(0, 24) : [];
       const subListAlt = meta.desktop_subcommands && Array.isArray(meta.desktop_subcommands)

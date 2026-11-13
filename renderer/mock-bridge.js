@@ -76,8 +76,11 @@
         { cmd: '/insights', desc: '用量与工具调用洞察', category: 'Info', argMode: null, sub: [], scope: '' },
         { cmd: '/title', desc: '重命名当前会话', category: 'Session', argMode: 'text', sub: [], scope: '' },
         { cmd: '/plan', desc: '先出计划再执行', category: 'Context', argMode: 'text', sub: [], scope: '' },
-        // 压缩会话上下文：真 CLI 里 /compact 只是它的别名，目录（canon）只列规范名
-        { cmd: '/compress', desc: '压缩会话上下文（先发一条消息再用）', category: 'Session', argMode: 'text', sub: [], scope: '' },
+        // 压缩会话上下文：真 CLI 里 /compact 只是它的别名，目录（canon）只列规范名；
+        // desc 故意带上 usage 长尾巴，用来回归「超长说明不许撑爆菜单」
+        { cmd: '/compress', desc: "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen) (usage: /compress [here [N]] | for more options see /compress --help)", category: 'Session', argMode: 'text', sub: [], scope: '' },
+        // TUI 专属：desc 里有 "compact" 一词，专门回归「描述撞词不许混进候选」
+        { cmd: '/density', desc: 'Toggle compact display mode', category: 'TUI', argMode: null, sub: [], scope: '' },
       ];
       return {
         ok: true, at: Date.now(), commands,

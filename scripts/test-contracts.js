@@ -4210,6 +4210,39 @@ t('别名能用：/compact → /compress（目录只列规范名，别名只在 
   assert.ok(appSrc.includes('const shown = arg ?'), '命令卡没有区分「显示名」与「送进 CLI 的名字」');
 });
 
+t('菜单候选不许被「描述撞词」污染（/compac 不该带出 /density）', () => {
+  // 现场：敲 /compac，desc 是「Toggle compact display mode」的 /density 以 3 分混进候选，
+  // 用户看到一条毫不相干的命令，还以为匹配错了对象。
+  assert.ok(appSrc.includes('const best = scored.length ? Math.min(...scored.map((x) => x.sc)) : -1;'),
+    '没有计算最低分（判断是否存在名字层面的命中）');
+  assert.ok(appSrc.includes('.filter((x) => x.sc < 3 || best >= 3)'),
+    '描述匹配没有让位：只要有名字命中，desc 撞词的命令就必须出局');
+  // TUI 专属命令（终端显示开关/鼠标跟踪）对桌面端毫无作用，主进程要拦在目录外
+  assert.ok(cmdSrc.includes("const DESKTOP_HIDE = new Set(['/density', '/mouse'])"),
+    '主进程没有过滤 TUI 专属命令');
+  assert.ok(cmdSrc.includes("meta.desktop === 'hidden' || DESKTOP_HIDE.has(key)"),
+    'DESKTOP_HIDE 没有参与目录过滤');
+  // /compress 这类把整段 usage 塞进 desc 的命令，菜单里只留说明本身
+  assert.ok(appSrc.includes(".replace(/\\s*\\(usage:[\\s\\S]*$/, '')"),
+    'desc 里的 usage 尾巴没有截掉，菜单会被撑爆');
+});
+
+t('菜单行排版：名字不许被挤没，说明必须能缩，菜单不许横向滚动', () => {
+  // 现场：/compress 的超长 desc 把菜单撑到比屏幕宽，命令名被 flex:1(basis 0) 挤成 0 宽，
+  // 整行只剩一个徽标；横向滚动条来自 overflow-y:auto 把另一轴算成 auto。
+  const menuCss = cssSrc;
+  assert.ok(menuCss.includes('.wb-menu-name { flex: 1 0 auto;'),
+    '名字会收缩：超长说明会把命令名挤成 0 宽（整行只剩徽标）');
+  assert.ok(!/\.wb-menu-tag\s*\{[^}]*flex-shrink:\s*0/.test(menuCss),
+    '说明 flex-shrink:0：超长 desc 会把整行撑爆');
+  assert.ok(/\.wb-menu-tag\s*\{[^}]*text-overflow:\s*ellipsis/.test(menuCss),
+    '说明没有省略号兜底');
+  assert.ok(menuCss.includes('max-width: min(640px, calc(100vw - 16px))'),
+    '菜单没有宽度上限，长 desc 会撑到比屏幕还宽');
+  assert.ok(menuCss.includes('.wb-menu-list { display: flex; flex-direction: column; gap: 1px; padding: 0; overflow: hidden auto;'),
+    '列表横向滚动条没有被显式关掉');
+});
+
 t('Enter 不能把斜杠命令当正文发给模型（Esc 关掉菜单 / 未知命令）', () => {
   // 这是「/compact 不能用」的现场：菜单没匹配 → Enter 把 /compact 当聊天正文发出去
   assert.ok(appSrc.includes('const hit = resolveSlashCommand(text);'), 'send() 没有命令解析兜底');

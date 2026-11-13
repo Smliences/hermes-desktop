@@ -897,25 +897,34 @@ body.resizing #sidebar { transition: none; }
   background: var(--canvas); border: 1px solid var(--line-2);
   box-shadow: var(--elev);
   border-radius: var(--r-md); min-width: 240px; max-height: 392px;
+  /* CLI 的 desc 可以很长（/compress 带整段 usage）：没有上限时菜单会被撑到
+     比屏幕还宽，命令名反而被挤没。上限留出视口边距，超宽内容交给行内省略号。 */
+  max-width: min(640px, calc(100vw - 16px));
   padding: 5px; display: flex; flex-direction: column; overflow: hidden;
   animation: menu-in .1s ease-out;
 }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-.wb-menu-list { display: flex; flex-direction: column; gap: 1px; padding: 0; overflow-y: auto; min-height: 0; }
+/* overflow-y:auto 会把另一轴的 visible 计算成 auto → 长内容横向撑出滚动条，
+   必须显式 hidden 掉 */
+.wb-menu-list { display: flex; flex-direction: column; gap: 1px; padding: 0; overflow: hidden auto; min-height: 0; }
 .wb-menu-list::-webkit-scrollbar { width: 4px; }
 .wb-menu-list::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 2px; }
 .wb-menu-row {
   display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px;
-  border-radius: var(--r-sm); cursor: default; flex-shrink: 0;
+  border-radius: var(--r-sm); cursor: default; flex-shrink: 0; min-width: 0;
 }
 .wb-menu-row:hover { background: var(--hover); }
 /* 内联指令菜单的「无匹配」占位行：纯提示，不参与交互 */
 .wb-menu-row.wb-menu-empty { color: var(--text-3); cursor: default; font-size: 12.5px; height: 30px; }
 .wb-menu-row.wb-menu-empty:hover { background: none; }
-.wb-menu-name { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 名字：撑满剩余空间（短名时把徽标/说明推到右边），但**绝不收缩**——
+   之前 flex:1(basis 0) 遇上超长说明会把名字挤成 0 宽，整行只剩徽标 */
+.wb-menu-name { flex: 1 0 auto; min-width: 0; font-size: 13px; line-height: 20px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-menu-tag {
-  flex-shrink: 0; margin-left: 6px; padding: 2px 5px; border-radius: var(--r-xs);
+  flex: 0 1 auto; min-width: 0; margin-left: 6px; padding: 2px 5px; border-radius: var(--r-xs);
   font: 500 10px/1 var(--mono); color: var(--text-3); background: var(--fill-3); letter-spacing: .02em;
+  /* 说明必须能缩（不许写死成不可收缩）：超长 desc 会把整行撑爆（横向滚动条就是这么来的） */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .wb-menu-check { flex-shrink: 0; width: 16px; text-align: center; font-size: 13px; color: var(--blue); font-weight: 600; }
 /* 斜杠菜单里区分「桌面动作」与「CLI 命令」：只给 CLI 打标，本地动作不加噪 */

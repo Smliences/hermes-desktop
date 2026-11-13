@@ -2814,7 +2814,11 @@ function commandRows(q) {
   }
   // 同分时本地优先；同组内保持目录原有顺序（sort 稳定）
   scored.sort((a, b) => a.sc - b.sc || (a.local === b.local ? 0 : a.local ? -1 : 1));
-  const picked = scored.map((x) => x.row);
+  // 描述匹配（3 分）只是兜底：只要有任何名字层面的命中（精确/前缀/包含/别名），
+  // 描述里恰好撞词的命令就不该混进来 —— 否则敲 /compac 会把 desc 是
+  // 「Toggle compact display mode」的 /density 也带出来，看起来像匹配错了对象。
+  const best = scored.length ? Math.min(...scored.map((x) => x.sc)) : -1;
+  const picked = scored.filter((x) => x.sc < 3 || best >= 3).map((x) => x.row);
   if (picked.length <= CMD_MENU_MAX) return picked;
   // 太多时不要砍掉本地动作：本地全留，剩下的名额给 CLI
   const locals = picked.filter((r) => r.source === 'local');
@@ -3096,7 +3100,11 @@ function slashSync() {
   const menu = $('#chip-menu');
   openChipMenu($('#composer'), rows.map((c) => ({
     // 敲的是别名时把别名标出来（/compact），让人知道这一行就是它
-    key: c.cmd, name: c.cmd, tag: c.desc, badge: c.aliasHit ? c.aliasHit : (c.source === 'cli' ? 'CLI' : ''),
+    key: c.cmd, name: c.cmd,
+    // CLI 有些 desc 会把整段 usage 塞进括号（/compress 的有 100+ 字符），
+    // 菜单里只留说明本身，超宽交给 CSS 省略号兜底
+    tag: String(c.desc || '').replace(/\s*\(usage:[\s\S]*$/, ''),
+    badge: c.aliasHit ? c.aliasHit : (c.source === 'cli' ? 'CLI' : ''),
   })), null, (picked) => {
     const row = rows.find((c) => c.cmd === picked.key);
     if (!row) return;
