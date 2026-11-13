@@ -2,33 +2,13 @@
 /* ═══════════ Hermes Desktop Client — renderer 主逻辑（dsh web 风格） ═══════════ */
 /* global hermesAPI */
 
+/* ---------- 基础层：工具 / 共享状态 / IPC 桥 ----------
+   拆分后这些不再是全局变量：谁用谁 import（见 renderer/modules/*.js）。
+   app.js 只保留编排与尚未拆分的域，逐步搬空。 */
+import { $, esc, arr, clip, safeStringify, safeGet, safeSet, fmtTokens, uid, a11y, hlMark } from './modules/utils.js';
+import { state, hasNative, api, activeTab } from './modules/state.js';
+
 /* ---------- 工具函数 ---------- */
-const $ = (sel) => document.querySelector(sel);
-// 单引号一并转义：所有 innerHTML 属性插值都经过这里，避免属性上下文逃逸
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-/** IPC 返回值形态归一化：主进程异常时返回 {ok:false} 而非数组，旧的 .map 会白屏。 */
-const arr = (v) => (Array.isArray(v) ? v : []);
-/** 超长工具输出 / 代码截断，避免一次 innerHTML 卡死渲染进程。 */
-const clip = (s, n = 20000) => {
-  const t = String(s == null ? '' : s);
-  return t.length > n ? `${t.slice(0, n)}\n…（已截断，共 ${t.length} 字符）` : t;
-};
-const safeStringify = (v) => { try { return JSON.stringify(v, null, 2) || ''; } catch { return String(v); } };
-const safeGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
-const safeSet = (k, v) => { try { localStorage.setItem(k, v); return true; } catch { return false; } };
-const fmtTokens = (n) => {
-  const v = Number(n) || 0;
-  if (v >= 1000000) return (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'M';
-  if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
-  return String(Math.round(v));
-};
-const uid = () => Math.random().toString(36).slice(2, 10);
-/** 独立 live region：只播状态变化，不随聊天流全量重建而重播整段对话。 */
-function a11y(msg) {
-  const el = $('#a11y-status'); if (!el) return;
-  el.textContent = '';
-  setTimeout(() => { el.textContent = String(msg); }, 20);
-}
 function toast(msg, ms = 2200) {
   const t = $('#toast'); if (!t) return;
   t.textContent = msg; t.hidden = false;
@@ -271,29 +251,13 @@ function failureHTML(f) {
   </div>`;
 }
 
-/* ---------- 状态 ---------- */
-const state = {
-  tabs: [], activeTabId: null, view: 'chat',
-  turnTab: new Map(),
-  invalidTurns: new Set(),   // 已中止回合的 turnId：延迟到达的事件直接丢弃
-  env: null, config: { model: '', reasoning: 'none', yolo: false },
-  sessions: [], sendHistory: [], histIdx: -1,
-  projectsTree: [],         // 侧栏项目树投影（/api/profiles/projects/tree，降级为 []）
-  projectsTreeOk: false,    // 树请求是否成功；后端冷启慢于首屏时由 ensureSidebarTree 重试
-  booted: false,            // 会话列表是否已成功落地过一次（false = 首屏骨架 + 后端启动提示）
-  bootError: '',            // 首屏拉取失败的原因（骨架里显示，便于区分「慢」和「挂了」）
-  attachments: [],           // [{ path, name, kind }] 本回合待附加的本地文件
-};
-const hasNative = typeof hermesAPI !== 'undefined';
-const api = hasNative ? hermesAPI : window.__mockAPI;
-
+/* ---------- 页签 ---------- */
 function newTab(sessionId = null, title = '新会话', silent = false) {
   const tab = { id: 'tab_' + uid(), sessionId, title, model: '', running: false, items: [], startedAt: 0, lastResult: null, deltas: 0 };
   state.tabs.push(tab);
   setActiveTab(tab.id, silent);
   return tab;
 }
-function activeTab() { return state.tabs.find((t) => t.id === state.activeTabId); }
 function setActiveTab(id, silent) {
   const prev = activeTab();
   // 400ms 草稿防抖定时器在切页签后 firing 会用「新页签」的 key 保存输入框内容；
@@ -331,14 +295,6 @@ function renderTabs() {
   const tEl = $('#chat-title'); if (tEl) tEl.textContent = tab ? (tab.running ? '◷ ' : '') + tab.title : '';
 }
 
-/** 搜索词高亮（只标第一处，输出安全 HTML） */
-function hlMark(text, q) {
-  const t = String(text || '');
-  if (!q) return esc(t);
-  const i = t.toLowerCase().indexOf(String(q).toLowerCase());
-  if (i < 0) return esc(t);
-  return esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.length)) + '</mark>' + esc(t.slice(i + q.length));
-}
 /** 侧栏搜索框当前词：会话菜单、看板写后刷新、项目树启动自愈共用（全局，勿塞进某个函数作用域） */
 function currentSearch() { const el = $('#session-search'); return el ? el.value.trim() : ''; }
 /** 侧栏只认用户显式创建的项目。auto 项目是 CLI 按历史会话 cwd/git 根动态推导的

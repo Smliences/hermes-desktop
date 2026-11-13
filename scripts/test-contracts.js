@@ -29,6 +29,15 @@ const assert = require('assert');
 const mainSrc = read('main/main.js');
 const preloadSrc = read('preload/preload.js');
 const appSrc = read('renderer/app.js');
+// 渲染层已按域拆成 ES modules（renderer/modules/*.js）：文本断言不能只看 app.js，
+// 否则逻辑搬走后断言会静默失空。rendererAll 是 app.js + 全部模块的拼接，
+// 用于「这一行代码在渲染层某处存在吗」这类跨文件断言。
+const rendererModuleFiles = (() => {
+  const dir = path.join(ROOT, 'renderer', 'modules');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort().map((f) => 'renderer/modules/' + f);
+})();
+const rendererAll = [appSrc, ...rendererModuleFiles.map(read)].join('\n');
 const htmlSrc = read('renderer/index.html');
 const cssSrc = read('renderer/styles.css');
 const sessSrc = read('main/services/hermes-sessions.js');
@@ -3493,7 +3502,7 @@ t('后端连接状态：侧栏状态点 + 主进程推送 + 手动重连', () =>
 t('首屏骨架：后端冷启期间不把侧栏留白，也不谎称「暂无会话」', () => {
   // CLI 冷启 5~7.5s、gateway 10~15s，首屏 await 列表的这段时间过去是整片空白，
   // 用户会以为历史会话没了。骨架 + 一句状态说明把「慢」和「空」区分开。
-  assert.ok(appSrc.includes('booted: false') && appSrc.includes("bootError: ''"),
+  assert.ok(rendererAll.includes('booted: false') && rendererAll.includes("bootError: ''"),
     'state 缺少首屏 boot 标记');
   assert.ok(appSrc.includes("if (!query && !state.booted) { renderSidebarSkeleton(ul); return; }"),
     '空列表时没有先走骨架分支（会直接显示「暂无会话」）');
