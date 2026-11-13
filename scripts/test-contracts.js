@@ -175,7 +175,7 @@ t('上下文只留细环：无进度轨，无用量整组收起', () => {
   assert.ok(!/ctxbar/.test(cssSrc), 'CSS 仍残留进度轨规则');
 });
 t('超宽代码块的可横滚提示已完整接线', () => {
-  assert.ok(appSrc.includes('md-code-hint'), 'mdCodeBlock 缺少提示节点');
+  assert.ok(rendererAll.includes('md-code-hint'), 'mdCodeBlock 缺少提示节点');
   assert.ok(/function syncCodeScrollHints\s*\(/.test(appSrc), 'syncCodeScrollHints 未定义');
   const body = appSrc.slice(appSrc.indexOf('function renderChat()'), appSrc.indexOf('function msgActionBar('));
   assert.ok(body.includes('syncCodeScrollHints()'), 'renderChat 未调用超宽检测');
@@ -3565,7 +3565,7 @@ t('五列固定、可空列常驻占位，长路径省略而不撑破', () => {
 });
 
 t('动作列固定宽度不被长工具名截断', () => {
-  const metaFn = appSrc.slice(appSrc.indexOf('function toolMeta('), appSrc.indexOf('function errorCodeOf('));
+  const metaFn = rendererAll.slice(rendererAll.indexOf('function toolMeta('), rendererAll.indexOf('function errorCodeOf('));
   assert.ok(/bash/.test(metaFn) && /web_fetch/.test(metaFn), '真实 CLI 工具名未映射，会显示英文或被截成省略号');
   assert.ok(metaFn.includes("'调用'"), '未知长工具名未收敛成短动作词，44px 动作列会截字');
 });
