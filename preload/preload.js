@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   pluginsSetEnabled: (name, enabled) => ipcRenderer.invoke('plugins:set-enabled', name, enabled),
   skillsList: (opts) => ipcRenderer.invoke('skills:list', opts || {}),
   skillsSetEnabled: (name, enabled) => ipcRenderer.invoke('skills:set-enabled', name, enabled),
+  // CLI 斜杠命令：目录来自 serve 的 commands.catalog，执行走 slash.exec。
+  // 渲染层只传命令文本与当前会话 id，命令语义与权限都在 CLI 侧。
+  cliCommandsCatalog: () => ipcRenderer.invoke('commands:catalog'),
+  cliCommandExec: (args) => ipcRenderer.invoke('commands:exec', args || {}),
   configProviders: () => ipcRenderer.invoke('hermes-config:providers'),
   configModels: () => ipcRenderer.invoke('hermes-config:models'),
   configModelState: () => ipcRenderer.invoke('hermes-config:model-state'),

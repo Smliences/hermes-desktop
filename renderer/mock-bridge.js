@@ -67,9 +67,33 @@
     onError(fn) { listener.close = fn; return () => {}; },
     onClose(fn) { listener.close = fn; return () => {}; },
 
+    /* CLI 斜杠命令：Demo 里给一份最小目录，让「本地动作 + CLI 命令」合并后的菜单、
+       参数补全与结果卡都能在浏览器里跑通（真机目录来自 serve 的 commands.catalog） */
+    async cliCommandsCatalog() {
+      const commands = [
+        { cmd: '/status', desc: '会话与运行时状态', category: 'Info', argMode: null, sub: [], scope: '' },
+        { cmd: '/context', desc: '上下文占用明细', category: 'Info', argMode: null, sub: [], scope: '' },
+        { cmd: '/insights', desc: '用量与工具调用洞察', category: 'Info', argMode: null, sub: [], scope: '' },
+        { cmd: '/title', desc: '重命名当前会话', category: 'Session', argMode: 'text', sub: [], scope: '' },
+        { cmd: '/plan', desc: '先出计划再执行', category: 'Context', argMode: 'text', sub: [], scope: '' },
+      ];
+      return {
+        ok: true, at: Date.now(), commands, alias: {},
+        categories: [{ name: 'Info', commands: commands.slice(0, 3) }, { name: 'Session', commands: commands.slice(3) }],
+      };
+    },
+    async cliCommandExec({ command } = {}) {
+      const name = String(command || '').split(/\s+/)[0];
+      if (name === '/status') return { ok: true, type: 'exec', text: 'Session  demo-20261104\nModel    deepseek-v4.1-flash\nTokens   24341 in / 130 out\nProfile  default' };
+      if (name === '/context') return { ok: true, type: 'exec', text: 'context window  12% 已用（24341 / 200000）\ncompaction      未触发' };
+      if (name === '/insights') return { ok: true, type: 'exec', text: '近 7 天：18 轮对话 · 42 次工具调用 · 缓存命中 51%' };
+      // send 类型：命令被改写成一轮 prompt，桌面端要回到正常提交（Demo 里只回显）
+      if (name === '/plan') return { ok: true, type: 'send', text: 'plan ' + String(command).slice(5).trim(), display: command };
+      return { ok: false, error: 'Demo 模式不支持 ' + name };
+    },
+
     /* Demo 预览通道：不读磁盘，只回内存样例；让 CDP / UI 冒烟能跑通五种视图 */
-    async previewResolve(input) {
-      const f = demoPreviewFile(input);
+    async previewResolve(input) {      const f = demoPreviewFile(input);
       if (!f) return { ok: false, error: 'Demo 里没有这个文件：' + String(input || '') };
       return { ok: true, kind: 'file', type: f.type, ext: f.ext, filePath: f.path,
         baseDir: '/tmp/demo', url: f.url, srcdoc: f.srcdoc || '',

@@ -846,6 +846,7 @@ function boot() {
   const hermesSkills = require('./services/hermes-skills');
   const hermesConfig = require('./services/hermes-config');
   const hermesMarket = require('./services/hermes-market');
+  const hermesCommands = require('./services/hermes-commands');
   hermesMarket.setEmitter((p) => safeSend('market:progress', p));
   // 插件 / 技能列表走「磁盘缓存 + 后台刷新」：刷新完成时通知渲染层原地重绘，
   // 用户先看到上次运行的结果，不必在页面里等 6–8s 的 CLI 冷启。
@@ -860,6 +861,17 @@ function boot() {
   handle('plugins:set-enabled', (_e, name, enabled) => hermesPlugins.setPluginEnabled(name, enabled));
   handle('skills:list', (_e, opts) => hermesSkills.listSkills(opts || {}));
   handle('skills:set-enabled', (_e, name, enabled) => hermesSkills.setSkillEnabled(name, enabled));
+  // CLI 斜杠命令：目录与执行都走 serve（commands.catalog / slash.exec），
+  // 桌面端不实现命令语义，只做「取目录 / 送命令 / 显示结果」。
+  // 空闲启动时 WS 还没建立，这里按需建连（与 projects.delete 同一入口），否则目录永远拿不到。
+  handle('commands:catalog', async () => {
+    try { await chat._ensureGateway(); } catch { /* 连不上就按失败返回，菜单退回本地命令 */ }
+    return hermesCommands.catalog(chat.gateway);
+  });
+  handle('commands:exec', async (_e, args) => {
+    try { await chat._ensureGateway(); } catch { /* 交给 exec 统一报错 */ }
+    return hermesCommands.exec(chat.gateway, args || {});
+  });
 
   // Profile 切换：串行化，避免快速连点叠加 stop/start 拉起多个后端
   handle('profile:list', () => profile.snapshot());
@@ -878,6 +890,7 @@ function boot() {
       hermesSkills.invalidate();
       hermesTools.invalidate();
       hermesMcp.invalidate();
+      hermesCommands.invalidate(); // 命令目录按 profile 隔离，切了就作废
       yamlCfg.rewatch();
       chat.startBackend();
       clearTimeout(warmTimers.plugins); clearTimeout(warmTimers.skills);

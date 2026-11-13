@@ -39,7 +39,7 @@ const MODULES = [
   'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-gateway.js', 'hermes-kanban.js',
   'hermes-kanban-mode.js', 'hermes-market.js',
   'hermes-plugins.js', 'hermes-preview.js', 'hermes-profile.js', 'hermes-sessions.js',
-  'hermes-skills.js', 'logger.js',
+  'hermes-skills.js', 'hermes-commands.js', 'logger.js',
 ];
 const loaded = {};
 
@@ -2118,6 +2118,160 @@ async function run() {
   });
 
   // 清理：仅删除本测试自建的临时目录
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+
+  /* ── CLI 斜杠命令：目录归一化、缓存隔离、三种返回、拒绝提示 ── */
+  section('n. CLI 斜杠命令：目录来自 serve，执行走 slash.exec');
+  const commands = loaded['hermes-commands.js'];
+
+  await t('目录归一化：分类扁平化、跳过桌面自有命令与 hidden、保留参数模式', () => {
+    const raw = {
+      categories: [
+        { name: 'Session', pairs: [['/new', '新建会话'], ['/title', '重命名'], ['/undo', '回退']] },
+        { name: 'Info', pairs: [['/status', '状态'], ['/secret', '内部命令']] },
+      ],
+      commands: { '/title': { argument_mode: 'text' }, '/secret': { desktop: 'hidden' },
+        '/status': { desktop: 'advanced' }, '/undo': { argument_mode: 'options' } },
+      sub: { undo: ['last', 'all'] },
+      canon: { '/t': '/title' },
+    };
+    const out = commands.normalizeCatalog(raw);
+    const names = out.commands.map((c) => c.cmd);
+    assert.deepStrictEqual(names, ['/title', '/undo', '/status'], '命令集不对：' + names.join(','));
+    assert.ok(!names.includes('/new'), '桌面端自己的 /new 不该重复出现在菜单里');
+    assert.ok(!names.includes('/secret'), 'desktop=hidden 的命令必须过滤');
+    assert.strictEqual(out.commands[0].argMode, 'text', '/title 没带上参数模式');
+    assert.strictEqual(out.commands[1].argMode, 'options', '有子命令时应推成 options');
+    assert.deepStrictEqual(out.commands[1].sub, ['last', 'all'], '子命令丢失');
+    assert.strictEqual(out.commands[2].scope, 'advanced', '分类处置丢失');
+    assert.strictEqual(out.categories.length, 2, '分类被合并或丢失');
+    assert.strictEqual(out.alias['/t'], '/title', '别名映射丢失');
+  });
+
+  await t('目录归一化：脏数据不炸、命令名白名单拦住奇怪形状', () => {
+    const out = commands.normalizeCatalog({
+      categories: [{ name: 'X', pairs: [['not-a-command', ''], ['/ok', 'ok'], ['/bad name', 'x']] }],
+    });
+    assert.deepStrictEqual(out.commands.map((c) => c.cmd), ['/ok'], '非法命令名未过滤');
+    assert.deepStrictEqual(commands.normalizeCatalog(null).commands, [], 'null 输入未降级');
+    assert.deepStrictEqual(commands.normalizeCatalog({}).commands, [], '空对象未降级');
+  });
+
+  await t('目录缓存按 profile 隔离，切 profile 后必须重拉', async () => {
+    const profileSvc = loaded['hermes-profile.js'];
+    // 先绑定 userData：否则 setCurrent 写盘会落到仓库根（storePath 为空 → 生成 .tmp）
+    profileSvc.init(userData);
+    commands.invalidate();
+    let calls = 0;
+    const gw = { rpc: async (m) => { calls++; assert.strictEqual(m, 'commands.catalog'); return { categories: [], commands: {} }; } };
+    await commands.catalog(gw);
+    await commands.catalog(gw);
+    assert.strictEqual(calls, 1, '同一 profile 内应命中缓存');
+    const before = profileSvc.current();
+    // 前面用例可能已经把当前 profile 留在了 study：必须切到「另一个」才算真的换了作用域。
+    // 目录就地补建，避免依赖其它用例有没有动过 profiles/。
+    fs.mkdirSync(path.join(hermesRoot, 'profiles', 'study'), { recursive: true });
+    const other = before === 'study' ? 'default' : 'study';
+    profileSvc.setCurrent(other);
+    assert.strictEqual(profileSvc.current(), other,
+      `profile 没切过去（${before} → ${other}，exists=${profileSvc.exists(other)}）`);
+    try {
+      await commands.catalog(gw);
+      assert.strictEqual(calls, 2, '切 profile 后没有重拉目录');
+    } finally {
+      profileSvc.setCurrent(before);
+      commands.invalidate();
+    }
+  });
+
+  await t('目录失败不抛：返回 ok:false 且结构完整（渲染层可直接用）', async () => {
+    commands.invalidate();
+    const out = await commands.catalog({ rpc: async () => { throw new Error('boom'); } });
+    assert.strictEqual(out.ok, false);
+    assert.ok(out.error.includes('boom'), '失败原因丢失');
+    assert.deepStrictEqual(out.commands, [], '失败时 commands 必须是空数组');
+    assert.deepStrictEqual(out.categories, [], '失败时 categories 必须是空数组');
+    const noGw = await commands.catalog(null);
+    assert.strictEqual(noGw.ok, false, '没有 gateway 时应降级而不是抛');
+  });
+
+  await t('执行前把 storedId 换成 liveId，并缓存避免重复 resume', async () => {
+    commands.invalidate();
+    const seen = [];
+    const gw = {
+      rpc: async (m, p) => {
+        seen.push([m, p]);
+        if (m === 'session.resume') return { session_id: 'live-1' };
+        if (m === 'slash.exec') return { type: 'exec', output: 'ok' };
+        throw new Error('unexpected ' + m);
+      },
+    };
+    const a = await commands.exec(gw, { sessionId: 'stored-1', command: '/status' });
+    assert.strictEqual(a.ok, true);
+    const b = await commands.exec(gw, { sessionId: 'stored-1', command: '/context' });
+    assert.strictEqual(b.ok, true);
+    assert.strictEqual(seen.filter(([m]) => m === 'session.resume').length, 1, 'liveId 没有缓存，每次命令都多一次 resume');
+    assert.deepStrictEqual(seen.filter(([m]) => m === 'slash.exec').map(([, p]) => p.session_id), ['live-1', 'live-1'],
+      'slash.exec 必须带 live 会话 id');
+  });
+
+  await t('三种返回都能接住：exec / send / skill', async () => {
+    commands.invalidate();
+    const mk = (res) => ({ rpc: async (m) => (m === 'session.resume' ? { session_id: 'L' } : res) });
+    const e = await commands.exec(mk({ type: 'exec', output: '文本结果' }), { sessionId: 's', command: '/status' });
+    assert.deepStrictEqual([e.ok, e.type, e.text], [true, 'exec', '文本结果']);
+    const s = await commands.exec(mk({ type: 'send', message: '/plan x', display: '/plan x', notice: 'n' }),
+      { sessionId: 's', command: '/plan x' });
+    assert.deepStrictEqual([s.ok, s.type, s.text, s.display], [true, 'send', '/plan x', '/plan x'], 'send 未转交渲染层提交');
+    const k = await commands.exec(mk({ type: 'skill', message: '技能指令' }), { sessionId: 's', command: '/some-skill' });
+    assert.deepStrictEqual([k.ok, k.type, k.text], [true, 'skill', '技能指令'], 'skill 类型未处理');
+  });
+
+  await t('网关拒绝时把 data.detail（改用哪条命令）带给用户', async () => {
+    commands.invalidate();
+    const gw = {
+      rpc: async (m) => {
+        if (m === 'session.resume') return { session_id: 'L' };
+        const e = new Error('unsupported_command');
+        e.data = { detail: 'Run `hermes profile export` in a terminal.' };
+        throw e;
+      },
+    };
+    const r = await commands.exec(gw, { sessionId: 's', command: '/export md' });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('unsupported_command'), '原始原因丢失');
+    assert.ok(r.error.includes('hermes profile export'), 'CLI 给的替代方案没带给用户');
+    assert.strictEqual(r.refused, true, '未标记为「服务端拒绝」');
+  });
+
+  await t('参数校验：缺会话 / 非 / 开头 / 超长都直接拒绝，不打后端', async () => {
+    let calls = 0;
+    const gw = { rpc: async () => { calls++; return {}; } };
+    for (const bad of [{}, { sessionId: 's', command: 'status' }, { sessionId: 's', command: '/' + 'x'.repeat(5000) }]) {
+      const r = await commands.exec(gw, bad);
+      assert.strictEqual(r.ok, false, '非法入参未被拒绝: ' + JSON.stringify(bad).slice(0, 40));
+    }
+    assert.strictEqual(calls, 0, '非法入参不应触发任何 RPC');
+  });
+
+  await t('serve 重启导致 liveId 失效时，清缓存重取一次而不是直接失败', async () => {
+    commands.invalidate();
+    let execCalls = 0;
+    const gw = {
+      rpc: async (m, p) => {
+        if (m === 'session.resume') return { session_id: 'live-' + (++execCalls) };
+        if (m === 'slash.exec') {
+          if (p.session_id === 'live-1') throw new Error('unknown session');
+          return { type: 'exec', output: '恢复后可用' };
+        }
+        throw new Error('unexpected');
+      },
+    };
+    const r = await commands.exec(gw, { sessionId: 's', command: '/status' });
+    assert.strictEqual(r.ok, true, '没有重取自愈：' + r.error);
+    assert.strictEqual(r.text, '恢复后可用');
+  });
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
   console.log('\n' + '─'.repeat(56));

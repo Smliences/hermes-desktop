@@ -283,6 +283,23 @@ let CHROME_BIN = null;
   await key(cdp, 'Enter', 13); await sleep(300);
   const s9e2 = await cdp.ev(`({ tabs: state.tabs.length, stillEmpty: !!document.querySelector('#chip-menu .wb-menu-empty'), inputVal: document.getElementById('input').value })`);
   ok('无匹配 Enter 被拦下：不建页签、不发送、不清输入', s9e2.tabs === tabCountBefore + 1 && s9e2.stillEmpty && s9e2.inputVal === '/zzz', JSON.stringify(s9e2));
+
+  /* CLI 命令（目录来自 serve 的 commands.catalog，Demo 桥给最小样例）：
+     选中即执行、结果落成命令卡、吃参数的命令只补全不误跑 */
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/sta'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(280);
+  const s9f = await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/status'); return { n: rows.length, hit: !!hit, badge: hit && hit.querySelector('.wb-menu-badge') ? hit.querySelector('.wb-menu-badge').textContent : null }; })()`);
+  ok('CLI 命令进入候选、与本地动作同列但带 CLI 徽标', s9f.hit && s9f.badge === 'CLI', JSON.stringify(s9f));
+  await cdp.ev(`(() => { activeTab().sessionId = 's_demo_live'; const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/status'); hit.click(); return 1; })()`);
+  await sleep(700);
+  const s9g = await cdp.ev(`(() => { const card = document.querySelector('.msg-command .cmd-card'); return { has: !!card, done: !!document.querySelector('.cmd-card.is-done'), cmd: card ? card.querySelector('.cmd-line').textContent : '', out: card ? card.querySelector('.cmd-out').textContent.slice(0, 60) : '' }; })()`);
+  ok('选中 CLI 命令即执行，并在对话里留下结果卡', s9g.has && s9g.done && s9g.cmd === '/status' && s9g.out.includes('Session'), JSON.stringify(s9g));
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/title'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(280);
+  await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/title'); if (hit) hit.click(); return 1; })()`);
+  await sleep(350);
+  const s9h = await cdp.ev(`({ val: document.getElementById('input').value, cards: document.querySelectorAll('.msg-command').length })`);
+  ok('吃参数的命令只补全命令名、不立即执行', s9h.val === '/title ' && s9h.cards === 1, JSON.stringify(s9h));
   await cdp.ev(`(() => { document.getElementById('input').value = ''; slashClose(); return 1; })()`);
   await shot(cdp, 'hermes-ui-landing.png');
 

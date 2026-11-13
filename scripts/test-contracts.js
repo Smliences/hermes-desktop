@@ -2764,9 +2764,12 @@ t('内联指令菜单：/ 起手即弹，Enter 执行，无匹配不误发', () 
     'slashSync 未在 openChipMenu 之后打标记');
   // send 乐观清空不走 input 事件，必须显式收起
   assert.ok(appSrc.includes('slashClose(); // 乐观清空不走 input 事件'), 'send() 未兜底收起指令菜单');
-  // 复用 chip-menu 浮层与 COMMANDS 表，不另起炉灶
+  // 复用 chip-menu 浮层与统一候选表，不另起炉灶
   assert.ok(appSrc.includes('openChipMenu($(\'#composer\')'), '指令菜单未锚到 composer 复用浮层');
-  assert.ok(appSrc.includes('return COMMANDS.filter'), '候选未从 COMMANDS 派生');
+  assert.ok(appSrc.includes('function commandRows(q)'), '缺少统一候选表 commandRows');
+  assert.ok(appSrc.includes('function slashRows(q) { return commandRows(q); }'),
+    'slashRows 必须转发到统一候选表（改一处即可同时服务菜单与筛选）');
+  assert.ok(appSrc.includes('COMMANDS.map((c) => ({ cmd: c.cmd'), '本地命令未从 COMMANDS 派生');
   // role=menuitem 键盘可达性：普通行 Enter/Space 激活
   assert.ok(/row\.onkeydown = \(e\) => \{\s*\n\s*if \(e\.key === 'Enter' \|\| e\.key === ' '\)/.test(appSrc),
     'wb-menu-row 普通行缺少 Enter/Space 激活');
@@ -3976,6 +3979,90 @@ t('重渲染不再吞掉评论草稿', () => {
   assert.ok(appSrc.includes('if (draftBox && draft) draftBox.value = draft;'),
     '重渲染后没有填回草稿');
   assert.ok(appSrc.includes('delete kbDrafts[String(id)];'), '评论发出后草稿没有清掉');
+});
+
+/* ══════════════════════════════════════════════════════════════
+   3am. CLI 斜杠命令：目录来自 serve，执行走 slash.exec，不在桌面端重写命令语义
+   ══════════════════════════════════════════════════════════════ */
+section('3am. CLI 斜杠命令：目录 / 执行 / 结果三段都不自己发明语义');
+const cmdSrc = read('main/services/hermes-commands.js');
+const cmdCss = cssSrc.slice(cssSrc.indexOf('.msg-command {'), cssSrc.indexOf('.cmd-out {') + 400);
+
+t('目录与执行只走 serve 的两个方法，桌面端不重写命令实现', () => {
+  assert.ok(cmdSrc.includes("gw.rpc('commands.catalog'"), '命令目录没走 commands.catalog');
+  assert.ok(cmdSrc.includes("gw.rpc('slash.exec'"), '命令执行没走 slash.exec');
+  // 命令语义留在 CLI：服务层不该出现任何具体命令名分支
+  for (const hard of ["'/status'", "'/context'", "'/usage'", "'/compress'", "'/title'"]) {
+    assert.ok(!cmdSrc.includes(hard), '服务层硬编码了命令 ' + hard + '，命令语义必须留在 CLI');
+  }
+  assert.ok(cmdSrc.includes('function normalizeCatalog(raw)'), '缺少目录归一化');
+  assert.ok(cmdSrc.includes('argMode'), '归一化丢掉了参数模式（无法决定是否补全）');
+});
+
+t('三种返回都接住，被拒时把 CLI 的替代方案给用户', () => {
+  for (const ty of ["type === 'send'", "type === 'skill'"]) {
+    assert.ok(cmdSrc.includes(ty), '未处理返回类型 ' + ty);
+  }
+  assert.ok(cmdSrc.includes('res.output'), 'exec 类型没有取 output');
+  assert.ok(cmdSrc.includes('err.data'), '拒绝原因没有读 error.data');
+  assert.ok(cmdSrc.includes('detail'), '没有把 data.detail（改用哪条命令）带给用户');
+  // 失败必须 resolve 成 ok:false：命令不可用是常态，抛异常会变成 IPC 错误弹窗
+  assert.ok(!/throw new Error/.test(cmdSrc), '命令服务不应抛异常给 IPC 层');
+  assert.ok(cmdSrc.includes('ok: false'), '失败未收敛成 {ok:false}');
+});
+
+t('live 会话 id 由主进程解析，失败能自愈一次', () => {
+  assert.ok(cmdSrc.includes("gw.rpc('session.resume'"), '没有把 storedId 换成 liveId');
+  assert.ok(cmdSrc.includes('_liveByStored'), 'liveId 未缓存，连续命令每次都多一次 resume');
+  assert.ok(cmdSrc.includes('_liveByStored.delete(sid)'), 'serve 重启后没有失效重取');
+});
+
+t('目录缓存按 profile 隔离，切 profile 必须作废', () => {
+  assert.ok(cmdSrc.includes('profile.current()'), '缓存未按 profile 分键');
+  assert.ok(cmdSrc.includes('function invalidate()'), '缺少 invalidate');
+  assert.ok(mainSrc.includes('hermesCommands.invalidate();'), 'profile:switch 没有作废命令目录');
+});
+
+t('IPC 三层对齐：main 注入 gateway，渲染层拿不到连接细节', () => {
+  assert.ok(mainSrc.includes("handle('commands:catalog'"), 'main 未注册 commands:catalog');
+  assert.ok(mainSrc.includes("handle('commands:exec'"), 'main 未注册 commands:exec');
+  assert.ok(mainSrc.includes('hermesCommands.catalog(chat.gateway)'), '目录未从主进程的 gateway 取');
+  assert.ok(preloadSrc.includes("invoke('commands:catalog'"), 'preload 未暴露目录');
+  assert.ok(preloadSrc.includes("invoke('commands:exec'"), 'preload 未暴露执行');
+  assert.ok(appSrc.includes('api.cliCommandExec('), '渲染层没有调用执行通道');
+  assert.ok(!appSrc.includes("rpc('slash.exec'"), '渲染层不得直接发 RPC');
+});
+
+t('菜单合并本地动作与 CLI 命令，吃参数的命令只补全不误执行', () => {
+  assert.ok(appSrc.includes('cliCatalog.commands'), '斜杠菜单没有合并 CLI 目录');
+  assert.ok(appSrc.includes("badge: c.source === 'cli' ? 'CLI' : ''"), 'CLI 命令没有视觉区分');
+  assert.ok(appSrc.includes('function commandScore('), '缺少匹配打分（精确 > 前缀 > 包含）');
+  assert.ok(appSrc.includes('const needsArg = row.source === \'cli\' && row.argMode && !argText;'),
+    '吃参数的命令未走补全分支');
+  assert.ok(appSrc.includes("inp.value = row.cmd + ' ';"), '补全没有留下参数位');
+  assert.ok(appSrc.includes('CMD_MENU_MAX'), '候选没有上限，空查询会铺满整屏');
+  assert.ok(appSrc.includes('if (row.source === \'local\')'), '本地动作未与 CLI 命令分流');
+});
+
+t('结果卡有独立渲染分支与双主题样式', () => {
+  assert.ok(appSrc.includes("item.kind === 'command'"), 'renderItem 缺少 command 分支');
+  assert.ok(appSrc.includes("kind: 'command'"), '执行时没有插入命令条目');
+  for (const c of ['.msg-command {', '.cmd-card {', '.cmd-head {', '.cmd-line {', '.cmd-state {', '.cmd-out {',
+    '.cmd-card.is-running', '.cmd-card.is-error', '.cmd-card.is-done']) {
+    assert.ok(cssSrc.includes(c), '缺少命令卡样式 ' + c);
+  }
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(cmdCss), '命令卡样式出现硬编码色值，深色主题会失配');
+  assert.ok(cssSrc.includes('.wb-menu-badge'), 'CLI 徽标缺少样式');
+});
+
+t('目录拿不到也不影响输入：菜单退回本地命令', () => {
+  assert.ok(appSrc.includes("if (typeof api.cliCommandsCatalog !== 'function') return Promise.resolve(cliCatalog);"),
+    '没有桥方法时未短路');
+  assert.ok(appSrc.includes("cliCatalog.error = (res && res.error)"), '失败未记录原因');
+  // 目录按需拉取：空闲启动不为了它唤醒 serve
+  assert.ok(appSrc.includes('if (!cliCatalog.ok) loadCliCatalog();'), '斜杠菜单没有按需拉取目录');
+  assert.ok(appSrc.includes("if (mode === 'ready' && s.linked && !cliCatalog.ok"), '已建连时没有补拉目录');
+  assert.ok(!/\n  loadCliCatalog\(\);\n/.test(appSrc), '启动流程仍在预热目录（会为空闲启动唤醒 serve）');
 });
 
 console.log('\n' + '─'.repeat(56));

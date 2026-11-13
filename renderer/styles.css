@@ -812,6 +812,12 @@ body.resizing #sidebar { transition: none; }
   font: 500 10px/1 var(--mono); color: var(--text-3); background: var(--fill-3); letter-spacing: .02em;
 }
 .wb-menu-check { flex-shrink: 0; width: 16px; text-align: center; font-size: 13px; color: var(--blue); font-weight: 600; }
+/* 斜杠菜单里区分「桌面动作」与「CLI 命令」：只给 CLI 打标，本地动作不加噪 */
+.wb-menu-badge {
+  flex-shrink: 0; margin-left: 6px; padding: 2px 4px; border-radius: var(--r-xs);
+  font: 600 9px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-3); background: var(--fill-3); border: 1px solid var(--line);
+}
 .wb-menu-row.selected .wb-menu-name { font-weight: 500; }
 /* ── 二级菜单（模型 → 思考程度）──
    宿主 #chip-menu 是 overflow:hidden，子菜单塞进去会被裁掉一条，
@@ -2180,6 +2186,35 @@ button:active:not(:disabled) { filter: brightness(.96); }
 .ap-done { font-size: 12px; padding: 5px 10px; border-radius: var(--r-xs); }
 .ap-done.yes { color: var(--green); background: var(--fill-2); }
 .ap-done.no { color: var(--red); background: var(--red-soft); }
+
+/* ── CLI 命令结果卡 ──
+   斜杠命令的输出单独成块：等宽、可滚动、和 agent 正文视觉分离，
+   用户能立刻分清「我敲的命令」与「模型说的话」。状态只靠左边框与标签上色，
+   不用底色铺满（一屏多条命令时会变成色块噪音）。 */
+.msg-command { margin: 10px 0; }
+.cmd-card {
+  border: 1px solid var(--line); border-left: 3px solid var(--line-2);
+  border-radius: var(--r-sm); background: var(--fill-2); overflow: hidden;
+}
+.cmd-card.is-running { border-left-color: var(--yellow); }
+.cmd-card.is-error { border-left-color: var(--red); }
+.cmd-card.is-done { border-left-color: var(--green); }
+.cmd-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 11px; border-bottom: 1px solid var(--line); background: var(--canvas);
+}
+.cmd-line {
+  flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cmd-state { flex: 0 0 auto; font-size: 10.5px; letter-spacing: .02em; color: var(--text-3); }
+.cmd-card.is-running .cmd-state { color: var(--yellow); }
+.cmd-card.is-error .cmd-state { color: var(--red); }
+.cmd-out {
+  margin: 0; padding: 10px 12px; max-height: 340px; overflow: auto;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.62; color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* ══════════ 字号体系：一个旋钮带动全部 ══════════
    设置页的「字号大小」写 `--ui-fs`（applySettings 用行内样式覆盖），

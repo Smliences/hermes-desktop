@@ -537,6 +537,8 @@ function renderConnStatus(st) {
   // （首次装机的空列表和「还没拉回来」在界面上必须是两种东西）
   if (mode === 'ready' && !state.booted) bootSettled();
   else if (mode === 'offline' && !state.booted) { state.bootError = '后端未连接'; renderSessions(currentSearch()); }
+  // 已经建立过长连接再补拉：此时取目录零成本；空闲启动不为它去唤醒 serve
+  if (mode === 'ready' && s.linked && !cliCatalog.ok && typeof loadCliCatalog === 'function') loadCliCatalog();
   const label = CONN_TEXT[mode] || '未知';
   const txt = btn.querySelector('.sb-conn-text');
   if (txt) txt.textContent = label;
@@ -1586,6 +1588,18 @@ function renderItem(item, header = false) {
       <div class="think-body">${esc(clip(item.text, 12000))}</div></details>`;
     const d = el.querySelector('details');
     if (d) d.addEventListener('toggle', () => { item.open = d.open; });
+  } else if (item.kind === 'command') {
+    // 命令卡片：CLI 斜杠命令的结果。等宽输出 + 顶部命令行，和 agent 正文分开，
+    // 一眼能看出「这是我敲的命令，不是模型说的话」。
+    el.className = 'msg msg-command';
+    const running = item.state === 'running';
+    const cls = running ? 'is-running' : item.state === 'error' ? 'is-error' : 'is-done';
+    const stateText = running ? '执行中…' : item.state === 'error' ? '不可用' : '完成';
+    el.innerHTML = `<div class="cmd-card ${cls}">
+      <div class="cmd-head"><span class="cmd-line">${esc(item.cmd)}</span>
+        <span class="cmd-state">${stateText}</span></div>
+      ${item.text ? `<pre class="cmd-out">${esc(clip(item.text, 20000))}</pre>` : ''}
+    </div>${item.text ? msgActionBar(item, false) : ''}`;
   } else if (item.kind === 'approval') {
     el.className = 'msg msg-approval';
     const actions = item.choice
@@ -1843,19 +1857,22 @@ function removeAttachment(p) {
 }
 
 /* ---------- 发送 ---------- */
-async function send(text) {
+/** displayText：命令改写出来的回合要在气泡里显示命令原文（如 `/plan …`），
+ *  而真正提交给 agent 的是改写后的 prompt。两者不同就分开传。 */
+async function send(text, displayText) {
   const tab = activeTab();
   if (!tab || tab.running) return;
   text = text.trim(); if (!text) return;
+  const shown = String(displayText || text).trim() || text;
   slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
-  state.sendHistory.push(text); state.histIdx = state.sendHistory.length;
-  tab.items.push({ kind: 'user', text, ts: Date.now(), files: state.attachments.map((a) => a.name) });
+  state.sendHistory.push(shown); state.histIdx = state.sendHistory.length;
+  tab.items.push({ kind: 'user', text: shown, ts: Date.now(), files: state.attachments.map((a) => a.name) });
   // 取消在途草稿定时器：否则发送后它仍会以「清空后的输入框」再写一次草稿归属
   if ($('#input')._draftTimer) { clearTimeout($('#input')._draftTimer); $('#input')._draftTimer = null; }
   // 立即清空输入框（乐观发送）；放在 await 之后会吞掉用户在这段时间里新敲的内容
   $('#input').value = ''; autoGrow(); updateCount();
   if (typeof clearDraftFor === 'function') clearDraftFor(tab);
-  if (tab.title === '新会话') tab.title = text.slice(0, 24);
+  if (tab.title === '新会话') tab.title = shown.slice(0, 24);
   tab.running = true; tab.startedAt = Date.now(); tab.deltas = 0;
   // 回合开始时的累计用量：结算时用它做差，得到「本条消息自己的 token」
   tab.usageBase = (tab.usage && tab.usage.total) || 0;
@@ -2408,6 +2425,123 @@ const COMMANDS = [
   { cmd: '/orb', desc: '收成桌面小圆球（点球弹出迷你聊天窗）', run: () => api.enterOrb && api.enterOrb() },
 ];
 let paletteSel = 0, paletteItems = COMMANDS;
+
+/* ---------- CLI 命令目录（serve 的 commands.catalog） ----------
+   桌面端原来只有上面这 12 条本地命令，CLI 的 COMMAND_REGISTRY 有 100+ 条，
+   在输入框里敲 /status、/context、/usage、/insights 全都匹配不到，Enter 被拦下 ——
+   命令一条都用不了。
+   这些命令不需要在这里重写：serve 有审过的执行通道（slash.exec），桌面端只做
+   「取目录 / 送命令 / 显示结果」。目录拿不到（serve 没起、权限不足）就静默退回本地表，
+   输入体验不受影响。 */
+const cliCatalog = { ok: false, at: 0, commands: [], categories: [], alias: {}, error: '' };
+let cliCatalogInflight = null;
+const CLIENT_CATALOG_TTL = 5 * 60 * 1000;
+
+function loadCliCatalog(force = false) {
+  // 只看桥有没有这个方法：Demo 桥也提供目录，浏览器里能演示合并后的菜单
+  if (typeof api.cliCommandsCatalog !== 'function') return Promise.resolve(cliCatalog);
+  if (cliCatalogInflight) return cliCatalogInflight;
+  if (!force && cliCatalog.ok && Date.now() - cliCatalog.at < CLIENT_CATALOG_TTL) return Promise.resolve(cliCatalog);
+  cliCatalogInflight = api.cliCommandsCatalog()
+    .then((res) => {
+      if (res && res.ok) {
+        Object.assign(cliCatalog, {
+          ok: true, at: res.at || Date.now(),
+          commands: Array.isArray(res.commands) ? res.commands : [],
+          categories: Array.isArray(res.categories) ? res.categories : [],
+          alias: res.alias || {}, error: '',
+        });
+      } else {
+        cliCatalog.error = (res && res.error) || '命令目录不可用';
+      }
+      return cliCatalog;
+    })
+    .catch((e) => { cliCatalog.error = String((e && e.message) || e); return cliCatalog; })
+    .finally(() => { cliCatalogInflight = null; });
+  return cliCatalogInflight;
+}
+
+/** 命令匹配打分：名字精确 > 名字前缀 > 名字包含 > 描述包含；-1 表示不匹配。 */
+function commandScore(row, q) {
+  if (!q) return 2;
+  const name = row.cmd.slice(1).toLowerCase();
+  if (name === q) return 0;
+  if (name.startsWith(q)) return 1;
+  if (name.includes(q)) return 2;
+  return row.desc && row.desc.toLowerCase().includes(q) ? 3 : -1;
+}
+
+/**
+ * 斜杠菜单的所有候选：本地动作在前，CLI 命令在后。
+ * 同名已被主进程的 DESKTOP_OWN 过滤掉，这里不重复去重。
+ */
+const CMD_MENU_MAX = 40;
+function commandRows(q) {
+  const s = (q || '').trim().toLowerCase();
+  const local = COMMANDS.map((c) => ({ cmd: c.cmd, desc: c.desc, source: 'local', argMode: null, sub: [], run: c.run }));
+  const scored = [];
+  for (const row of local) {
+    const sc = commandScore(row, s);
+    if (sc >= 0) scored.push({ row, sc, local: true });
+  }
+  for (const c of cliCatalog.commands) {
+    const row = { cmd: c.cmd, desc: c.desc || '', source: 'cli', argMode: c.argMode || null, sub: c.sub || [], scope: c.scope || '' };
+    const sc = commandScore(row, s);
+    if (sc >= 0) scored.push({ row, sc, local: false });
+  }
+  // 同分时本地优先；同组内保持目录原有顺序（sort 稳定）
+  scored.sort((a, b) => a.sc - b.sc || (a.local === b.local ? 0 : a.local ? -1 : 1));
+  const picked = scored.map((x) => x.row);
+  if (picked.length <= CMD_MENU_MAX) return picked;
+  // 太多时不要砍掉本地动作：本地全留，剩下的名额给 CLI
+  const locals = picked.filter((r) => r.source === 'local');
+  const rest = picked.filter((r) => r.source !== 'local');
+  return locals.concat(rest.slice(0, Math.max(0, CMD_MENU_MAX - locals.length)));
+}
+
+/**
+ * 执行一条斜杠命令。
+ * CLI 命令的三种返回（gateway/session_commands.py）：
+ *   exec  → 文本结果，作为一条命令卡片留在对话里
+ *   send / skill → 命令改写成一轮 prompt，回到正常提交流程
+ * 失败也给出卡片：网关只放行审过的命令，被拒时它会给「改用哪条命令」的提示。
+ */
+async function runSlashCommand(row, argText) {
+  const tab = activeTab();
+  if (!tab) return;
+  if (row.source === 'local') {
+    const fn = typeof row.run === 'function' ? row.run : (COMMANDS.find((c) => c.cmd === row.cmd) || {}).run;
+    if (typeof fn === 'function') fn();
+    return;
+  }
+  if (tab.running) { toast('本回合还在进行，命令要等它结束', 2200); return; }
+  if (!tab.sessionId) { toast('这个会话还没有建立：先发一条消息，再用命令', 2600); return; }
+
+  const arg = String(argText || '').trim();
+  const full = arg ? `${row.cmd} ${arg}` : row.cmd;
+  const item = { kind: 'command', cmd: full, state: 'running', text: '', ts: Date.now() };
+  tab.items.push(item);
+  renderChat(); scrollBottom(true);
+
+  let res = null;
+  try { res = await api.cliCommandExec({ sessionId: tab.sessionId, command: full }); }
+  catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+
+  // 命令被改写成一轮 prompt：撤掉占位卡，走正常提交（显示命令原文，提交改写后的内容）
+  if (res && res.ok && (res.type === 'send' || res.type === 'skill') && res.text) {
+    const idx = tab.items.indexOf(item);
+    if (idx >= 0) tab.items.splice(idx, 1);
+    renderChat();
+    if (!tab.running) send(res.text, res.display || full);
+    return;
+  }
+
+  item.state = res && res.ok ? 'done' : 'error';
+  item.text = res && res.ok ? (res.text || '（该命令没有输出）') : (res && res.error) || '命令执行失败';
+  if (tab.id === state.activeTabId) { renderChat(); scrollBottom(true); }
+  else { renderTabs(); }
+}
+
 function togglePalette(show) {
   $('#palette').hidden = !show;
   if (show) {
@@ -2473,6 +2607,7 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
     const sel = String(r.key) === String(selectedKey);
     return `<div class="wb-menu-row${sel ? ' selected' : ''}" data-key="${esc(r.key)}" tabindex="0" role="menuitem">
       <span class="wb-menu-name">${esc(r.name)}</span>
+      ${r.badge ? `<span class="wb-menu-badge">${esc(r.badge)}</span>` : ''}
       ${r.tag ? `<span class="wb-menu-tag">${esc(r.tag)}</span>` : ''}
       <span class="wb-menu-check">${sel ? '✓' : ''}</span>
     </div>`;
@@ -2577,10 +2712,7 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
    /new 会被当字面文本发给 CLI。现在复用 #chip-menu 浮层 + COMMANDS 表：
    输入 / 起手即弹候选（按指令名/描述过滤），↑↓/Home/End 选行、Enter 执行、
    Esc 关闭；无匹配时显示占位行而不是关菜单，避免 /xyz 被误发出去。 */
-function slashRows(q) {
-  const s = (q || '').trim().toLowerCase();
-  return COMMANDS.filter((c) => !s || c.cmd.slice(1).toLowerCase().includes(s) || c.desc.toLowerCase().includes(s));
-}
+function slashRows(q) { return commandRows(q); }
 function slashMenuOpen() {
   const m = $('#chip-menu');
   return !m.hidden && !!chipMenuCleanup && m.dataset.slash === '1';
@@ -2590,17 +2722,37 @@ function slashSync() {
   const v = inp.value || '';
   const tab = activeTab();
   if (!v.startsWith('/') || (tab && tab.running) || state.view !== 'chat') { slashClose(); return; }
-  const rows = slashRows(v.slice(1));
+  // 目录按需拉取：敲第一个 / 才建连取目录，空闲启动不为此唤醒 serve
+  if (!cliCatalog.ok) loadCliCatalog();
+  const q = v.slice(1);
+  const rows = slashRows(q);
   const menu = $('#chip-menu');
-  openChipMenu($('#composer'), rows.length ? rows.map((c) => ({ key: c.cmd, name: c.cmd, tag: c.desc })) : [],
-    null, (picked) => {
-      const cmd = COMMANDS.find((c) => c.cmd === picked.key);
-      inp.value = ''; autoGrow(); updateCount();
-      if (cmd) cmd.run();
-    });
+  openChipMenu($('#composer'), rows.map((c) => ({
+    key: c.cmd, name: c.cmd, tag: c.desc, badge: c.source === 'cli' ? 'CLI' : '',
+  })), null, (picked) => {
+    const row = rows.find((c) => c.cmd === picked.key);
+    if (!row) return;
+    const spaceAt = q.search(/\s/);
+    // 已有参数（`/title 新名字`）或命令本身要吃参数：交回给调用方，别把整串当命令名
+    const argText = spaceAt >= 0 ? q.slice(spaceAt + 1) : '';
+    const needsArg = row.source === 'cli' && row.argMode && !argText;
+    if (needsArg) {
+      // 只补全命令名，把光标留在名字后面让用户接着敲参数
+      inp.value = row.cmd + ' ';
+      autoGrow(); updateCount();
+      inp.focus();
+      try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch {}
+      slashClose();
+      return;
+    }
+    inp.value = ''; autoGrow(); updateCount();
+    runSlashCommand(row, argText);
+  });
   menu.dataset.slash = '1'; // 必须在 openChipMenu 之后打标记（其入口会先清空）
   if (!rows.length) {
-    menu.innerHTML = `<div class="wb-menu-list"><div class="wb-menu-row wb-menu-empty" role="status">没有匹配的指令 · 清空后重试或按 Esc 关闭</div></div>`;
+    // 目录还没回来时别用「没有匹配」误导：CLI 那 100+ 条只是还在路上
+    const msg = cliCatalog.ok ? '没有匹配的指令 · 清空后重试或按 Esc 关闭' : 'CLI 命令加载中…（本地指令可直接用）';
+    menu.innerHTML = `<div class="wb-menu-list"><div class="wb-menu-row wb-menu-empty" role="status">${msg}</div></div>`;
   }
 }
 function slashClose() {
@@ -9242,6 +9394,7 @@ async function init() {
   syncComposerState();
   syncComposerProject(); // 首屏把项目下拉的候选与当前页签状态落地
   initConnStatus();      // 后端连接状态点：先拉一次快照，之后靠主进程推送
+  // CLI 命令目录不在这里预热：空闲启动会为此唤醒 serve。第一次敲 / 时才拉（slashSync）。
   initFocusRefresh();    // 切回窗口时补齐终端 / 其他窗口产生的变化
   // 非阻断：启动即核对桌面端模型与 CLI 默认是否漂移；切 profile 会 reload 重跑
   syncModelDrift(true);
