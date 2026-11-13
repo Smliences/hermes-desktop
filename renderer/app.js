@@ -6334,6 +6334,95 @@ function kbFullTime(v) {
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
+/* ---- 运行进度：running 卡片 / 抽屉共用的同一套计时口径 ----
+   CLI 的 task 行本身给了 current_run_started_at 与 max_runtime_seconds，进度不需要
+   另开接口：卡片和抽屉都只读这两个字段，本地每秒推一次秒表，事件驱动的轮询再补
+   文字更新（最近活动 / 最新回报 / 子任务）。时间戳兼容秒与毫秒两种量级。 */
+let kbRunTimer = null;
+function kbRunStart(t) {
+  const n = Number(t && (t.current_run_started_at || t.started_at));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 1e12 ? Math.round(n) : Math.round(n / 1000);
+}
+function kbRunLimit(t) {
+  const n = Number(t && t.max_runtime_seconds);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+/** 秒 → 3:21 / 1:02:03。进度条与时钟都按这个格式，避免一处 201s、一处 3m21s。 */
+function kbDur(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const p2 = (n) => String(n).padStart(2, '0');
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${p2(m)}:${p2(s % 60)}` : `${m}:${p2(s % 60)}`;
+}
+function kbRunElapsed(start, now) {
+  return Math.max(0, Math.floor((Number(now) || Math.floor(Date.now() / 1000)) - start));
+}
+/** 预算占用百分比：给进度条用，恒落在 1.5%–100%，剩 0 秒时也不会缩成看不见。 */
+function kbRunPct(elapsed, limit) {
+  if (!limit) return 0;
+  return Math.min(100, Math.max(1.5, (elapsed / limit) * 100));
+}
+function kbRunClockText(elapsed, limit) {
+  return '◷ ' + kbDur(elapsed) + (limit ? ' / ' + kbDur(limit) : '');
+}
+/** 每秒推进所有 [data-kb-run]：卡片秒表、抽屉面板、rail chip 共用一份实现。
+ *  不可见的节点（rail 收起 / 整页切走）跳过；一个可见的都没有就自停，不空转。 */
+function kbRunTick() {
+  const nodes = [...document.querySelectorAll('[data-kb-run]')]
+    .filter((el) => el.getClientRects().length > 0);
+  if (!nodes.length) {
+    if (kbRunTimer) { clearInterval(kbRunTimer); kbRunTimer = null; }
+    return 0;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  for (const el of nodes) {
+    const start = Number(el.dataset.kbRun) || 0;
+    if (!start) continue;
+    const limit = Number(el.dataset.kbRunMax) || 0;
+    const elapsed = kbRunElapsed(start, now);
+    const txt = el.querySelector('.kb-run-txt');
+    if (txt) txt.textContent = kbRunClockText(elapsed, limit);
+    const bar = el.querySelector('.kb-run-bar > i');
+    if (bar && limit) bar.style.width = kbRunPct(elapsed, limit).toFixed(1) + '%';
+    // 用掉 85% 预算就转红：超时前给一次视觉预警，比事后看 timed_out 有用
+    el.classList.toggle('is-hot', !!limit && elapsed / limit >= 0.85);
+  }
+  return nodes.length;
+}
+function kbRunWatch() {
+  kbRunTick();
+  if (!kbRunTimer) kbRunTimer = setInterval(kbRunTick, 1000);
+}
+/** 卡面上的运行条：跑了多久 / 预算用掉多少。没有预算就只显示秒表。 */
+function kbRunStrip(t) {
+  const start = kbRunStart(t);
+  if (!start) return '';
+  const limit = kbRunLimit(t);
+  const elapsed = kbRunElapsed(start);
+  const hot = limit && elapsed / limit >= 0.85;
+  return `<div class="kb-run${hot ? ' is-hot' : ''}" data-kb-run="${start}" data-kb-run-max="${limit}">
+      <span class="kb-run-txt">${esc(kbRunClockText(elapsed, limit))}</span>
+      ${limit ? `<span class="kb-run-bar"><i style="width:${kbRunPct(elapsed, limit).toFixed(1)}%"></i></span>` : ''}
+    </div>`;
+}
+/** 同一个 profile 名下还在跑的其它卡：从看板里找，不额外打接口。 */
+function kbRunSiblings(t) {
+  const who = String((t && t.assignee) || '').trim();
+  if (!who) return [];
+  const cols = (KB.board && Array.isArray(KB.board.columns)) ? KB.board.columns : [];
+  const out = [];
+  for (const c of cols) {
+    for (const x of (Array.isArray(c && c.tasks) ? c.tasks : [])) {
+      if (!x || x.id === t.id) continue;
+      if (String(x.status || (c && c.name) || '') !== 'running') continue;
+      if (String(x.assignee || '').trim() !== who) continue;
+      out.push(x);
+    }
+  }
+  return out.slice(0, 3);
+}
 function kbSetLive(text, cls) {
   const el = $('#kb-live'), t = $('#kb-live-text');
   if (!el || !t) return;
@@ -7091,6 +7180,9 @@ function kbCardHtml(t, colName, opts) {
   // 卡面描述：优先最新执行回报（latest_summary = task_runs.summary），
   // 没跑过 worker 的任务回退到建任务时写的描述 body —— 否则新卡永远是光杆标题。
   const sum = String(t.latest_summary || t.body || '').trim();
+  // 运行中的卡：卡面直接给出「跑了多久 / 预算用掉多少」，不用点开就知道进度；
+  // 点开抽屉才是 profile 视角的完整进度（最近活动、子任务、同 profile 其它卡）。
+  const runHtml = st === 'running' ? kbRunStrip(t) : '';
   const dragHint = draggable === '1'
     ? '拖动：落到别的列改状态，落到上方 profile 上改派'
     : `${st || '该状态'} 不支持拖拽（已归档的卡片不参与拖动）`;
@@ -7099,6 +7191,7 @@ function kbCardHtml(t, colName, opts) {
     <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
     ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
+    ${runHtml}
     <div class="kb-card-foot">${whenHtml}${foot.length ? `${whenHtml ? '<i aria-hidden="true">·</i>' : ''}${foot.join('<i aria-hidden="true">·</i>')}` : ''}<span class="kb-card-dot" aria-hidden="true"></span></div>
   </button>`;
 }
@@ -7344,10 +7437,16 @@ function renderRailKanban() {
         const asg = String((t && t.assignee) || '').trim();
         const ago = kbAgo(t && t.created_at);
         const title = String((t && t.title) || '未命名任务');
+        // 运行中的卡在 rail 里也带一个会走的秒表：不用点开就知道它已经跑了多久
+        const runStart = st === 'running' ? kbRunStart(t) : 0;
+        const run = runStart
+          ? `<span class="rkb-run" data-kb-run="${runStart}" data-kb-run-max="${kbRunLimit(t)}"><span class="kb-run-txt">${esc(kbRunClockText(kbRunElapsed(runStart), kbRunLimit(t)))}</span></span>`
+          : '';
         return `<button class="rkb-card" type="button" data-rkb-task="${esc((t && t.id) || '')}" title="${esc(title)}">
           <span class="rkb-title">${esc(title)}</span>
           <span class="rkb-meta"><span class="rkb-st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>
           ${asg ? `<span class="rkb-asg">${esc(asg)}</span>` : ''}
+          ${run}
           ${ago ? `<span>${esc(ago)}</span>` : ''}</span></button>`;
       }).join('');
       const more = g.all.length > tasks.length
@@ -7362,6 +7461,7 @@ function renderRailKanban() {
   const foot = $('#rkb-foot-text');
   if (foot) foot.textContent = KB.error || (KB.board
     ? `${total} 张任务 · 每 5 秒同步 · 点卡片打开详情` : '等待数据');
+  kbRunWatch(); // 运行中的卡在缩略视图里也要走表；没有可见节点会自停
 }
 
 /* ---- 任务详情抽屉 ---- */
@@ -7403,10 +7503,68 @@ function kbdRow(label, value, time) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   return `<li class="kbd-row">${time ? `<time>${esc(time)}</time>` : ''}<b>${esc(label)}</b> ${esc(clip(text, 800))}</li>`;
 }
+/**
+ * 运行中的卡片：点开抽屉最上方那块「profile 工作进度」。
+ * 只读 task / runs / events 里已有的字段，不打额外接口 —— 卡片点开就能看到
+ * 谁在跑（profile）、跑了多久、预算还剩多少、最近一步做了什么、这个 profile
+ * 名下还有哪些卡在跑。秒表由 kbRunWatch 每秒推进，事件驱动的轮询再补文字。
+ */
+function kbRunPanel(t, d) {
+  if (String((t && t.status) || '') !== 'running') return '';
+  const start = kbRunStart(t);
+  if (!start) return '';
+  const limit = kbRunLimit(t);
+  const elapsed = kbRunElapsed(start);
+  const pct = kbRunPct(elapsed, limit).toFixed(1);
+  const runs = Array.isArray(d && d.runs) ? d.runs : [];
+  // 当前这次运行 = 状态还是 running 的最后一条；CLI 没给就退到最近一条
+  const cur = runs.filter((r) => String((r && r.status) || '') === 'running').pop()
+    || runs[runs.length - 1] || {};
+  // profile 以 run.profile 为准（真正被拉起的 worker），没跑过 worker 时退回受让人
+  const profile = String(cur.profile || t.assignee || '').trim();
+  const facts = [];
+  if (limit) facts.push(`上限 ${kbDur(limit)}`);
+  const pg = t.progress;
+  if (pg && Number(pg.total)) facts.push(`子任务 ${Number(pg.done) || 0}/${Number(pg.total)}`);
+  const fails = Number(t.consecutive_failures) || 0;
+  if (fails > 0) facts.push(`连续失败 ${fails} 次`);
+  if (t.workspace_kind) facts.push(`工作区 ${String(t.workspace_kind)}`);
+  const ev = (Array.isArray(d && d.events) && d.events.length) ? d.events[d.events.length - 1] : null;
+  const evText = ev
+    ? [
+      String(ev.kind || 'event'),
+      ev.payload ? clip(typeof ev.payload === 'string' ? ev.payload : JSON.stringify(ev.payload), 160) : '',
+      ev.created_at ? kbAgo(ev.created_at) : '',
+    ].filter(Boolean).map((x) => esc(x)).join(' · ')
+    : '';
+  const summary = String(t.latest_summary || '').trim();
+  const sibs = kbRunSiblings(t);
+  const hot = limit && elapsed / limit >= 0.85;
+  return `<div class="kbd-prog${hot ? ' is-hot' : ''}" data-kb-run="${start}" data-kb-run-max="${limit}">
+    <div class="kbd-prog-head">
+      <span class="kbd-prog-pulse" aria-hidden="true"></span>
+      <span class="kbd-prog-who">${profile ? `<b>${esc(profile)}</b> 的工作进度` : '正在执行'}</span>
+      ${cur.id ? `<span class="kbd-prog-run">运行 #${esc(String(cur.id))}</span>` : ''}
+      <span class="kbd-prog-clock kb-run-txt">${esc(kbRunClockText(elapsed, limit))}</span>
+    </div>
+    ${limit ? `<div class="kbd-prog-bar kb-run-bar"><i style="width:${pct}%"></i></div>` : ''}
+    ${facts.length ? `<div class="kbd-prog-facts">${facts.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
+    ${evText ? `<div class="kbd-prog-now"><b>最近活动</b>${evText}</div>` : ''}
+    ${summary ? `<div class="kbd-prog-now"><b>最新回报</b>${esc(clip(summary, 300))}</div>` : ''}
+    ${sibs.length ? `<div class="kbd-prog-sibs">同 profile 还在跑 ${sibs.length} 张：
+      ${sibs.map((x) => `<button class="kbd-link" type="button" data-kb-task="${esc(x.id)}">${esc(clip(String(x.title || x.id), 26))}</button>`).join('')}
+    </div>` : ''}
+  </div>`;
+}
+const kbDrafts = {};
 function renderKanbanDetail(d) {
   const body = $('#kb-drawer-body');
   if (!body) return;
   const t = d.task || {};
+  // 抽屉会随看板事件整体重渲染：先把手打了一半的评论存下来，渲染后填回，
+  // 否则盯着运行进度时输入框会被一次同步清空。
+  const draftEl = $('#kbd-comment-input');
+  if (draftEl && t.id) kbDrafts[String(t.id)] = draftEl.value;
   const meta = [];
   // 与卡片一致：显示归组后的中文状态，CLI 原值留在 title 里，免得同一个 triage
   // 在卡片上叫「收集箱」、在抽屉里叫「triage」
@@ -7526,6 +7684,7 @@ function renderKanbanDetail(d) {
     <div class="kbd-id">${esc(t.id || '')}</div>
     <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
     <div class="kbd-meta">${meta.join('')}</div>
+    ${kbRunPanel(t, d)}
     ${estimateAct}
     ${specifyAct}
     ${decomposeAct}
@@ -7560,6 +7719,12 @@ function renderKanbanDetail(d) {
     if (sel.setOptions) sel.setOptions(items, cur ? '取消指派（留空）' : '未指派 · 选择 profile');
     if (cur) sel.value = cur;
   }
+  // 草稿填回（只在重渲染之间保命，发送成功后由提交处清掉）
+  const draftBox = $('#kbd-comment-input');
+  const draft = kbDrafts[String(t.id || '')];
+  if (draftBox && draft) draftBox.value = draft;
+  // running 才需要秒表；渲染完立刻推一次，避免首帧停在模板里的 0:00
+  if (String(t.status || '') === 'running') kbRunWatch();
 }
 /**
  * 拆解此任务（抽屉里的 ⚗ 按钮）。
@@ -7792,6 +7957,10 @@ function kbAddComment(taskId) {
           return;
         }
         toast('评论已发布', 1600);
+        // 先清空输入框再重读：否则 renderKanbanDetail 会把刚发出去的内容又当草稿存回来
+        const sent = $('#kbd-comment-input');
+        if (sent) sent.value = '';
+        delete kbDrafts[String(id)]; // 发出去了就不再当草稿保留
         await openKanbanTask(id, true); // 重读详情，评论列表就地刷新
       } catch (e) {
         toast('评论失败：' + ((e && e.message) || '未知错误'), 3000);

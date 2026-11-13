@@ -140,7 +140,10 @@
         comments: KB_COMMENTS.filter((c) => c.task_id === taskId),
         events: KB_EVENTS.filter((e) => e.task_id === taskId),
         attachments: [], links: { parents: [], children: [] },
-        runs: t.status === 'running' ? [{ id: 1, status: 'running', outcome: '', error: '', started_at: t.started_at }] : [],
+        runs: t.status === 'running'
+          ? [{ id: 1, task_id: t.id, profile: t.assignee, status: 'running', outcome: '', error: '',
+            started_at: t.current_run_started_at || t.started_at, max_runtime_seconds: t.max_runtime_seconds || 0 }]
+          : [],
       };
     },
     async kanbanCreateTask(input = {}) {
@@ -441,7 +444,7 @@
 
   /* ---- Kanban Demo 数据 ---- */
   const now = Math.floor(Date.now() / 1000);
-  let KB_SEQ = 6, KB_EVT = 42;
+  let KB_SEQ = 7, KB_EVT = 42;
   // 编排模式：三档是两个布尔的派生值，Demo 与真实语义一致（不单独存「模式」）
   const KB_MODE_LIST = [
     { id: 'auto', label: '全自动', dispatch: true, decompose: true, needsRestart: false,
@@ -503,7 +506,8 @@
     {
       id: 't_demo04', title: '重写轨道栏图标的命中区域', body: '图标栏按钮 36px，但视觉 16px，边缘点击丢失。扩大 padding 并保留视觉尺寸。',
       status: 'running', priority: 1, assignee: 'writer', tenant: 'cli', created_at: now - 3600,
-      started_at: now - 600, completed_at: 0, latest_summary: '正在调整 rail 按钮的热区', result: '',
+      started_at: now - 600, current_run_started_at: now - 600, max_runtime_seconds: 900,
+      completed_at: 0, latest_summary: '正在调整 rail 按钮的热区', result: '',
       comment_count: 0, progress: { done: 1, total: 3 }, warnings: { count: 0 }, session_id: '', workspace_kind: 'worktree',
     },
     {
@@ -519,6 +523,14 @@
       latest_summary: '报告已写入 docs/contrast.md', result: '全部文本色 ≥ 4.5:1，装饰色 ≥ 3:1，达标。',
       comment_count: 0, progress: null, warnings: { count: 0 }, session_id: '', workspace_kind: '',
     },
+    // 第二张同 profile 的运行中卡：让「同 profile 还在跑」那行在 Demo 里也有内容
+    {
+      id: 't_demo07', title: '给设置页补上快捷键冲突提示', body: '自定义键位与系统快捷键冲突时，保存前先提示并给出可选替代。',
+      status: 'running', priority: 2, assignee: 'writer', tenant: '', created_at: now - 2400,
+      started_at: now - 240, current_run_started_at: now - 240, max_runtime_seconds: 900,
+      completed_at: 0, latest_summary: '正在梳理现有键位表', result: '',
+      comment_count: 0, progress: { done: 0, total: 4 }, warnings: { count: 0 }, session_id: '', workspace_kind: 'scratch',
+    },
   ];
   const KB_COMMENTS = [
     { id: 1, task_id: 't_demo01', author: 'user', body: '优先处理关于导出的反馈。', created_at: now - 80000 },
@@ -532,5 +544,7 @@
     { id: 3, task_id: 't_demo04', run_id: 9, kind: 'run_started', payload: 'worker=writer', created_at: now - 600 },
     { id: 4, task_id: 't_demo05', run_id: 0, kind: 'blocked', payload: '需要人工复现打包产物', created_at: now - 8600 },
     { id: 5, task_id: 't_demo06', run_id: 3, kind: 'completed', payload: 'exit 0', created_at: now - 570000 },
+    { id: 6, task_id: 't_demo07', run_id: 12, kind: 'run_started', payload: 'worker=writer', created_at: now - 240 },
+    { id: 7, task_id: 't_demo07', run_id: 12, kind: 'step', payload: '扫描 keymap 表 18 处绑定', created_at: now - 90 },
   ];
 })();

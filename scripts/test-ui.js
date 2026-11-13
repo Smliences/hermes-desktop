@@ -447,6 +447,103 @@ let CHROME_BIN = null;
       && s12h.rail === railBefore12, JSON.stringify(s12h));
   await cdp.ev(`(() => { document.documentElement.setAttribute('data-theme', 'light'); setRailTab('preview'); toggleRail(false); return 1; })()`);
 
+  /* S13 运行中卡片：卡面秒表 + 抽屉里的 profile 工作进度
+     不依赖前面步骤留下的 Demo 状态（那张 running 卡可能已被拖走），这里自带夹具：
+     卡面用 KB.board 里的任务，抽屉用一次性的 kanbanTask 桩，断言只针对渲染逻辑。 */
+  console.log('\nS13 运行中的 profile 工作进度');
+  await cdp.ev(`(() => {
+    closeKanbanDrawer(); showKanban(true);
+    const now = Math.floor(Date.now() / 1000);
+    const t = (KB.board.columns || []).flatMap((c) => c.tasks || []).find((x) => x.id === 't_demo07')
+      || { id: 't_demo07', title: '给设置页补上快捷键冲突提示' };
+    Object.assign(t, { status: 'running', assignee: 'writer', started_at: now - 300,
+      current_run_started_at: now - 300, max_runtime_seconds: 900, progress: { done: 1, total: 4 } });
+    if (!(KB.board.columns || []).some((c) => (c.tasks || []).includes(t))) {
+      const col = (KB.board.columns || []).find((c) => c.name === 'running');
+      if (col) col.tasks = (col.tasks || []).concat([t]);
+    }
+    renderKanban();
+    return 1;
+  })()`);
+  await sleep(300);
+  const s13a = await cdp.ev(`(() => {
+    const card = document.querySelector('.kb-card[data-kb-task="t_demo07"]');
+    const run = card && card.querySelector('.kb-run');
+    return { has: !!card, run: !!run,
+      text: run ? run.querySelector('.kb-run-txt').textContent.trim() : '',
+      bar: run ? parseFloat(run.querySelector('.kb-run-bar > i').style.width) : 0,
+      hot: run ? run.classList.contains('is-hot') : null };
+  })()`);
+  ok('运行中的卡片带会走的秒表与预算条',
+    s13a.has && s13a.run && /^◷ \d+:\d\d \/ \d+:\d\d$/.test(s13a.text)
+      && s13a.bar > 0 && s13a.bar <= 100 && s13a.hot === false, JSON.stringify(s13a));
+
+  const s13b = await cdp.ev(`(async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const task = { id: 't_demo07', title: '给设置页补上快捷键冲突提示', body: '', status: 'running',
+      priority: 2, assignee: 'writer', tenant: '', created_at: now - 2400, started_at: now - 300,
+      current_run_started_at: now - 300, max_runtime_seconds: 900, completed_at: 0,
+      latest_summary: '正在梳理现有键位表', result: '', comment_count: 0,
+      progress: { done: 1, total: 4 }, warnings: { count: 0 }, session_id: '', workspace_kind: 'scratch' };
+    let taskCalls = 0, workerCalls = 0;
+    const origT = __mockAPI.kanbanTask, origW = __mockAPI.kanbanActiveWorkers;
+    __mockAPI.kanbanTask = async () => {
+      taskCalls += 1;
+      return { ok: true, task, comments: [], attachments: [], links: { parents: [], children: [] },
+        events: [{ id: 7, task_id: task.id, run_id: 12, kind: 'step', payload: '扫描 keymap 表 18 处绑定', created_at: now - 90 }],
+        runs: [{ id: 12, task_id: task.id, profile: 'writer', status: 'running', started_at: now - 300, max_runtime_seconds: 900 }] };
+    };
+    __mockAPI.kanbanActiveWorkers = async (...a) => { workerCalls += 1; return origW.apply(__mockAPI, a); };
+    await openKanbanTask('t_demo07');
+    __mockAPI.kanbanTask = origT; __mockAPI.kanbanActiveWorkers = origW;
+    const p = document.querySelector('#kb-drawer-body .kbd-prog');
+    return { taskCalls, workerCalls, panel: !!p,
+      who: p ? p.querySelector('.kbd-prog-who').textContent.trim() : '',
+      run: p ? (p.querySelector('.kbd-prog-run') || {}).textContent || '' : '',
+      clock: p ? p.querySelector('.kb-run-txt').textContent.trim() : '',
+      bar: p ? parseFloat(p.querySelector('.kbd-prog-bar > i').style.width) : 0,
+      facts: p ? p.querySelector('.kbd-prog-facts').textContent.trim() : '',
+      now: p ? (p.querySelector('.kbd-prog-now') || {}).textContent || '' : '',
+      sibs: p ? document.querySelectorAll('.kbd-prog-sibs [data-kb-task]').length : 0 };
+  })()`);
+  ok('抽屉顶部给出 profile 工作进度：谁在跑 / 运行号 / 耗时预算 / 子任务 / 最近活动',
+    s13b.panel && s13b.who.includes('writer') && /运行 #/.test(s13b.run)
+      && /^◷ \d+:\d\d \/ \d+:\d\d$/.test(s13b.clock) && s13b.bar > 0 && s13b.bar <= 100
+      && s13b.facts.includes('子任务') && s13b.now.includes('最近活动'), JSON.stringify(s13b));
+  ok('进度只读一次任务详情，不再额外拉 worker 列表',
+    s13b.taskCalls === 1 && s13b.workerCalls === 0, JSON.stringify({ t: s13b.taskCalls, w: s13b.workerCalls }));
+
+  const s13c = await cdp.ev(`(() => {
+    kbRunTick();
+    return { timer: !!kbRunTimer, nodes: document.querySelectorAll('[data-kb-run]').length };
+  })()`);
+  ok('有可见进度节点时秒表在跑', s13c.timer && s13c.nodes > 0, JSON.stringify(s13c));
+
+  const s13d = await cdp.ev(`(() => {
+    closeKanbanDrawer();
+    closeKanbanPage();
+    kbRunTick();
+    return { timer: !!kbRunTimer,
+      visible: [...document.querySelectorAll('[data-kb-run]')].filter((el) => el.getClientRects().length).length };
+  })()`);
+  ok('抽屉与看板都收起后秒表自停（不留空转定时器）',
+    !s13d.timer && s13d.visible === 0, JSON.stringify(s13d));
+
+  const s13e = await cdp.ev(`(() => {
+    showKanban(true);
+    const now = Math.floor(Date.now() / 1000);
+    const t = (KB.board.columns || []).flatMap((c) => c.tasks || []).find((x) => x.id === 't_demo07');
+    if (!t) return { found: false };
+    Object.assign(t, { status: 'running', current_run_started_at: now - 870, max_runtime_seconds: 900 });
+    renderKanban();
+    const run = document.querySelector('.kb-card[data-kb-task="t_demo07"] .kb-run');
+    return { found: true, hot: !!run && run.classList.contains('is-hot'),
+      bar: run ? parseFloat(run.querySelector('.kb-run-bar > i').style.width) : 0 };
+  })()`);
+  ok('预算用掉 85% 转预警态，进度条钳在 100% 内',
+    s13e.found && s13e.hot && s13e.bar > 85 && s13e.bar <= 100, JSON.stringify(s13e));
+  await cdp.ev(`(() => { closeKanbanPage(); closeKanbanDrawer(); return 1; })()`);
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);

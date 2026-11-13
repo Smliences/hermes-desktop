@@ -3783,6 +3783,98 @@ t('外层定版几何不动，命令 / 快捷键文案去终端化', () => {
   assert.ok(appSrc.includes("label: '切换右侧面板'"), '快捷键标签仍写终端');
 });
 
+section('3al. 运行中卡片：profile 工作进度、本地秒表、预算预警与零额外请求');
+const runApp = appSrc.slice(appSrc.indexOf('/* ---- 运行进度：running 卡片'), appSrc.indexOf('function kbSetLive('));
+const runPanel = appSrc.slice(appSrc.indexOf('function kbRunPanel('), appSrc.indexOf('const kbDrafts = {};'));
+const runCard = appSrc.slice(appSrc.indexOf('function kbCardHtml('), appSrc.indexOf('/** 按归组摊平当前看板'));
+const runCss = cssSrc.slice(cssSrc.indexOf('/* 运行中卡片的秒表'), cssSrc.indexOf('.kbd-danger {'));
+const progCss = runCss;
+const rkbRunCss = cssSrc.slice(cssSrc.indexOf('.rkb-run {'), cssSrc.indexOf('.rkb-none, .rkb-empty'));
+
+t('计时口径只有一份：秒 / 毫秒兼容，卡片与抽屉共用同一套格式', () => {
+  for (const fn of ['function kbRunStart(', 'function kbRunLimit(', 'function kbDur(',
+    'function kbRunPct(', 'function kbRunClockText(']) {
+    assert.ok(runApp.includes(fn), '缺少计时函数 ' + fn);
+  }
+  assert.ok(runApp.includes('t.current_run_started_at || t.started_at'),
+    '运行起点未优先用 current_run_started_at');
+  assert.ok(runApp.includes('n < 1e12 ? Math.round(n) : Math.round(n / 1000)'),
+    '秒 / 毫秒时间戳未兼容，CLI 换单位后秒表会差 1000 倍');
+  assert.ok(runApp.includes("const p2 = (n) => String(n).padStart(2, '0')"),
+    '时长格式未补零，会出现 3:1 这种读不出来的数');
+  assert.ok(runApp.includes('function kbRunStrip(') && runCard.includes('kbRunStrip(t)')
+    && runPanel.includes('kbRunClockText(elapsed, limit)'),
+    '卡片与抽屉各写了一份时长格式');
+  assert.ok(runApp.includes('kbRunPct(elapsed, limit)') && runPanel.includes('kbRunPct(elapsed, limit)'),
+    '进度条百分比未复用同一个钳制函数');
+});
+
+t('每秒推进一个 tick：不可见即跳过，没有可见节点时自停', () => {
+  assert.ok(runApp.includes("document.querySelectorAll('[data-kb-run]')"), '秒表没有可推进的锚点');
+  assert.ok(runApp.includes('.filter((el) => el.getClientRects().length > 0)'),
+    'rail 收起 / 整页切走后仍在空转打 DOM');
+  assert.ok(runApp.includes('clearInterval(kbRunTimer); kbRunTimer = null;'),
+    '没有可见节点时未自停，一个 1s 定时器会跟到进程退出');
+  assert.ok(runApp.includes('setInterval(kbRunTick, 1000)'), '秒表不是 1s 粒度');
+  assert.ok(runApp.includes("el.classList.toggle('is-hot'") && runApp.includes('elapsed / limit >= 0.85'),
+    '预算用到 85% 没有预警态，超时前看不出来');
+  assert.ok(runApp.includes('Math.min(100, Math.max(1.5, (elapsed / limit) * 100))'),
+    '进度条未钳制，超时后宽度会溢出轨道');
+  assert.ok(appSrc.includes('if (String(t.status || \'\') === \'running\') kbRunWatch();'),
+    '抽屉打开 running 任务时没有启动秒表');
+  assert.ok(appSrc.includes('kbRunWatch(); // 运行中的卡在缩略视图里也要走表'),
+    'rail 速览里的秒表不会动');
+});
+
+t('profile 视角只读既有字段，不新开接口、不写数据', () => {
+  assert.ok(runPanel.includes("String((t && t.status) || '') !== 'running'") && runPanel.includes("return '';"),
+    '非 running 任务也会渲染进度面板');
+  assert.ok(runPanel.includes("runs.filter((r) => String((r && r.status) || '') === 'running').pop()"),
+    '没定位到当前这次运行');
+  assert.ok(runPanel.includes('String(cur.profile || t.assignee || \'\')'),
+    'profile 未优先取运行记录里的 worker，退回受让人的兜底缺失');
+  assert.ok(runPanel.includes('kbRunSiblings(t)') && runApp.includes('out.slice(0, 3)'),
+    '同 profile 其它在跑的任务没有入口 / 未限条数');
+  assert.ok(runApp.includes('(KB.board && Array.isArray(KB.board.columns))'),
+    '同 profile 任务未复用已加载的看板数据');
+  for (const bad of ['kanbanTask(', 'kanbanActiveWorkers(', 'kanbanBoard(', 'fetch(']) {
+    assert.ok(!runPanel.includes(bad), '进度面板自己打了请求（' + bad + '），打开抽屉会多一次往返');
+  }
+  assert.ok(!/kanban(SetStatus|Reassign|Dispatch|AddComment)/.test(runPanel),
+    '进度面板不得写任何看板数据');
+});
+
+t('卡片 / 抽屉 / 缩略图三处都给出运行时长，样式全走 token', () => {
+  assert.ok(runCard.includes("st === 'running' ? kbRunStrip(t) : ''"), '运行中的卡片没有秒表');
+  assert.ok(runCard.includes('${runHtml}'), '秒表没插进卡片模板');
+  assert.ok(rkbApp.includes("const runStart = st === 'running' ? kbRunStart(t) : 0"),
+    'rail 缩略卡没有运行时长');
+  for (const c of ['.kb-run {', '.kb-run-bar > i', '.kb-run.is-hot', '.kb-run.is-hot .kb-run-bar > i']) {
+    assert.ok(runCss.includes(c), '缺少卡片进度样式 ' + c);
+  }
+  for (const c of ['.kbd-prog {', '.kbd-prog.is-hot', '.kbd-prog-pulse', '.kbd-prog-clock',
+    '.kbd-prog-bar > i', '.kbd-prog-facts', '.kbd-prog-now', '.kbd-prog-sibs']) {
+    assert.ok(progCss.includes(c), '缺少抽屉进度样式 ' + c);
+  }
+  assert.ok(rkbRunCss.includes('.rkb-run {'), '缺少缩略卡秒表样式');
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(runCss + progCss + rkbRunCss),
+    '运行进度出现硬编码色值，深色主题会失配');
+  assert.ok((runCss + progCss).includes('color-mix('), '状态底色必须走主题色混合');
+  assert.ok(progCss.includes('prefers-reduced-motion') && runCss.includes('prefers-reduced-motion'),
+    '秒表动效未降级');
+  assert.ok(runCss.includes('font-variant-numeric: tabular-nums'),
+    '等宽数字缺失，秒表每跳一格宽度会抖');
+});
+
+t('重渲染不再吞掉评论草稿', () => {
+  assert.ok(appSrc.includes('const kbDrafts = {};'), '缺少草稿暂存');
+  assert.ok(appSrc.includes('if (draftEl && t.id) kbDrafts[String(t.id)] = draftEl.value;'),
+    '重渲染前没有保存草稿');
+  assert.ok(appSrc.includes('if (draftBox && draft) draftBox.value = draft;'),
+    '重渲染后没有填回草稿');
+  assert.ok(appSrc.includes('delete kbDrafts[String(id)];'), '评论发出后草稿没有清掉');
+});
+
 console.log('\n' + '─'.repeat(56));
 console.log(`契约与静态检查：${pass} 通过 / ${fail} 失败`);
 if (fail) process.exitCode = 1;
