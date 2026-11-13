@@ -203,7 +203,7 @@ t('上下文只留细环：无进度轨，无用量整组收起', () => {
 });
 t('超宽代码块的可横滚提示已完整接线', () => {
   assert.ok(rendererAll.includes('md-code-hint'), 'mdCodeBlock 缺少提示节点');
-  assert.ok(/function syncCodeScrollHints\s*\(/.test(appSrc), 'syncCodeScrollHints 未定义');
+  assert.ok(/function syncCodeScrollHints\s*\(/.test(rendererAll), 'syncCodeScrollHints 未定义');
   const body = srcOf('function renderChat()', 'function msgActionBar(');
   assert.ok(body.includes('syncCodeScrollHints()'), 'renderChat 未调用超宽检测');
   assert.ok(cssSrc.includes('.md-code.scroll-x .md-code-hint'), 'CSS 缺少 scroll-x 显示规则');
@@ -280,24 +280,24 @@ t('历史里的 failed_turn 先于普通助手消息匹配，不再显示占位�
 });
 t('失败卡展示真实原因并给出切换模型 / 重试 / 原始错误入口', () => {
   for (const fn of ['parseFailure', 'failureHint', 'failureHTML', 'retryFailedTurn']) {
-    assert.ok(appSrc.includes('function ' + fn + '('), '缺少 ' + fn);
+    assert.ok(rendererAll.includes('function ' + fn + '('), '缺少 ' + fn);
   }
-  assert.ok(appSrc.includes('本轮未获得模型回复'), '缺少中文标题');
-  assert.ok(appSrc.includes('不可重试'), '未说明 retryable=false 的后果');
+  assert.ok(rendererAll.includes('本轮未获得模型回复'), '缺少中文标题');
+  assert.ok(rendererAll.includes('不可重试'), '未说明 retryable=false 的后果');
   for (const a of ['model', 'retry', 'detail']) {
-    assert.ok(appSrc.includes('data-err-act="' + a + '"'), '缺少按钮 ' + a);
-    assert.ok(appSrc.includes("kind === '" + a + "'"), '事件委托未处理 ' + a);
+    assert.ok(rendererAll.includes('data-err-act="' + a + '"'), '缺少按钮 ' + a);
+    assert.ok(rendererAll.includes("kind === '" + a + "'"), '事件委托未处理 ' + a);
   }
-  assert.ok(appSrc.includes("kind === 'model') openModelPicker()"), '切换模型未接模型选择器');
-  assert.ok(appSrc.includes('bad === state.config.model'), '重试前应拦住仍不可用的旧模型');
-  assert.ok(appSrc.includes('sameModel'), '应用当前模型与失效模型相同时应明确警示「新建会话也会失败」');
-  assert.ok(appSrc.includes('failureHint(f, sameModel)'), '同模型时不得再建议「新建一个会话」，避免自相矛盾');
+  assert.ok(rendererAll.includes("kind === 'model') openModelPicker()"), '切换模型未接模型选择器');
+  assert.ok(rendererAll.includes('bad === state.config.model'), '重试前应拦住仍不可用的旧模型');
+  assert.ok(rendererAll.includes('sameModel'), '应用当前模型与失效模型相同时应明确警示「新建会话也会失败」');
+  assert.ok(rendererAll.includes('failureHint(f, sameModel)'), '同模型时不得再建议「新建一个会话」，避免自相矛盾');
   assert.ok(cssSrc.includes('.err-hint.err-same'), '缺少同模型警示样式');
 });
 t('实时错误与 WS 错误也走结构化卡，而不是只剩一行英文', () => {
-  assert.ok(appSrc.includes("parseFailure('', String(evt.error))"), 'result 错误未结构化');
-  assert.ok(appSrc.includes('failure: parseFailure(\'\', message)'), 'onError 未结构化');
-  assert.ok(appSrc.includes('failure: f'), 'renderItem 未区分结构化错误卡');
+  assert.ok(rendererAll.includes("parseFailure('', String(evt.error))"), 'result 错误未结构化');
+  assert.ok(rendererAll.includes('failure: parseFailure(\'\', message)'), 'onError 未结构化');
+  assert.ok(rendererAll.includes('failure: f'), 'renderItem 未区分结构化错误卡');
 });
 t('失败卡样式沿用双主题 token，长文本可换行', () => {
   for (const c of ['err-card', 'err-head', 'err-msg', 'err-chip', 'err-hint', 'err-actions', 'err-btn', 'err-raw']) {
@@ -602,7 +602,7 @@ t('附件 UI：多文件、可移除、空态不占布局，且发送时随 payl
   assert.ok(/attachments: state\.attachments\.length \? state\.attachments\.map\(\(a\) => a\.path\) : undefined/.test(appSrc),
     '发送时没有把附件路径交给主进程');
   assert.ok(/state\.attachments = \[\]; renderAttach\(\);/.test(appSrc), '发送后未清空附件');
-  assert.ok(appSrc.includes("if (evt.type === 'notice')"), '附件失败提示没有落点');
+  assert.ok(rendererAll.includes("if (evt.type === 'notice')"), '附件失败提示没有落点');
 });
 
 t('主进程与服务层：只接受绝对路径、按类型选 RPC、提交前附加、失败不吞回合', () => {
@@ -713,7 +713,7 @@ t('消息信息行紧跟消息在文档流内，用户消息右对齐', () => {
 t('折叠态思考条按内容收窄，不横贯整列', () => {
   assert.ok(/\.think-box:not\(\[open\]\) \{ width: fit-content/.test(cssSrc), '折叠态思考条仍占满整列宽度');
   assert.ok(/\.think-box \{[^}]*max-width: 100%/.test(cssSrc), '思考条缺少宽度上限');
-  assert.ok(htmlSrc.length > 0 && appSrc.includes('class="think-box"'), '思考条标记与样式不同步');
+  assert.ok(htmlSrc.length > 0 && rendererAll.includes('class="think-box"'), '思考条标记与样式不同步');
 });
 t('最后一条消息不贴输入框（#chat 底部内边距）', () => {
   const i = cssSrc.indexOf('#chat { max-width');
@@ -1735,18 +1735,18 @@ t('message.complete 的 reasoning 兜底在 _finish 之前发出', () => {
   assert.ok(finishAt > emitAt, '兜底推理必须在 _finish 之前发出，否则被 finished 拦掉');
 });
 t('渲染层：等待提示不建消息块，颜文字不进任何 UI', () => {
-  assert.ok(/evt\.type === 'thinking_wait'[\s\S]{0,600}providerWaitText\(evt\.text\)/.test(appSrc),
+  assert.ok(/evt\.type === 'thinking_wait'[\s\S]{0,600}providerWaitText\(evt\.text\)/.test(rendererAll),
     'thinking_wait 未经 providerWaitText 白名单过滤');
-  assert.ok(/evt\.type === 'thinking_wait'[\s\S]{0,700}\} else if \(evt\.type === 'thinking'\)/.test(appSrc),
+  assert.ok(/evt\.type === 'thinking_wait'[\s\S]{0,700}\} else if \(evt\.type === 'thinking'\)/.test(rendererAll),
     'thinking_wait 分支不得 push 任何 item');
-  assert.ok(/RE_PROVIDER_WAIT = \/\^\(\?:⏳\|⚠\|↻\|⚙\)/.test(appSrc), 'provider 等待白名单正则缺失');
+  assert.ok(/RE_PROVIDER_WAIT = \/\^\(\?:⏳\|⚠\|↻\|⚙\)/.test(rendererAll), 'provider 等待白名单正则缺失');
 });
 t('渲染层：「流式思考」开关真的生效，推理块按回合隔离', () => {
-  assert.ok(/evt\.type === 'thinking'[\s\S]{0,300}if \(!streamThinkOn\(\)\) return/.test(appSrc),
+  assert.ok(/evt\.type === 'thinking'[\s\S]{0,300}if \(!streamThinkOn\(\)\) return/.test(rendererAll),
     'streamThink 开关没有参与渲染判断（此前是纯摆设）');
-  assert.ok(appSrc.includes('function reasoningItemOf(') && appSrc.includes('function turnInsertIndex('),
+  assert.ok(rendererAll.includes('function reasoningItemOf(') && rendererAll.includes('function turnInsertIndex('),
     '缺少按回合查找 / 插入推理块的辅助函数');
-  assert.ok(/if \(evt\.final\) item\.text = evt\.text; else item\.text \+= evt\.text/.test(appSrc),
+  assert.ok(/if \(evt\.final\) item\.text = evt\.text; else item\.text \+= evt\.text/.test(rendererAll),
     'final 快照必须是替换语义');
 });
 t('上游思考开关：只读状态 + 写 CLI 配置必须由二次确认卡触发', () => {
@@ -1990,9 +1990,9 @@ t('小窗与主窗口共用同一个 chat tab，事件双投且不串页签', ()
 });
 
 t('主窗口节流上报会话上下文，小窗据此渲染最近对话', () => {
-  assert.ok(/function publishOrbContext\(\)/.test(appSrc), '渲染层缺少上下文上报');
-  assert.ok(/api\.orbContext\(\{/.test(appSrc) && /tabId: tab\.id/.test(appSrc), '上报缺少 tabId');
-  assert.ok(/\[\.\.\.\(|slice\(-14\)/.test(appSrc), '上报应只带最近十几条，不要把整段会话塞进 IPC');
+  assert.ok(/function publishOrbContext\(\)/.test(rendererAll), '渲染层缺少上下文上报');
+  assert.ok(/api\.orbContext\(\{/.test(rendererAll) && /tabId: tab\.id/.test(rendererAll), '上报缺少 tabId');
+  assert.ok(/\[\.\.\.\(|slice\(-14\)/.test(rendererAll), '上报应只带最近十几条，不要把整段会话塞进 IPC');
   assert.ok(/ipcMain\.on\('orb:context'/.test(mainSrc), '主进程未接收上下文');
   assert.ok(/event\.sender !== mainWindow\.webContents/.test(mainSrc), '上下文未校验来源');
   assert.ok(/safeSend\('orb:user-message'/.test(mainSrc), '小窗发的消息未回灌主窗口');
@@ -2650,9 +2650,17 @@ section('3ad. 看板拖拽：投放区几何恒定、幽灵不挡指针、边缘
 /** 从 app.js 里按名字截出整个函数源码（括号配平），再丢进 vm 真跑。
  *  静态正则查不出「幽灵盖住指针」「滚动方向写反」这类数值问题。 */
 function grabFn(src, name) {
-  // 同时支持 `function name(...) {}` 与 `const name = (...) => {}` 两种写法
-  let i = src.indexOf('function ' + name + '(');
-  if (i < 0) i = src.indexOf('const ' + name + ' = ');
+  // 同时支持 `function name(...) {}` 与 `const name = (...) => {}` 两种写法。
+  // 拆分后函数可能已搬进 modules/*.js：先按传入的源找，找不到再遍历渲染层各文件。
+  const findIn = (s) => {
+    let i = s.indexOf('function ' + name + '(');
+    if (i < 0) i = s.indexOf('const ' + name + ' = ');
+    return i;
+  };
+  let i = findIn(src);
+  if (i < 0) {
+    for (const s of slices) { i = findIn(s); if (i >= 0) { src = s; break; } }
+  }
   assert.ok(i >= 0, '找不到函数 ' + name);
   let depth = 0, j = src.indexOf('{', i);
   for (; j < src.length; j++) {
@@ -2808,14 +2816,14 @@ t('内联指令菜单：/ 起手即弹，Enter 执行，无匹配不误发', () 
 });
 
 t('新会话落地页：时段问候 + 快捷开始（全真实入口）', () => {
-  assert.ok(appSrc.includes('function renderLanding()'), '缺少 renderLanding');
-  assert.ok(appSrc.includes("if (!$('#landing').hidden) renderLanding();"), 'renderChat 未在落地页可见时渲染问候');
-  assert.ok(appSrc.includes('function landingGreet()'), '缺少时段问候');
+  assert.ok(rendererAll.includes('function renderLanding()'), '缺少 renderLanding');
+  assert.ok(rendererAll.includes("if (!$('#landing').hidden) renderLanding();"), 'renderChat 未在落地页可见时渲染问候');
+  assert.ok(rendererAll.includes('function landingGreet()'), '缺少时段问候');
   for (const key of ['slash', 'kanban', 'model', 'project']) {
-    assert.ok(appSrc.includes(`data-landing="${key}"`), '落地页缺少 chip ' + key);
-    assert.ok(appSrc.includes(`${key}: () =>`), 'LANDING_ACTIONS 缺少动作 ' + key);
+    assert.ok(rendererAll.includes(`data-landing="${key}"`), '落地页缺少 chip ' + key);
+    assert.ok(rendererAll.includes(`${key}: () =>`), 'LANDING_ACTIONS 缺少动作 ' + key);
   }
-  assert.ok(appSrc.includes("e.target.closest('[data-landing]')"), '落地页未做事件委托');
+  assert.ok(rendererAll.includes("e.target.closest('[data-landing]')"), '落地页未做事件委托');
   assert.ok(cssSrc.includes('.landing-greet'), '缺少问候样式');
   assert.ok(cssSrc.includes('.landing-chip'), '缺少快捷 chip 样式');
   assert.ok(cssSrc.includes('.landing-chip:focus-visible'), '快捷 chip 缺少焦点环');
@@ -2890,7 +2898,7 @@ t('消息底部：图标 + 用量 + 时间整行常显（不依赖悬停）', ()
   assert.ok(/width:\s*1[456]px;\s*height:\s*1[456]px/.test(cssSrc.slice(cssSrc.indexOf('.msg-act svg'))),
     '操作图标尺寸偏离 dsh 的 14~16px');
   // 单条用量：实时回合用会话累计差；历史消息 CLI 的 messages.token_count 实测整列 NULL → 按字符估算并标 ≈
-  assert.ok(appSrc.includes('tab.usageBase') && appSrc.includes('last.tokens = nowTotal > base'),
+  assert.ok(rendererAll.includes('tab.usageBase') && rendererAll.includes('last.tokens = nowTotal > base'),
     '实时回合未换算单条用量');
   const est = grabFn(appSrc, 'msgTokens');
   assert.ok(/item\.tokens > 0/.test(est), 'msgTokens 未优先用真实 token');
