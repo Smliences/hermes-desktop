@@ -3618,7 +3618,7 @@ t('箭头常显、默认朝右、展开转正；折叠只切 hidden', () => {
   assert.ok(toolCss.includes('.tool-item.open .tchev svg { transform: rotate(0deg); }'), '展开时箭头没有转正');
   assert.ok(toolCss.includes('.tool-detail.hidden { display: none; }') && toolRender.includes("' hidden'"),
     '折叠没走 card-content 的 hidden 类');
-  assert.ok(toolRender.includes("body.classList.toggle('hidden', !item.open)"), '点开时没切 hidden');
+  assert.ok(toolRender.includes("body.classList.toggle('hidden', !open)"), '点开时没切 hidden');
 });
 
 t('详情按 WB 的三个渲染器分流：编辑走 diff、命令走 stdout、其余铺 JSON', () => {
@@ -3698,6 +3698,23 @@ t('多级下拉：连续调用收成父行，子项缩进 + 竖线 + 小一号�
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(toolCss.slice(toolCss.indexOf('步骤组'))), '步骤组出现硬编码色');
 });
 
+t('自动展开只给跑着的和失败的：成功立刻收起，点过之后听用户的', () => {
+  // 工具行这一层也要同一条规则：父行打开了、子项却全收着，失败的报错还是得再点两下才看得见
+  assert.ok(toolRender.includes("let open = typeof item.open === 'boolean' ? item.open : (running || !!item.isError)"),
+    '工具行的展开没按 running / isError 派生：跑着看不到在干什么，失败看不到错因');
+  assert.ok(!/state: 'running', open: false/.test(appSrc),
+    '工具创建时又写死 open:false，运行中不会自动展开');
+  assert.ok(toolRender.includes('item.open = open;'), '点击没有固化成用户的选择，重绘会被状态派生覆盖');
+  assert.ok(toolRender.includes('let open ='), '展开态必须每帧从状态派生，不能只存一份');
+  const ac = appSrc.slice(appSrc.indexOf('function applyAutoCollapse'), appSrc.indexOf('function copyText'));
+  assert.ok(/i\.state === 'done' && !i\.isError/.test(ac),
+    '回合结束把失败的工具也折起来了，等于把报错藏掉');
+  // 跑着的命令还没有输出：不许写成「运行成功」，也不摆只有一个空状态的盒子
+  assert.ok(appSrc.includes("if (item.state === 'running') return ''"),
+    '跑着的命令详情又在说「运行成功」或摆空盒子');
+  assert.ok(toolRender.includes("detailHTML || (running ? '' :"), '空详情时又塞「暂无」占位');
+});
+
 t('本轮脚注挂在整轮末尾，不在正文与工具之间', () => {
   const asst = appSrc.slice(appSrc.indexOf("} else if (item.kind === 'assistant')"), appSrc.indexOf("} else if (item.kind === 'tool')"));
   assert.ok(!/msgActionBar\(item, false\)`/.test(asst), '脚注又内联回正文下面了');
@@ -3715,7 +3732,7 @@ t('展开走局部切换，键盘可达且不整页重绘', () => {
     && toolRender.includes('aria-expanded='), '工具行键盘不可达');
   assert.ok(toolRender.includes('row.onkeydown') && toolRender.includes("e.key === 'Enter'")
     && toolRender.includes("e.key === ' '"), 'Enter / Space 未展开');
-  assert.ok(toolRender.includes("el.classList.toggle('open', item.open)"), '展开未走局部 class 切换');
+  assert.ok(toolRender.includes("el.classList.toggle('open', open)"), '展开未走局部 class 切换');
   assert.ok(!/const toggle = \(\) => \{[\s\S]{0,260}renderChat\(\)/.test(toolRender),
     '展开又整页重绘，键盘焦点会丢、展开动画也触发不了');
   assert.ok(toolRender.includes('tdh-name') && toolRender.includes('title="${esc(item.name'),

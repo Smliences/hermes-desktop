@@ -290,7 +290,11 @@ function toolDiffHTML(oldText, newText) {
 function toolStdoutHTML(item) {
   const out = item.output == null ? '' : String(item.output);
   const fail = !!item.isError;
+  // 跑着的命令会自动展开（要让人看到这一步在干什么），但此刻还没有任何输出：
+  // 不能写成「运行成功」，也不摆一个只有「执行中…」的空盒子 —— 行上和详情头
+  // 已经各说过一次状态了。详情里就只留那一行头。
   if (!out.trim()) {
+    if (item.state === 'running') return '';
     return `<div class="stdout-content"><span class="exec-status-text${fail ? ' err' : ''}">${fail ? '执行失败' : '运行成功'}</span></div>`;
   }
   return `<div class="stdout-content"><pre class="content${fail ? ' err-text' : ''}">${esc(clip(out, 20000))}</pre></div>`;
@@ -1794,37 +1798,43 @@ function renderItem(item, header = false, sub = false) {
     /* WorkBuddy 的 single-line-tool-header：图标 · 状态词 · 对象 · 次要信息 · 箭头。
        状态词随三态换（读取 / 已读取 / 读取失败），运行中走渐变扫光而不是转圈；
        折叠只切 .card-content 的 hidden，行本身不动画。 */
-    el.className = 'tool-item' + (sub ? ' sub' : '') + (item.open ? ' open' : '');
     const running = item.state === 'running';
     const state = running ? 'running' : item.isError ? 'error' : 'done';
+    /* 自动展开只给「跑着的或失败的」：跑着要能看到在干什么，失败要能直接读到错因；
+       成功的立刻收成一行，不占版面。item.open 只在用户点过之后才有值，那之后就听用户的。 */
+    let open = typeof item.open === 'boolean' ? item.open : (running || !!item.isError);
+    el.className = 'tool-item' + (sub ? ' sub' : '') + (open ? ' open' : '');
     const meta = toolMeta(item.name, item.input, state);
     const dur = item.durationMs ? (item.durationMs / 1000).toFixed(1) + 's' : '';
     const extra = meta.extra
       ? `<span class="tmeta">${meta.extra.text ? esc(meta.extra.text)
         : `<i class="ta">+${meta.extra.add}</i><i class="td">−${meta.extra.del}</i>`}</span>`
       : '';
-    el.innerHTML = `<div class="tool-row collapsible ${state}" role="button" tabindex="0" aria-expanded="${!!item.open}" title="${esc(item.name || '')}">
+    // 详情可能是空串（跑着的命令还没有输出）：那时只留详情头，不塞「暂无」占位
+    const detailHTML = toolDetailHTML(item);
+    el.innerHTML = `<div class="tool-row collapsible ${state}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(item.name || '')}">
         <span class="ticon" aria-hidden="true">${meta.icon}</span>
         <span class="tstate${running ? ' loading-text' : ''}">${esc(meta.label)}</span>
         ${meta.obj ? `<span class="tobj">${esc(meta.obj)}</span>` : ''}
         ${extra}
         <span class="tchev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6.5 4 4 4-4"></path></svg></span></div>
-      <div class="tool-detail card-content${item.open ? '' : ' hidden'}">
+      <div class="tool-detail card-content${open ? '' : ' hidden'}">
         <div class="tool-detail-head">
           <span class="tdh-name">${esc(item.name || '工具')}</span>
           <span class="tdh-state ${state}">${running ? '执行中' : item.isError ? '失败' : '完成'}${dur ? ' · ' + dur : ''}</span>
         </div>
-        ${toolDetailHTML(item) || '<div class="detail-section"><div class="detail-label">详情</div><pre class="detail-content">暂无</pre></div>'}
+        ${detailHTML || (running ? '' : '<div class="detail-section"><div class="detail-label">详情</div><pre class="detail-content">暂无</pre></div>')}
       </div>`;
     // 局部切 class 而不是整页 renderChat：详情是静态 HTML，不需要重绘；
     // 更重要的是键盘展开时焦点能留在这条工具行上。
     const row = el.querySelector('.tool-row');
     const body = el.querySelector('.card-content');
     const toggle = () => {
-      item.open = !item.open;
-      el.classList.toggle('open', item.open);
-      body.classList.toggle('hidden', !item.open);
-      row.setAttribute('aria-expanded', String(item.open));
+      open = !open;
+      item.open = open;       // 点过就固化成用户的选择，之后不再被状态派生改写
+      el.classList.toggle('open', open);
+      body.classList.toggle('hidden', !open);
+      row.setAttribute('aria-expanded', String(open));
     };
     row.onclick = toggle;
     row.onkeydown = (e) => {
@@ -2014,7 +2024,9 @@ function routeEvent(evt, explicitTabId) {
     // 状态行也用人话（「读取 app.js」「执行中… npm test」），比「执行 bash…」好认
     const tm = toolMeta(evt.name, evt.input, 'running');
     const label = tm.obj ? `${tm.label} ${tm.obj}` : tm.label;
-    tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', open: false, ts: Date.now() });
+    // 不给 open：展开与否交给渲染层按状态派生（跑着 / 失败才自动展开，成功收起），
+    // 用户点过之后 item.open 才写成布尔值，此后以用户的选择为准。
+    tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', ts: Date.now() });
     tab.showTyping = true; tab.activity = label;
     if (visible) { renderChat(); setActivity(label); syncActivityBar(); }
     maybeAutoPreview(evt).catch(() => {});
@@ -6484,11 +6496,12 @@ function invalidateTurn(tab) {
   if (state.invalidTurns.size > 200) state.invalidTurns.clear();
 }
 
-/** 回合收尾：按设置自动折叠已完成的工具详情与长思考块。 */
+/** 回合收尾：按设置自动折叠已完成的工具详情与长思考块。
+    失败的留着展开 —— 用户要能直接看到错因，收起来等于把报错藏了。 */
 function applyAutoCollapse(tab) {
   if (!tab || SettingsStore.get('autoCollapse', true) === false) return;
   for (const i of tab.items) {
-    if (i.kind === 'tool' && i.state === 'done') i.open = false;
+    if (i.kind === 'tool' && i.state === 'done' && !i.isError) i.open = false;
     if (i.kind === 'thinking' && (i.text || '').length > 300) i.open = false;
   }
 }
