@@ -584,16 +584,17 @@
       </div>
 
       <!-- 紧凑看板：与整页共用 KB.board 与同一个轮询，不另开一条 REST。
-           400px 里放不下 5 列等分，所以按状态纵向分组；点卡片 / ⤢ 才进完整看板页。 -->
+           400px 里放不下 5 列等分，所以排成「看板切换 + 状态筛选 + 单列密排」：
+           每张卡压成一行（标题 + 状态/时长/受让人），状态筛选只在本地过滤、不发请求。 -->
       <div class="rail-pane" id="kanban-pane" hidden>
         <div class="rkb-bar">
-          <span class="rkb-board" id="rkb-board">当前看板</span>
+          <hm-select id="rkb-board" class="ui-select rkb-board" aria-label="切换看板" placeholder="当前看板"></hm-select>
           <button class="rkb-btn" id="rkb-refresh" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
           <button class="rkb-btn" id="rkb-new" type="button" title="新建任务" aria-label="新建任务">＋</button>
           <button class="rkb-btn" id="rkb-expand" type="button" title="打开完整看板" aria-label="打开完整看板">⤢</button>
         </div>
-        <div class="rkb-summary" id="rkb-summary" aria-label="任务状态概览"></div>
-        <div class="rkb-scroll" id="rkb-scroll"><div id="rkb-groups"></div></div>
+        <div class="rkb-summary" id="rkb-summary" role="group" aria-label="按状态筛选任务"></div>
+        <div class="rkb-scroll" id="rkb-scroll"><div class="rkb-list" id="rkb-groups"></div></div>
         <div class="rkb-foot"><span id="rkb-foot-text">等待数据</span></div>
       </div>
     </aside>

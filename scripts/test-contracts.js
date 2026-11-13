@@ -3758,20 +3758,55 @@ t('紧凑视图只读，写操作一律回完整看板页', () => {
   assert.ok(!/kanban(SetStatus|Reassign|DeleteTask|Dispatch)/.test(rkbApp),
     '紧凑视图不得自己写状态 / 改派 / 派发');
 });
+t('栏头带看板切换：换板走同一条 kanbanLoad，不新增通道', () => {
+  assert.ok(railHtml.includes('<hm-select id="rkb-board"') && !railHtml.includes('<span class="rkb-board"'),
+    '看板名不能只是只读文字，要能切板');
+  assert.ok(rkbApp.includes('function rkbSyncBoardSwitch(') && rkbApp.includes('el.setOptions('),
+    '看板切换器没有接候选');
+  assert.ok(rkbApp.includes('const cur = String(KB.filters.board || o.currentBoard || \'\')'),
+    '当前看板未作为「占位项」的唯一表达');
+  assert.ok(rkbApp.includes('boards.filter((x) => x.value !== cur)'),
+    '候选里没剔除当前看板，同一个看板会出现两行');
+  assert.ok(rkbApp.includes("if (sig === rkbBoardSig) return"), '每 5 秒重建选项会把展开的面板顶掉');
+  assert.ok(railApp.includes("rkbBoardSel.addEventListener('change'") &&
+    railApp.includes("rkbBoardSel.addEventListener('select-action'"),
+    '换板 / 新建看板两个入口没接');
+  assert.ok(railApp.includes('KB.filters.board = next') && railApp.includes('kbSelectSig = \'\''),
+    '换板后整页那个下拉的选项缓存没作废');
+  assert.ok(railApp.includes("kbModalOpen('board')"), '缺「＋ 新建看板…」入口');
+  assert.ok(!rkbApp.includes('kanbanOverview('), '紧凑视图不得自己拉 overview');
+});
+t('状态 chip 在本地过滤，卡片压成单行', () => {
+  assert.ok(railApp.includes("const key = String(b.dataset.rkbGroup || '')") &&
+    railApp.includes("rkbFilter = rkbFilter === key ? '' : key"),
+    '点 chip 未在本地切换筛选 / 无法回到全部');
+  assert.ok(!railApp.includes('openFullKanban(b.dataset.rkbGroup)'), '点 chip 仍会跳走整页');
+  assert.ok(rkbApp.includes("const shown = rkbFilter ? groups.filter((g) => g.key === rkbFilter) : groups"),
+    '筛选没有落到渲染上');
+  assert.ok(rkbApp.includes('is-flat') && rkbApp.includes("g.all.length > 0 && g.key !== 'done'"),
+    '筛到单组时不该再折叠；「已完成」默认应收起');
+  assert.ok(rkbApp.includes('function rkbCardHtml(') && rkbApp.includes('data-rkb-more='),
+    '缺单行卡片 / 「还有 N 张」入口');
+});
 t('新样式全走双主题 token，无硬编码色，每个 class 都有规则', () => {
-  for (const c of ['.rkb-bar', '.rkb-board', '.rkb-btn', '.rkb-btn:hover', '.rkb-btn:focus-visible',
-    '.rkb-summary', '.rkb-stat', '.rkb-stat:hover', '.rkb-stat:focus-visible', '.rkb-stat b',
-    '.rkb-dot', '.rkb-stat[data-dot="yellow"] .rkb-dot', '.rkb-scroll', '.rkb-group',
-    '.rkb-group-head', '.rkb-group-head::before', '.rkb-group[open] .rkb-group-head::before',
+  for (const c of ['.rkb-bar', '.rkb-board', '.rkb-board .us-trigger', '.rkb-btn', '.rkb-btn:hover',
+    '.rkb-btn:focus-visible', '.rkb-summary', '.rkb-stat', '.rkb-stat:hover', '.rkb-stat:focus-visible',
+    '.rkb-stat.is-on', '.rkb-stat b', '.rkb-dot', '.rkb-stat[data-dot="yellow"] .rkb-dot',
+    '.rkb-scroll', '.rkb-list', '.rkb-group', '.rkb-group-head', '.rkb-group-head::before',
+    '.rkb-group[open] .rkb-group-head::before', '.rkb-group-head.is-static',
     '.rkb-group-head:focus-visible', '.rkb-group-name', '.rkb-group-num', '.rkb-group-rule',
-    '.rkb-card', '.rkb-card:hover', '.rkb-card:focus-visible', '.rkb-title', '.rkb-meta',
-    '.rkb-st', '.rkb-asg', '.rkb-none', '.rkb-empty', '.rkb-foot']) {
+    '.rkb-card', '.rkb-card:hover', '.rkb-card:focus-visible', '.rkb-title', '.rkb-st', '.rkb-meta',
+    '.rkb-asg', '.rkb-age', '.rkb-more', '.rkb-none', '.rkb-empty', '.rkb-foot']) {
     assert.ok(railCss.includes(c), '缺少样式规则 ' + c);
   }
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(railCss), '出现硬编码色值，深色主题会失配');
   assert.ok(railCss.includes('var(--canvas)') && railCss.includes('var(--fill-2)'), '未使用双主题 token');
   assert.ok(railCss.includes('prefers-reduced-motion'), '动效未降级');
   assert.ok(railCss.includes('flex-wrap: wrap'), '280px 窄栏统计条会溢出');
+  // 单行卡片：高度必须写死，否则标题变长会把行撑成两行
+  assert.ok(/\.rkb-card \{[^}]*height: 27px/.test(railCss), '卡片不是定高单行，长标题会撑高');
+  assert.ok(/\.rkb-title \{[^}]*white-space: nowrap/.test(railCss), '标题未单行省略');
+  assert.ok(railCss.includes('position: sticky'), '分组标题没吸顶，滚下去就丢了状态');
 });
 t('外层定版几何不动，命令 / 快捷键文案去终端化', () => {
   assert.ok(/width:\s*var\(--rail-w, 400px\)/.test(cssSrc), 'rail 默认宽度被改');

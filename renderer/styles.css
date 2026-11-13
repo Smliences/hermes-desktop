@@ -1030,15 +1030,31 @@ body.rail-resizing iframe { pointer-events: none; }
   color: var(--caption); background: var(--fill-2); border-bottom: 1px solid var(--line-2);
 }
 
-/* 右侧 rail：看板紧凑视图（5 组纵向堆叠，全走双主题 token） */
+/* 右侧 rail：看板紧凑视图（看板切换 + 状态筛选 + 单列密排，全走双主题 token）
+   400px 里放不下五列等分，所以整块按「页」来做：栏头一个看板下拉，下面一排
+   状态筛选 chip，再往下是单列密排行（每张卡 27px，只有标题 + 一个右对齐信息）。
+   底色用 --canvas 而不是 rail 的 --sidebar-fill：分组长条要 sticky 盖住卡片，
+   必须有不透明底，而 --sidebar-fill 上的发丝线几乎看不见。 */
+#kanban-pane { background: var(--canvas); }
 .rkb-bar {
-  display: flex; align-items: center; gap: 6px; padding: 9px 10px;
-  border-bottom: 1px solid var(--line); min-width: 0;
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  border-bottom: 1px solid var(--line); min-width: 0; flex: 0 0 auto;
 }
-.rkb-board {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); font: 600 12.5px/1.4 var(--sans);
+/* 看板切换器：触发器做成无边框标题 —— 名字是这一行最重要的信息，边框只会吃空间 */
+.rkb-board { flex: 1 1 auto; min-width: 0; height: 26px; }
+.rkb-board .us-trigger {
+  height: 26px; padding: 0 7px; gap: 5px; border-color: transparent; background: transparent;
+  color: var(--text); font: 600 12.5px/1 var(--sans);
 }
+/* 名字后面紧跟 ⌄，不要被 flex:1 推到行尾（那样看着像两个不相干的元素） */
+.rkb-board .us-value { flex: 0 1 auto; }
+.rkb-board .us-trigger:hover { background: var(--fill-2); border-color: var(--line); }
+.rkb-board .us-trigger:focus-visible, .rkb-board:focus-within .us-trigger {
+  outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: none;
+}
+/* 未选值 = 占位项代表「当前看板」，它显示的就是看板名，不能按占位色发灰 */
+.rkb-board .us-value.is-placeholder { color: var(--text); font-weight: 600; }
+.rkb-board .us-caret { opacity: .5; }
 .rkb-btn {
   flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center;
   border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--fill-2);
@@ -1046,60 +1062,100 @@ body.rail-resizing iframe { pointer-events: none; }
 }
 .rkb-btn:hover { background: var(--fill-3); color: var(--text); }
 .rkb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 状态筛选：统计与筛选合一，点一下只看这一组；未选是透明底，选中才有底与描边 */
 .rkb-summary {
-  display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 2px 3px; padding: 6px 10px 7px;
+  border-bottom: 1px solid var(--line); flex: 0 0 auto;
 }
 .rkb-stat {
-  display: inline-flex; align-items: center; gap: 4px;
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--fill-2);
-  color: var(--text-3); font: 400 11px/1 var(--sans); padding: 4px 7px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; height: 21px; padding: 0 6px;
+  border: 1px solid transparent; border-radius: 99px; background: transparent;
+  color: var(--text-3); font: 400 10.5px/1 var(--sans); cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
 }
-.rkb-stat:hover { background: var(--fill-3); color: var(--text); }
-.rkb-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.rkb-stat b { color: var(--text-2); font: 600 11px/1 var(--sans); font-variant-numeric: tabular-nums; }
-.rkb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--caption); flex-shrink: 0; }
-.rkb-stat[data-dot="yellow"] .rkb-dot { background: var(--yellow); }
-.rkb-stat[data-dot="accent"] .rkb-dot { background: var(--accent); }
-.rkb-stat[data-dot="green"] .rkb-dot { background: var(--green); }
-.rkb-stat[data-dot="red"] .rkb-dot { background: var(--red); }
-.rkb-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px 12px; }
-.rkb-group { border-bottom: 1px solid var(--line); }
-.rkb-group:last-child { border-bottom: 0; }
+.rkb-stat:hover { background: var(--fill-2); color: var(--text); }
+.rkb-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.rkb-stat.is-on { background: var(--fill-2); border-color: var(--line-2); color: var(--text); font-weight: 500; }
+.rkb-stat b { color: var(--caption); font: 400 9.5px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rkb-stat.is-on b { color: var(--text-2); }
+.rkb-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--n-400); flex-shrink: 0; }
+.rkb-stat[data-dot="yellow"] .rkb-dot, .rkb-dot[data-dot="yellow"] { background: var(--yellow); }
+.rkb-stat[data-dot="accent"] .rkb-dot, .rkb-dot[data-dot="accent"] { background: var(--accent); }
+.rkb-stat[data-dot="green"] .rkb-dot, .rkb-dot[data-dot="green"] { background: var(--green); }
+.rkb-stat[data-dot="red"] .rkb-dot, .rkb-dot[data-dot="red"] { background: var(--red); }
+.rkb-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 12px;
+  overscroll-behavior-y: contain;
+}
+.rkb-list { display: block; }
+.rkb-group { margin: 0; }
+.rkb-group + .rkb-group { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 2px; }
+/* 组标题 sticky：滚动时一直知道下面这一段是什么状态；底色必须不透明 */
 .rkb-group-head {
-  display: flex; align-items: center; gap: 7px; padding: 8px 2px;
-  cursor: pointer; user-select: none; list-style: none; color: var(--text-2);
-  font: 500 12px/1.4 var(--sans);
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px;
+  background: var(--canvas); color: var(--text-2); font: 500 11px/1 var(--sans);
+  cursor: pointer; user-select: none; list-style: none;
 }
 .rkb-group-head::-webkit-details-marker { display: none; }
-.rkb-group-head::before { content: '›'; color: var(--caption); font-size: 13px; transition: transform .14s ease; }
-.rkb-group[open] .rkb-group-head::before { transform: rotate(90deg); }
-.rkb-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.rkb-group-name { color: var(--text); }
-.rkb-group-num { color: var(--caption); font-variant-numeric: tabular-nums; }
-.rkb-group-rule { flex: 1; height: 1px; background: var(--line); }
-.rkb-card {
-  display: block; width: 100%; box-sizing: border-box; text-align: left;
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--canvas);
-  padding: 7px 9px; margin: 0 0 6px; cursor: pointer;
+.rkb-group-head::before {
+  content: '›'; color: var(--caption); font-size: 12px; line-height: 1;
+  transition: transform .14s ease;
 }
-.rkb-card:hover { background: var(--fill-2); border-color: var(--line-2); }
+.rkb-group[open] .rkb-group-head::before { transform: rotate(90deg); }
+.rkb-group-head.is-static { cursor: default; }
+.rkb-group-head.is-static::before { content: ''; }
+.rkb-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rkb-group-name { color: var(--text-2); }
+.rkb-group-num { color: var(--caption); font: 400 10px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rkb-group-rule { flex: 1; height: 1px; background: var(--line); }
+/* 卡片 = 一行：色条 + 标题 + 子状态 + 右对齐信息。去掉描边与卡面，
+   整块变成一张列表，5 组也不会堆成一面墙。 */
+.rkb-card {
+  display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box;
+  height: 27px; padding: 0 7px 0 5px; margin: 1px 0;
+  border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text);
+  text-align: left; cursor: pointer; min-width: 0;
+  transition: background .12s;
+}
+.rkb-card::before {
+  content: ''; flex: 0 0 auto; width: 2px; height: 13px;
+  border-radius: 1px; background: var(--caption);
+}
+.rkb-card[data-dot="yellow"]::before { background: var(--yellow); }
+.rkb-card[data-dot="accent"]::before { background: var(--accent); }
+.rkb-card[data-dot="green"]::before { background: var(--green); }
+.rkb-card[data-dot="red"]::before { background: var(--red); }
+.rkb-card[data-dot="muted"]::before { background: var(--n-400); }
+.rkb-card:hover { background: var(--fill-2); }
 .rkb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rkb-title {
-  display: block; color: var(--text); font: 400 12.5px/1.5 var(--sans);
+  flex: 1 1 auto; min-width: 0; color: var(--text); font: 400 12.5px/1.3 var(--sans);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.rkb-meta {
-  display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0;
-  color: var(--caption); font: 400 10.5px/1.4 var(--sans);
+.rkb-st {
+  flex: 0 0 auto; padding: 1px 4px; border-radius: var(--r-xs);
+  background: var(--fill-2); color: var(--text-3); font: 400 9.5px/1.4 var(--sans);
 }
-.rkb-st { color: var(--text-3); background: var(--fill-2); border-radius: var(--r-xs); padding: 1px 5px; flex-shrink: 0; }
-.rkb-asg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rkb-card:hover .rkb-st { background: var(--canvas); }
+.rkb-meta {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--caption); font: 400 10.5px/1 var(--sans);
+}
+.rkb-asg { max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rkb-age { color: var(--caption); font-variant-numeric: tabular-nums; }
 /* 缩略卡上的运行秒表：不带进度条，400px 里只保留会走的数字 */
 .rkb-run {
-  flex-shrink: 0; margin-left: auto; color: var(--yellow);
+  flex-shrink: 0; color: var(--yellow);
   font: 500 10px/1.4 var(--mono); font-variant-numeric: tabular-nums;
 }
+.rkb-more {
+  display: block; width: 100%; padding: 3px 7px 5px; border: 0; border-radius: var(--r-xs);
+  background: transparent; color: var(--text-3); text-align: left; cursor: pointer;
+  font: 400 10.5px/1.5 var(--sans);
+}
+.rkb-more:hover { background: var(--fill-2); color: var(--text); }
+.rkb-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rkb-none, .rkb-empty { color: var(--text-3); font: 400 11.5px/1.7 var(--sans); padding: 6px 2px 10px; }
 .rkb-empty { text-align: center; padding: 28px 12px; }
 .rkb-foot {
@@ -1108,7 +1164,7 @@ body.rail-resizing iframe { pointer-events: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) {
-  .rkb-group-head::before { transition: none; }
+  .rkb-group-head::before, .rkb-card, .rkb-stat { transition: none; }
 }
 
 /* ══════════ 命令面板 / 快捷键帮助 / 设置页 共用遮罩 ══════════ */
@@ -1904,7 +1960,7 @@ button:active:not(:disabled) { filter: brightness(.96); }
 .pv-empty-ico { background: var(--fill-2); color: var(--blue); }
 .pv-state.err, .pv-state.err:hover { color: var(--red); }
 .pv-auto input, input[type="checkbox"] { accent-color: var(--blue); }
-.rkb-card { background: var(--canvas); }
+/* 卡片已改成单列密排行（无卡面、无描边），不再需要深色主题的不透明底 */
 
 /* ── 8. 浮层 / 遮罩 / Toast ── */
 /* 遮罩统一在此收口：不用 backdrop-filter（全屏模糊实测让关闭慢 220ms），

@@ -394,7 +394,19 @@ let CHROME_BIN = null;
   ok('看板页签渲染 5 组紧凑卡片，数据来自同一份 KB.board',
     s12b.tab === 'kanban' && s12b.previewHidden && !s12b.kanbanHidden
       && s12b.groups === 5 && s12b.openGroups > 0 && s12b.cards > 0 && s12b.cols > 0
-      && s12b.stats.length === 5 && s12b.board.length > 0, JSON.stringify(s12b));
+      && s12b.stats.length === 6 && s12b.board.length > 0, JSON.stringify(s12b));
+
+  const s12b2 = await cdp.ev(`(() => {
+    const el = document.querySelector('#rkb-board');
+    const trig = el && el.querySelector('.us-trigger');
+    return { tag: el ? el.tagName : '', value: el ? el.value : '',
+      label: trig ? trig.textContent.trim() : '',
+      opts: el && el._items ? el._items.map((i) => i.label) : [] };
+  })()`);
+  ok('栏头是看板切换器：当前看板占位 + 末尾「＋ 新建看板…」动作行',
+    s12b2.tag === 'HM-SELECT' && s12b2.value === '' && s12b2.label.includes('main')
+      && s12b2.opts.length >= 2 && s12b2.opts[s12b2.opts.length - 1].includes('新建看板'),
+    JSON.stringify(s12b2));
 
   const s12c = await cdp.ev(`(() => {
     document.querySelector('.rkb-group[data-rkb-group="todo"]').open = false;
@@ -403,6 +415,39 @@ let CHROME_BIN = null;
              cards: document.querySelectorAll('.rkb-card').length };
   })()`);
   ok('折叠状态在轮询重渲染后保留', s12c.open === false && s12c.cards > 0, JSON.stringify(s12c));
+
+  const s12c2 = await cdp.ev(`(() => {
+    document.querySelector('.rkb-stat[data-rkb-group="running"]').click();
+    const one = { groups: document.querySelectorAll('.rkb-group').length,
+      cards: document.querySelectorAll('.rkb-card').length,
+      on: document.querySelectorAll('.rkb-stat.is-on').length,
+      flat: document.querySelectorAll('.rkb-group.is-flat').length,
+      dots: [...document.querySelectorAll('.rkb-card')].map((c) => c.dataset.dot) };
+    document.querySelector('.rkb-stat[data-rkb-group="running"]').click();
+    const all = { groups: document.querySelectorAll('.rkb-group').length,
+      on: document.querySelectorAll('.rkb-stat.is-on').length };
+    return { one, all };
+  })()`);
+  ok('点状态 chip 只在本地筛出一组、再点一次回到全部',
+    s12c2.one.groups === 1 && s12c2.one.flat === 1 && s12c2.one.cards > 0
+      && s12c2.one.dots.every((d) => d === 'green') && s12c2.all.groups === 5
+      && s12c2.all.on === 1, JSON.stringify(s12c2));
+
+  const s12c3 = await cdp.ev(`(async () => {
+    const el = document.querySelector('#rkb-board');
+    el.value = 'ops-2026';
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 260));
+    return { filter: KB.filters.board, value: el.value,
+      label: el.querySelector('.us-value').textContent };
+  })()`);
+  ok('选另一块看板 = 改 KB.filters.board，栏头名字跟着变',
+    s12c3.filter === 'ops-2026' && s12c3.value === '' && s12c3.label.includes('ops-2026'),
+    JSON.stringify(s12c3));
+  await cdp.ev(`(async () => {
+    KB.filters.board = ''; KB.overview = null; kbSelectSig = ''; rkbBoardSig = '';
+    await kanbanLoad(true); return 1;
+  })()`);
 
   const s12d = await cdp.ev(`(() => {
     const card = document.querySelector('.rkb-card[data-rkb-task]');
