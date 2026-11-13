@@ -582,73 +582,54 @@ body.resizing #sidebar { transition: none; }
 .md-details summary { cursor: pointer; font: 400 11px/1 var(--mono); color: var(--caption); user-select: none; }
 .md-details-body { font-size: 12px; color: var(--text-3); padding: 6px 0 2px; white-space: pre-wrap; word-break: break-word; }
 
-/* ══════════ 工具调用步骤区 ══════════
-   连续调用排成一张「步骤清单」：固定列宽让 图标 / 动作 / 对象 / 耗时 / 展开箭头
-   逐行对齐，长路径省略而不撑破列。空列也常驻占位，否则 grid 会在缺对象或耗时时串列。
-   状态由图标底色 + 文字色表达（running 呼吸、err 淡红、ok 绿），不靠彩色字符。
+/* ══════════ 工具调用 ══════════
+   WorkBuddy 版式：一行「做了什么：对象」，前面一枚小图标。没有底色、没有边框、
+   没有行尾箭头（hover 才浮出）、没有每行耗时 —— 工具是过程，不该抢正文的注意力。
+   状态只落在图标上：运行中呼吸 + 文字提亮，失败变红；成功不着色，否则十几行全是绿点。
+   连续调用不画卡片容器，只靠自然行距排成一段（可读性靠「每行都是一句完整的话」）。
    全部走设计 token，浅/深主题自动适配；只改聊天流内部，不动定版几何。 */
-.tool-stream { display: flex; flex-direction: column; gap: 1px; margin: 4px 0 6px; min-width: 0; }
+.tool-stream { display: flex; flex-direction: column; margin: 2px 0 10px; min-width: 0; }
 .tool-item { min-width: 0; }
 .tool-row {
-  display: grid;
-  grid-template-columns: 18px 44px minmax(0, 1fr) 52px 14px;
-  align-items: center; column-gap: 8px;
-  min-width: 0; padding: 3px 6px; border-radius: var(--r-sm);
-  color: var(--text-3); font: 400 13px/1.7 var(--sans);
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 1px 0; border-radius: var(--r-sm);
+  color: var(--text-2); font: 400 13px/1.75 var(--sans);
   cursor: pointer; user-select: none;
-  transition: background-color .14s ease, color .14s ease;
 }
-.tool-row:hover { background: var(--hover); color: var(--text-2); }
-.tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.tool-item.open > .tool-row { background: var(--fill-2); color: var(--text-2); }
+.tool-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tool-row .ticon {
-  box-sizing: border-box; width: 18px; height: 18px;
+  flex: 0 0 auto; width: 15px; height: 15px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: var(--r-xs); background: var(--fill-2);
-  font: 400 12px/1 var(--mono); color: var(--text-3);
+  color: var(--caption);
 }
-/* 三态都有行底色。坑：本项目的 --blue 是陶土橙，与 --red 同色系，
-   「运行中」用它看起来和「失败」一样；改用赭黄 --yellow 才能在暖色系里一眼分开。 */
-.tool-row.running { background: color-mix(in srgb, var(--yellow) 9%, transparent); }
-.tool-row.running .ticon {
-  color: var(--yellow); background: color-mix(in srgb, var(--yellow) 16%, transparent);
-  animation: tool-pulse 1.4s ease-in-out infinite;
+.tool-row .ticon svg { display: block; width: 15px; height: 15px; }
+.tool-row .tlabel {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color .14s ease;
 }
-.tool-row.err .ticon {
-  color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent);
-}
-.tool-row.ok .ticon { color: var(--green); }
-.tool-row.err { background: color-mix(in srgb, var(--red) 6%, transparent); }
-.tool-row.err .tverb { color: var(--red); }
-.tool-row .tverb {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-2); font-weight: 500;
-}
-.tool-row .tobject {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-3); font: 400 11.5px/1.7 var(--mono);
-}
-.tool-row .tdur {
-  text-align: right; color: var(--caption); font: 400 11px/1 var(--mono);
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-}
+/* 箭头只做「这行可以点开」的暗示，常显会在每行末尾多出一个符号噪声 */
 .tool-row .tchev {
-  width: 14px; text-align: center; color: var(--caption);
+  flex: 0 0 auto; width: 9px; font: 400 12px/1 var(--sans); color: var(--caption);
   opacity: 0; transition: transform .16s ease, opacity .16s ease;
 }
-.tool-row:hover .tchev, .tool-item.open .tchev { opacity: 1; }
+.tool-row:hover .tlabel { color: var(--text); }
+.tool-row:hover .tchev, .tool-item.open .tchev { opacity: .85; }
 .tool-item.open .tchev { transform: rotate(90deg); }
-.tool-row:hover .tverb, .tool-row:hover .tobject, .tool-row:hover .tdur { color: var(--text); }
-@keyframes tool-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .48; } }
+/* 运行中用赭黄：本项目 --blue 是陶土橙，与 --red 同色系，「在跑」会看成「失败」 */
+.tool-row.running .ticon { color: var(--yellow); animation: tool-pulse 1.4s ease-in-out infinite; }
+.tool-row.running .tlabel { color: var(--text); }
+.tool-row.err .ticon, .tool-row.err .tlabel { color: var(--red); }
+@keyframes tool-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
-/* 展开详情：与动作列左缘对齐（6+18+8=32px），有边界的等宽小字卡 */
+/* 展开详情：与那行文字的左缘对齐（15 图标 + 7 间距 = 22px），软底色块不带描边 */
 .tool-detail {
   display: none; box-sizing: border-box; min-width: 0; max-height: 420px;
-  margin: 3px 0 7px 32px; padding: 9px 11px 10px;
-  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  margin: 2px 0 8px 22px; padding: 8px 10px 9px;
+  border-radius: var(--r-sm);
   background: var(--fill-2); color: var(--text-2);
   font: 400 11.5px/17px var(--mono);
-  white-space: pre-wrap; word-break: break-word; overflow: auto;
+  word-break: break-word; overflow: auto;
 }
 .tool-item.open .tool-detail { display: block; animation: tool-reveal .14s ease-out; }
 @keyframes tool-reveal { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
@@ -659,9 +640,9 @@ body.resizing #sidebar { transition: none; }
 }
 .tool-detail-head .tdh-name { color: var(--text-2); font-family: var(--mono); overflow-wrap: anywhere; }
 .tool-detail-head .tdh-state { margin-left: auto; white-space: nowrap; }
-.tool-detail-head .tdh-state.ok { color: var(--green); }
+.tool-detail-head .tdh-state.ok { color: var(--text-2); }
 .tool-detail-head .tdh-state.err { color: var(--red); }
-.tool-detail-head .tdh-state.running { color: var(--blue); }
+.tool-detail-head .tdh-state.running { color: var(--yellow); }
 .tool-detail .sec-label {
   font: 500 10px/1 var(--mono); letter-spacing: .08em;
   color: var(--caption); margin: 0 0 5px;
@@ -670,17 +651,28 @@ body.resizing #sidebar { transition: none; }
   margin: 0; font-family: var(--mono);
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
 }
+/* 参数铺成两列网格：所有值左缘对齐成一列（flex 逐行排版时，键长短不一会让值参差）；
+   .tp-row 走 display:contents，键值直接成为网格项，不额外包一层盒子 */
+.tool-detail .tp-list {
+  display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr);
+  column-gap: 12px; row-gap: 4px; align-items: baseline;
+}
+.tool-detail .tp-row { display: contents; }
+.tool-detail .tp-k {
+  max-width: 180px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--caption);
+}
+.tool-detail .tp-v { min-width: 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-detail pre + .sec-label { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.tool-detail .tp-list + .sec-label { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
 .tool-detail pre.err-text { color: var(--red); }
 
-/* 窄栏：让出耗时列，详情卡回到整宽 */
+/* 窄栏：详情卡回到整宽（单行布局本身不依赖列宽，不需要额外的列收缩） */
 @media (max-width: 720px) {
-  .tool-row { grid-template-columns: 18px 40px minmax(0, 1fr) 14px; }
-  .tool-row .tdur { display: none; }
   .tool-detail { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tool-row, .tool-row .tchev { transition: none; }
+  .tool-row .tchev, .tool-row .tlabel { transition: none; }
   .tool-row.running .ticon, .tool-item.open .tool-detail { animation: none; }
 }
 
@@ -1924,7 +1916,9 @@ button:active:not(:disabled) { filter: brightness(.96); }
 .md-img-fallback:hover { color: var(--blue); border-color: var(--blue); }
 .md-details { border-color: var(--line-2); }
 .tool-detail { background: var(--fill-2); }
-.tool-row.running .ticon, .spin { color: var(--blue); }
+/* 运行中的图标必须与 --red 分得开：--blue 是陶土橙，和失败同色系，这里用赭黄 */
+.tool-row.running .ticon { color: var(--yellow); }
+.spin { color: var(--blue); }
 .tool-row.err .ticon, .tool-detail pre.err-text, .error-card .e-title, .msg-error .content { color: var(--red); }
 .error-card { border-color: color-mix(in srgb, var(--red) 32%, transparent); }
 .error-card .e-dot { background: var(--red); }

@@ -3540,53 +3540,59 @@ t('窗口聚焦刷新：防抖 + 并发保护 + 保滚动位置', () => {
   assert.ok(appSrc.includes('initFocusRefresh();'), '启动时未注册聚焦刷新');
 });
 
-section('3ah. 工具调用步骤区：逐行对齐、三态、双主题与键盘可达');
+section('3ah. 工具调用：一行人话、状态只落在图标上、双主题与键盘可达');
 // 切片锚点用注释标题，后续样式重排不会把断言扫到无关的规则上
-const toolCss = cssSrc.slice(cssSrc.indexOf('工具调用步骤区'), cssSrc.indexOf('/* 错误卡 */'));
+const toolCss = cssSrc.slice(cssSrc.indexOf('═ 工具调用 ═'), cssSrc.indexOf('/* 错误卡 */'));
 const toolRender = appSrc.slice(appSrc.indexOf("} else if (item.kind === 'tool')"), appSrc.indexOf("} else if (item.kind === 'error')"));
 
-t('五列固定、可空列常驻占位，长路径省略而不撑破', () => {
-  assert.ok(/grid-template-columns:\s*18px 44px minmax\(0, 1fr\) 52px 14px/.test(toolCss),
-    '固定列宽缺失，连续调用无法逐行对齐');
-  assert.ok(/\.tool-row \.tdur \{[^}]*text-align: right/.test(toolCss), '耗时列未右对齐');
-  assert.ok(toolCss.includes('minmax(0, 1fr)') && toolCss.includes('text-overflow: ellipsis'), '长对象名会撑破列');
-  assert.ok(toolRender.includes('<span class="tobject">') && toolRender.includes('<span class="tdur">'),
-    '可空列未常驻占位，缺对象或耗时时 grid 会串列');
-  assert.ok(toolRender.includes('<span class="tdur">${dur}</span>') && !/\$\{meta\.obj \?/.test(toolRender),
-    '仍有条件列，逐行会对不齐');
+t('单行排版：不再用多列网格，长句只省略不撑破', () => {
+  const rowRule = (toolCss.match(/\.tool-row \{[^}]*\}/) || [''])[0];
+  assert.ok(/display: flex/.test(rowRule), '工具行不是单行 flex，连续调用会排成表格');
+  assert.ok(!/grid-template-columns/.test(rowRule), '又回到多列网格：固定动作列会把中文动作截成省略号');
+  assert.ok(toolRender.includes('class="tlabel"') && toolCss.includes('text-overflow: ellipsis'),
+    '长对象名会撑破行宽');
+  assert.ok(!toolRender.includes('class="tdur"') && !toolRender.includes('class="tobject"'),
+    '耗时/对象又被拆成独立列，行会退回多列对齐');
 });
 
-t('动作列固定宽度不被长工具名截断', () => {
-  const metaFn = appSrc.slice(appSrc.indexOf('function toolMeta('), appSrc.indexOf('function errorCodeOf('));
-  assert.ok(/bash/.test(metaFn) && /web_fetch/.test(metaFn), '真实 CLI 工具名未映射，会显示英文或被截成省略号');
-  assert.ok(metaFn.includes("'调用'"), '未知长工具名未收敛成短动作词，44px 动作列会截字');
-});
-
-t('三态走设计 token，无硬编码色，键盘焦点可见', () => {
-  for (const c of ['.tool-row.running', '.tool-row.err', '.tool-row.ok']) {
-    assert.ok(toolCss.includes(c), '缺少状态样式 ' + c);
+t('内容是「做了什么」一句人话：动词短语 + 对象', () => {
+  const metaFn = appSrc.slice(appSrc.indexOf('const TOOL_PHRASES'), appSrc.indexOf('function toolParamsHTML('));
+  assert.ok(metaFn.includes('TOOL_PHRASES'), '缺少工具名 → 动词短语映射');
+  for (const w of ['查看文件', '修改文件', '运行命令', '搜索代码']) {
+    assert.ok(metaFn.includes(w), `缺少「${w}」这类动词短语，行会退回两个字的中文动作`);
   }
-  assert.ok(toolCss.includes('.tool-row.running { background: color-mix('), '运行中行缺少底色，扫视时看不出还在跑');
-  assert.ok(/\.tool-row\.running \{ background: color-mix\(in srgb, var\(--yellow\)/.test(toolCss)
-    && /\.tool-row\.running \.ticon \{[^}]*var\(--yellow\)/.test(toolCss),
-    '运行中不能用 --blue：本项目 --blue 是陶土橙，与 --red 同色系分不出来');
-  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(toolCss), '出现硬编码色值，深色主题会失配');
-  assert.ok(toolCss.includes('color-mix('), '状态底色必须走主题色混合而非写死色值');
-  assert.ok(toolCss.includes(':focus-visible'), '键盘焦点不可见');
+  assert.ok(metaFn.includes("'调用工具'") && !metaFn.includes("'调用'"), '未知工具仍会拼出「调用 web_x」这种读不通的句子');
+  assert.ok(metaFn.includes('label: obj ? `${verb}：${obj}` : verb'), '动作与对象没用全角冒号连成一句话');
+  assert.ok(toolRender.includes('esc(meta.label)'), '渲染未使用一句话说明');
+  assert.ok(appSrc.includes("tab.activity = label"), '状态行仍显示原始英文工具名');
 });
 
-t('详情卡对齐动作列、有边界，窄栏与减少动效都有回落', () => {
-  assert.ok(toolCss.includes('margin: 3px 0 7px 32px'), '详情卡未与动作列左缘对齐');
-  assert.ok(toolCss.includes('border: 1px solid var(--line-2)'), '详情卡缺少边界');
-  const narrow = toolCss.slice(toolCss.indexOf('@media (max-width: 720px)'));
-  assert.ok(narrow.includes('.tool-row .tdur { display: none; }') && narrow.includes('grid-template-columns: 18px 40px'),
-    '窄栏未让出耗时列，四列会挤在一起');
+t('三态走设计 token：运行中赭黄呼吸、失败变红、成功不着色', () => {
+  assert.ok(/\.tool-row\.running \.ticon \{[^}]*var\(--yellow\)/.test(toolCss),
+    '运行中不能用 --blue：本项目 --blue 是陶土橙，与 --red 同色系分不出来');
+  assert.ok(/\.tool-row\.err \.ticon, \.tool-row\.err \.tlabel \{[^}]*var\(--red\)/.test(toolCss),
+    '失败没有把图标和文字一起染红');
+  assert.ok(!/\.tool-row\.ok[^{]*\{[^}]*color:/.test(toolCss),
+    '成功态不该上色：十几行全是绿点会盖过正文');
+  assert.ok(!/\.tool-row[^{]*\{[^}]*background:/.test(toolCss), '工具行又有了底色，一行安静的字变成了状态条');
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(toolCss), '出现硬编码色值，深色主题会失配');
+  assert.ok(toolCss.includes(':focus-visible'), '键盘焦点不可见');
+  // 覆盖层里的第二处 running 上色也要跟主规则一致，否则深色主题会被改回陶土橙
+  assert.ok(!/\.tool-row\.running \.ticon, \.spin \{ color: var\(--blue\)/.test(cssSrc),
+    '覆盖层把运行中图标又改回 --blue');
+});
+
+t('详情对齐首字左缘、软底无描边，参数铺成键值行', () => {
+  assert.ok(toolCss.includes('margin: 2px 0 8px 22px'), '详情卡未与那行文字左缘对齐（15 图标 + 7 间距）');
+  assert.ok(!/\.tool-detail \{[^}]*border: 1px solid/.test(toolCss), '详情卡又加了硬描边');
+  for (const c of ['tool-detail-head', 'tdh-name', 'tdh-state', 'tp-list', 'tp-row', 'tp-k', 'tp-v']) {
+    assert.ok(toolCss.includes('.' + c), 'CSS 缺少 .' + c + '，会按默认字号渲染');
+  }
+  assert.ok(appSrc.includes('function toolParamsHTML(') && toolRender.includes('toolParamsHTML(item.input)'),
+    '参数仍是一整段 JSON dump');
   const reduced = toolCss.slice(toolCss.indexOf('@media (prefers-reduced-motion: reduce)'));
   assert.ok(reduced.includes('.tool-row.running .ticon') && reduced.includes('.tool-item.open .tool-detail')
     && reduced.includes('animation: none'), '呼吸与展开动画未尊重 reduced-motion');
-  for (const c of ['tool-detail-head', 'tdh-name', 'tdh-state']) {
-    assert.ok(toolCss.includes('.' + c), 'CSS 缺少 .' + c + '，会按默认字号渲染');
-  }
 });
 
 t('展开走局部切换，键盘可达且不整页重绘', () => {

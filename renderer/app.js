@@ -152,43 +152,62 @@ document.addEventListener('error', (e) => {
   if (img.parentNode) img.parentNode.replaceChild(a, img);
 }, true);
 
-function toolBrief(name, input) {
-  if (!input || typeof input !== 'object') return '';
-  const keys = ['command', 'path', 'file_path', 'query', 'url', 'pattern', 'skill', 'cmd'];
-  for (const k of keys) if (input[k]) return String(input[k]).slice(0, 90);
-  const json = safeStringify(input).replace(/\n\s*/g, ' ');
-  return json.length > 90 ? json.slice(0, 90) + '…' : json;
-}
-/** WB 式工具行元数据：工具名 → {icon 动作图标, verb 中文动作, obj 对象名} */
+/* 工具行的小图标：一枚圆角方框里带 `>_`，与 WorkBuddy 同款。
+   所有工具共用一个字形 —— 按工具换图标看着丰富，实际是十几行花里胡哨的符号，
+   真正该读的是后面那句话。 */
+const TOOL_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.7" y="2.6" width="12.6" height="10.8" rx="3.2"></rect><path d="M5.15 6.35 6.85 8.05 5.15 9.75"></path><path d="M8.85 9.85h2.2"></path></svg>';
+/* 工具名 → 一句人话的动词短语。只做本地映射、不调模型：CLI 的工具名集合是收敛的。
+   顺序有意义（读在前、写在后）：`list_files` 归「搜索代码」，`read_file` 归「查看文件」。 */
+const TOOL_PHRASES = [
+  [/^(read_file|view_file|cat|skill_view|drive_preview|desktop_preview)/, '查看文件'],
+  [/^(write_file|patch|edit_file|multi_edit|apply_layout|annotate_preview)/, '修改文件'],
+  [/^(search_files|grep|rg|glob|find_files|list_files|ls|tree)/, '搜索代码'],
+  [/^(terminal|bash|shell|exec_command|run_command|execute_code|process_manage|read_terminal|close_terminal|cronjob_manage)/, '运行命令'],
+  [/^(web_search|x_search|search_web)/, '搜索网络'],
+  [/^(web_fetch|web_extract|http_request|fetch_url)/, '抓取网页'],
+  [/^browser_/, '操作浏览器'],
+  [/^(image_generate|video_generate|text_to_speech)/, '生成素材'],
+  [/^(vision_analyze|video_analyze)/, '分析素材'],
+  [/^(delegate_task|subagent)/, '派发子任务'],
+  [/^(todo_list|todo_write|update_plan)/, '更新清单'],
+  [/^(memory|memory_store)/, '记录要点'],
+  [/^(session_search|conversation_search)/, '翻查会话'],
+  [/^(skill_manage|skills_list|plugins_manage|desktop_project)/, '管理技能'],
+  [/^feishu_/, '操作飞书'],
+];
+/** 一句话说明这次调用做了什么：`动词短语：对象`（WorkBuddy 就是「定位代码、查看文件：app.js」）。
+    对象取最能代表本次调用的那个参数：文件名取末段、命令取首行。 */
 function toolMeta(name, input) {
   const n = String(name || '');
   let obj = '';
   if (input && typeof input === 'object') {
     const f = input.file_path || input.path || input.filename || input.notebook_path;
-    const c = input.command || input.cmd;
-    const q = input.query || input.pattern || input.url || input.skill || input.topic;
+    const c = input.command || input.cmd || input.script;
+    const q = input.query || input.pattern || input.url || input.skill || input.topic || input.action;
     if (f) obj = String(f).split('/').filter(Boolean).pop() || String(f);
-    else if (c) obj = String(c).replace(/\s+/g, ' ').trim().slice(0, 64);
-    else if (q) obj = String(q).slice(0, 64);
+    else if (c) obj = String(c).split('\n')[0].replace(/\s+/g, ' ').trim();
+    else if (q) obj = String(q).replace(/\s+/g, ' ').trim();
   }
-  const table = [
-    [/^(write_file|patch|edit|apply_layout|annotate_preview)/, '✏', '修改'],
-    [/^(terminal|read_terminal|close_terminal|execute_code|process_manage|cronjob_manage|bash|shell|exec_command|run_command)/, '⊙', '运行'],
-    [/^(search_files|web_search|x_search|session_search|grep|glob|find_files|list_files)/, '⌕', '搜索'],
-    [/^(read_file|skill_view|skills_list|memory|drive_preview|desktop_preview|cat)/, '◫', '查看'],
-    [/^browser_/, '◫', '浏览'],
-    [/^(web_extract|web_fetch|http_request|fetch_url)/, '↗', '抓取'],
-    [/^(image_generate|video_generate|text_to_speech)/, '✦', '生成'],
-    [/^(vision_analyze|video_analyze)/, '◫', '分析'],
-    [/^feishu_/, '◫', '飞书'],
-    [/^(delegate_task|task)/, '⇗', '分发'],
-    [/^(todo_list|todo_write|update_plan)/, '☰', '清单'],
-    [/^(skill_manage|desktop_project)/, '⚙', '管理'],
-  ];
-  for (const [re, icon, verb] of table) if (re.test(n)) return { icon, verb, obj };
-  // 动作列是固定 44px：未知名的长英文名不能整段塞进去，否则会截成 "web ..."。
-  // 收敛成短动作词，原始工具名由行 title 与详情头完整保留。
-  return { icon: '⊙', verb: n.length <= 4 && !n.includes(' ') ? n : '调用', obj };
+  if (obj.length > 52) obj = obj.slice(0, 52) + '…';
+  let verb = '';
+  for (const [re, p] of TOOL_PHRASES) if (re.test(n)) { verb = p; break; }
+  // 未知工具：原始英文名塞进句子里读不通（「调用 web_crawl_v2：…」），只留动作。
+  if (!verb) verb = '调用工具';
+  return { verb, obj, label: obj ? `${verb}：${obj}` : verb };
+}
+/** 详情里的参数：浅层标量铺成「键 值」两列，比一整段 JSON 好读；
+    嵌套太深或值太长就退回等宽 JSON，免得键被挤成一条。 */
+function toolParamsHTML(input) {
+  if (input == null) return '';
+  let rows = null;
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    const ent = Object.entries(input).filter(([, v]) => v !== null && v !== undefined && v !== '');
+    const flat = ent.map(([k, v]) => [k, typeof v === 'string' ? v : safeStringify(v)]);
+    if (ent.length > 0 && ent.length <= 8 && flat.every(([, v]) => String(v).length <= 400)) rows = flat;
+  }
+  if (!rows) return `<div class="sec-label">参数</div><pre>${esc(clip(safeStringify(input), 12000))}</pre>`;
+  return `<div class="sec-label">参数</div><div class="tp-list">${rows.map(([k, v]) =>
+    `<div class="tp-row"><span class="tp-k">${esc(k)}</span><span class="tp-v">${esc(clip(String(v), 2000))}</span></div>`).join('')}</div>`;
 }
 /** 从错误文本里提取 mono 状态胶囊（如 MISSING_CREDENTIAL / exit=1） */
 function errorCodeOf(text) {
@@ -1538,26 +1557,26 @@ function renderItem(item, header = false) {
       : '';
     el.innerHTML = `${meta}<div class="content md">${renderMarkdown(item.text)}${cursor}</div>${msgActionBar(item, false)}`;
   } else if (item.kind === 'tool') {
-    // 步骤清单：固定列（图标 / 动作 / 对象 / 耗时 / 箭头）逐行对齐。两个可空列必须
-    // 常驻占位，否则 grid 会把后续列往前挪，连续调用时就对不齐了。
+    /* WorkBuddy 版式：一行「做了什么：对象」，前面一枚小图标。没有底色、没有边框、
+       没有行尾箭头、没有每行耗时 —— 工具是过程，不该抢正文的注意力。
+       旧版是五列 grid（图标/动作/对象/耗时/箭头），固定 44px 动作列把中文动作截成
+       省略号，耗时与箭头每行重复一遍，十几行下来就像一张表格。 */
     el.className = 'tool-item' + (item.open ? ' open' : '');
     const stateCls = item.state === 'running' ? 'running' : item.isError ? 'err' : 'ok';
     const stateText = item.state === 'running' ? '执行中' : item.isError ? '失败' : '完成';
     const meta = toolMeta(item.name, item.input);
     const dur = item.durationMs ? (item.durationMs / 1000).toFixed(1) + 's' : '';
     el.innerHTML = `<div class="tool-row ${stateCls}" role="button" tabindex="0" aria-expanded="${!!item.open}" title="${esc(item.name || '')}">
-        <span class="ticon" aria-hidden="true">${meta.icon}</span>
-        <span class="tverb">${esc(meta.verb)}</span>
-        <span class="tobject">${esc(meta.obj || '')}</span>
-        <span class="tdur">${dur}</span>
+        <span class="ticon" aria-hidden="true">${TOOL_ICO}</span>
+        <span class="tlabel">${esc(meta.label)}</span>
         <span class="tchev" aria-hidden="true">›</span></div>
       <div class="tool-detail">
         <div class="tool-detail-head">
           <span class="tdh-name">${esc(item.name || '工具')}</span>
           <span class="tdh-state ${stateCls}">${stateText}${dur ? ' · ' + dur : ''}</span>
         </div>
-        ${item.input ? `<div class="sec-label">INPUT</div><pre>${esc(clip(safeStringify(item.input), 12000))}</pre>` : ''}
-        ${item.output != null ? `<div class="sec-label">OUTPUT</div><pre class="${item.isError ? 'err-text' : ''}">${esc(clip(item.output, 20000))}</pre>` : ''}
+        ${toolParamsHTML(item.input)}
+        ${item.output != null ? `<div class="sec-label">输出</div><pre class="${item.isError ? 'err-text' : ''}">${esc(clip(item.output, 20000))}</pre>` : ''}
         ${item.input == null && item.output == null ? '<div class="sec-label">暂无详情</div>' : ''}
       </div>`;
     // 局部切 class 而不是整页 renderChat：详情是静态 HTML，不需要重绘；
@@ -1753,9 +1772,12 @@ function routeEvent(evt, explicitTabId) {
   } else if (evt.type === 'tool_use') {
     const last = tab.items[tab.items.length - 1];
     if (last && last.kind === 'assistant') last.done = true;
-    tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, brief: toolBrief(evt.name, evt.input), state: 'running', open: false, ts: Date.now() });
-    tab.showTyping = true; tab.activity = `执行 ${evt.name}…`;
-    if (visible) { renderChat(); setActivity(`执行 ${evt.name}…`); syncActivityBar(); }
+    // 状态行也用人话（「运行命令：npm test」），比「执行 bash…」好认
+    const label = toolMeta(evt.name, evt.input).label;
+    tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', open: false, ts: Date.now() });
+    tab.showTyping = true; tab.activity = label;
+    if (visible) { renderChat(); setActivity(label); syncActivityBar(); }
+    maybeAutoPreview(evt).catch(() => {});
     maybeAutoPreview(evt).catch(() => {});
   } else if (evt.type === 'tool_result') {
     const item = [...tab.items].reverse().find((i) => i.kind === 'tool' && i.name === evt.name && i.state === 'running');
