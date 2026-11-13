@@ -988,6 +988,21 @@ async function run() {
     assert.strictEqual(kanban.buildPath('board', { board: null }), '/board', 'null board 不应变成 slug "null"');
     assert.strictEqual(kanban.buildPath('projects'), '/projects', '项目列表读端点缺失');
   });
+  await t('项目树必须带 profile 作用域，非法 profile 名不得拼进 query', () => {
+    // 端点缺省是 profile=all：不带作用域就会把每个 profile 的 projects.db 都合并进来，
+    // default 建的项目会跑进别的 profile 的侧栏。这里锁住「必须显式带」。
+    const scoped = kanban.buildPath('projectsTree', { profile: 'study', previewLimit: 3 });
+    assert.ok(scoped.startsWith('/projects/tree?'), '项目树路径变了：' + scoped);
+    assert.ok(scoped.includes('preview_limit=3') && scoped.includes('session_limit=2000'),
+      '原有分页参数被丢掉：' + scoped);
+    assert.ok(scoped.endsWith('&profile=study'), '未带 profile 作用域（会退化成全 profile 合并）：' + scoped);
+    for (const bad of ['../default', 'a b', 'x/y', 'a?profile=default', '', null]) {
+      const p = kanban.buildPath('projectsTree', { profile: bad });
+      assert.ok(!p.includes('profile='), '非法 profile 名被拼进 query：' + String(bad) + ' → ' + p);
+    }
+    // 缺省（老调用方）仍可用，但主进程一定会注入；这条只保证不抛错
+    assert.ok(kanban.buildPath('projectsTree').startsWith('/projects/tree?preview_limit=3'));
+  });
   await t('buildWritePath 只有十二条写路径，动态段同样过正则', () => {
     assert.strictEqual(kanban.buildWritePath('createTask'), '/tasks');
     assert.strictEqual(kanban.buildWritePath('createTask', { board: 'ops-2026' }), '/tasks?board=ops-2026');

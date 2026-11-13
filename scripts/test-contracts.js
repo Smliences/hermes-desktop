@@ -999,6 +999,18 @@ t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', (
   assert.ok(mainSrc.includes('chat.backendInfo()'), '主进程未把后端只读快照注入看板客户端');
   assert.ok(read('main/services/hermes-chat.js').includes('backendInfo()'), 'ChatChannel 缺少 backendInfo 快照');
 });
+t('项目树按当前 profile 作用域读，别的 profile 的项目不并进侧栏', () => {
+  // GET /api/profiles/projects/tree 的缺省 scope 是 profile=all：不显式限定，CLI 会把
+  // 每个 profile 的 projects.db 都读一遍再按文件夹路径合并（_merge_profile_tree），
+  // 于是 default 里建的项目会出现在别的 profile 的侧栏里，而会话列表只读当前 profile。
+  const at = mainSrc.indexOf("handle('projects:tree'");
+  assert.ok(at > 0, '缺少 projects:tree handler');
+  const block = mainSrc.slice(at, at + 420);
+  assert.ok(block.includes('profile.current()'), '主进程未注入当前 profile，树会退化成全 profile 合并');
+  assert.ok(kbSrc.includes('&profile=${encodeURIComponent(who)}'), 'buildPath 未把 profile 拼进 query');
+  assert.ok(kbSrc.includes('PROFILE_NAME_RE.test(who)'), 'profile 名未过白名单，可注入任意 query');
+  assert.ok(!appSrc.includes('projectsTree({ profile'), '渲染层自己指定了作用域，切 profile 后会指向旧值');
+});
 t('会话 token 只存在于主进程服务层', () => {
   assert.ok(kbSrc.includes("'X-Hermes-Session-Token': info.token"), '服务层未注入会话 token');
   assert.ok(!preloadSrc.includes('X-Hermes-Session-Token'), 'preload 不应接触 token');

@@ -57,6 +57,8 @@ const TASK_ID_RE = /^t_[A-Za-z0-9_-]{1,64}$/;
 const BOARD_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const RUN_ID_RE = /^\d{1,12}$/;
+/** profile 名（对齐 hermes-profile 的 NAME_RE）：只用于 tree 的读取作用域。 */
+const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 /** 创建时可选的起始状态。ready 可能被调度器立即派发，UI 必须显式警示。 */
 const CREATE_STATUSES = Object.freeze(['triage', 'ready']);
 /** 改派允许顺带推进到的状态。只有 ready —— 其它状态推进不在本桌面端白名单里。 */
@@ -196,7 +198,13 @@ function buildPath(op, params = {}) {
     // 把会话分好组，previewSessions 是每项目最近几条、sessionIds 是全量认领 id。
     case 'projectsTree': {
       const preview = Number.isInteger(p.previewLimit) ? Math.max(1, Math.min(5, p.previewLimit)) : 3;
-      return `/projects/tree?preview_limit=${preview}&session_limit=2000`;
+      // profile **必须**显式带上：端点缺省是 profile=all，会把每个 profile 的
+      // projects.db 都读一遍再按文件夹路径合并（CLI 的 _merge_profile_tree），
+      // 于是 default 里建的项目会出现在别的 profile 的侧栏里。桌面侧栏本来就只服务
+      // 当前 profile（会话列表也只读当前 state.db），跨 profile 的读只属于球菜单。
+      const who = typeof p.profile === 'string' ? p.profile.trim() : '';
+      const scope = who && PROFILE_NAME_RE.test(who) ? `&profile=${encodeURIComponent(who)}` : '';
+      return `/projects/tree?preview_limit=${preview}&session_limit=2000${scope}`;
     }
     default: return null;
   }

@@ -651,9 +651,11 @@ function boot() {
     return kanban.overview(opts || {});
   });
   // 侧栏项目树（GET /api/profiles/projects/tree）：会话按项目归组的数据源
+  // profile 由主进程注入，渲染层传不进来：这个端点缺省会扫**所有** profile 并按文件夹
+  // 合并，不限定就会把别的 profile 的项目并进当前侧栏（会话列表却只读当前 profile）。
   handle('projects:tree', async (_e, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
-    return kanban.projectsTree(opts || {});
+    return kanban.projectsTree({ ...(opts || {}), profile: profile.current() });
   });
   handle('kanban:run', async (_e, runId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
