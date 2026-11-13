@@ -3189,7 +3189,13 @@ function openFullKanban(status) {
   if (status !== undefined) KB.status = status;
   showKanban(true);
 }
-$('#rkb-refresh').onclick = () => kanbanLoad(false);
+// 刷新按钮：转起来说明「确实在请求」，否则点了没反馈会让人连点三下
+$('#rkb-refresh').onclick = async () => {
+  const b = $('#rkb-refresh');
+  if (b && b.classList.contains('is-busy')) return; // 已在拉，别叠请求
+  if (b) b.classList.add('is-busy');
+  try { await kanbanLoad(false); } finally { if (b) b.classList.remove('is-busy'); }
+};
 $('#rkb-new').onclick = () => kbModalOpen('task');
 $('#rkb-expand').onclick = () => openFullKanban();
 // 看板切换：占位项（空值）代表「当前看板」，选中别的 = 改筛选，走同一条 kanbanLoad；
@@ -7437,6 +7443,14 @@ function renderKanban() {
    写操作一律回完整看板页（详情抽屉挂在整页里），这里只留「新建任务 / 新建看板」
    两个全局弹窗入口，避免两处状态机各写一份。 */
 const RKB_MAX_CARDS = 7;
+/** rail 的分组顺序：先看「在跑 / 卡住」的，再看排队与历史。
+ *  整页五列仍用 KB_GROUPS 原序（那里是流程顺序，看得见全貌）；
+ *  这里是速览，顺序应该按「我现在要关心什么」排。 */
+const RKB_ORDER = Object.freeze(['running', 'blocked', 'ready', 'todo', 'done']);
+function rkbOrdered(groups) {
+  const idx = (k) => { const i = RKB_ORDER.indexOf(k); return i < 0 ? RKB_ORDER.length : i; };
+  return groups.slice().sort((a, b) => idx(a.key) - idx(b.key));
+}
 /** '' = 全部；其余是 KB_GROUPS 的 key。纯渲染层状态，不进 KB.filters（别影响整页）。 */
 let rkbFilter = '';
 /** 看板下拉的候选指纹：只有候选 / 当前看板变了才重建选项，免得每 5 秒把展开的面板顶掉。 */
@@ -7467,59 +7481,77 @@ function rkbSyncBoardSwitch() {
   el.setOptions(
     boards.filter((x) => x.value !== cur)
       .concat([{ value: '__new-board', label: '＋ 新建看板…', action: true }]),
-    cur ? `看板 · ${cur}` : '当前看板');
+    // 占位项显示的就是看板名本身：多一个「看板 · 」前缀只是把这一行最要紧的字推远
+    cur || '当前看板');
 }
-/** 一张卡一行：色条 + 标题（占满剩余宽度）+ 子状态 + 一个右对齐信息。
- *  右对齐只放最急的那个：运行中看秒表，已指派看人，其余看「多久前建的」。 */
+/** 一张卡一行（30px）：[色槽] 标题 …… 子状态 时间。
+ *  右侧只留一个「时效」槽 —— 运行中看秒表，其余看多久前建。受让人不再单独占位：
+ *  它是"人"不是"时间"，和「收集箱 / 1 天前」挤在同一列时每行都要重新解析一遍；
+ *  人放在 title 里，整页卡片和抽屉里都能看到。 */
 function rkbCardHtml(t) {
   const st = String((t && t.status) || '');
   const asg = String((t && t.assignee) || '').trim();
   const ago = kbAgo(t && t.created_at);
   const title = String((t && t.title) || '未命名任务');
   const stLabel = KB_STATUS_LABEL[st] || st;
+  // 组名已经说明了状态（待办 / 进行中），只有更细的（收集箱 / 已排期 / 待验收）才标
   const sub = RKB_SUB_STATUS.indexOf(st) >= 0 ? stLabel : '';
   const runStart = st === 'running' ? kbRunStart(t) : 0;
-  const run = runStart
+  const slot = runStart
     ? `<span class="rkb-run" data-kb-run="${runStart}" data-kb-run-max="${kbRunLimit(t)}"><span class="kb-run-txt">${esc(kbRunClockText(kbRunElapsed(runStart), kbRunLimit(t)))}</span></span>`
-    : '';
-  const meta = run || (asg ? `<span class="rkb-asg">${esc(asg)}</span>`
-    : (ago ? `<span class="rkb-age">${esc(ago)}</span>` : ''));
-  const tip = `${title} · ${stLabel || '未知状态'}${asg ? ' · ' + asg : ''}${ago ? ' · ' + ago : ''}`;
-  return `<button class="rkb-card" type="button" data-rkb-task="${esc((t && t.id) || '')}" data-dot="${esc(rkbDotFor(st))}" title="${esc(tip)}">`
+    : (ago ? `<span class="rkb-age">${esc(ago)}</span>` : '');
+  const tip = [title, stLabel || '未知状态', asg, ago].filter(Boolean).join(' · ');
+  return `<button class="rkb-card${st === 'running' ? ' is-running' : ''}" type="button"`
+    + ` data-rkb-task="${esc((t && t.id) || '')}" data-dot="${esc(rkbDotFor(st))}" title="${esc(tip)}">`
     + `<span class="rkb-title">${esc(title)}</span>`
     + (sub ? `<span class="rkb-st">${esc(sub)}</span>` : '')
-    + (meta ? `<span class="rkb-meta">${meta}</span>` : '')
+    + (slot ? `<span class="rkb-meta">${slot}</span>` : '')
     + '</button>';
 }
+/** 组头右侧的折叠箭头：三个按钮已经是矢量图标了，箭头再用字符会跟字体基线打架。 */
+const RKB_CARET = '<svg class="rkb-caret" viewBox="0 0 12 12" width="10" height="10" fill="none"'
+  + ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
+  + ' aria-hidden="true"><path d="M4.6 2.6 8 6l-3.4 3.4" /></svg>';
 function rkbGroupHtml(g, state) {
   const tasks = g.all.slice(0, RKB_MAX_CARDS);
-  const cards = tasks.map((t) => rkbCardHtml(t)).join('')
-    || '<div class="rkb-none">暂无任务</div>';
+  const cards = tasks.map((t) => rkbCardHtml(t)).join('');
   const more = g.all.length > tasks.length
-    ? `<button class="rkb-more" type="button" data-rkb-more="${esc(g.key)}">还有 ${g.all.length - tasks.length} 张 · 打开完整看板</button>`
+    ? `<button class="rkb-more" type="button" data-rkb-more="${esc(g.key)}">还有 ${g.all.length - tasks.length} 张 →</button>`
     : '';
+  const body = cards || '<div class="rkb-none">这一组是空的</div>';
+  // 进行中永远是这一屏的主角：组名给正文色 + 加粗，眼睛第一眼就落在上面
+  const cls = `rkb-group-head${g.key === 'running' ? ' is-hot' : ''}`;
   const head = `<span class="rkb-dot" data-dot="${esc(g.dot)}"></span>`
     + `<span class="rkb-group-name">${esc(g.label)}</span>`
-    + `<span class="rkb-group-num">${g.all.length}</span>`
-    + '<span class="rkb-group-rule"></span>';
+    + `<span class="rkb-group-num">${g.all.length}</span>`;
   // 按筛选只剩一组时不做折叠：点 chip 就是为了看卡片，再收起来没有意义
   if (state.flat) {
-    return `<div class="rkb-group is-flat"><div class="rkb-group-head is-static" title="${esc(g.hint)}">${head}</div>`
-      + `${cards}${more}</div>`;
+    return `<div class="rkb-group is-flat"><div class="${cls} is-static" title="${esc(g.hint)}">${head}</div>`
+      + `${body}${more}</div>`;
   }
-  // 首次渲染只展开「有内容且不是已完成」的组：已完成常常几十张，一进来就淹没在历史里
-  const open = state.first ? (g.all.length > 0 && g.key !== 'done') : !!state.opened[g.key];
+  // 首次渲染只展开「不是已完成」的组：已完成常常几十张，一进来就淹没在历史里
+  const open = state.first ? (g.key !== 'done') : !!state.opened[g.key];
   return `<details class="rkb-group" data-rkb-group="${esc(g.key)}"${open ? ' open' : ''}>`
-    + `<summary class="rkb-group-head" title="${esc(g.hint)}">${head}</summary>`
-    + `${cards}${more}</details>`;
+    + `<summary class="${cls}" title="${esc(g.hint)}">${head}${RKB_CARET}</summary>`
+    + `${body}${more}</details>`;
 }
 function renderRailKanban() {
   const host = $('#rkb-groups');
   if (!host) return;
-  const groups = kbGroups();
+  const groups = rkbOrdered(kbGroups());
   const total = groups.reduce((n, g) => n + g.all.length, 0);
   const running = (groups.find((g) => g.key === 'running') || { all: [] }).all.length;
   rkbSyncBoardSwitch();
+  // 比例条：一眼看出这个板是「一堆排队」还是「大半跑完」。
+  // 只在有任务时画；空组不占灰段，否则零任务的看板会挂一条纯灰线。
+  const meter = $('#rkb-meter');
+  if (meter) {
+    meter.innerHTML = total
+      ? groups.filter((g) => g.all.length > 0).map((g) =>
+        `<span class="rkb-seg" data-dot="${esc(g.dot)}" style="flex-grow:${g.all.length}"`
+        + ` title="${esc(g.label)} ${g.all.length} 张"></span>`).join('')
+      : '';
+  }
   // 统计与筛选合一：点一下只看这一组，再点一次回到全部（本地过滤，不打 REST）
   const sum = $('#rkb-summary');
   if (sum) {
@@ -7533,9 +7565,9 @@ function renderRailKanban() {
       + groups.map((g) => chip(g.key, g.label, g.dot, g.all.length, `${g.hint} · 点一下只看这一组`)).join('');
   }
   if (KB.error) {
-    host.innerHTML = `<div class="rkb-empty">${esc(KB.error)}</div>`;
+    host.innerHTML = `<div class="rkb-empty"><div class="rkb-empty-main">${esc(KB.error)}</div></div>`;
   } else if (!KB.board) {
-    host.innerHTML = '<div class="rkb-empty">正在读取看板…</div>';
+    host.innerHTML = '<div class="rkb-empty"><div class="rkb-empty-main">正在读取看板…</div></div>';
   } else {
     // 折叠状态存在 DOM 里：重渲染前读一次，避免每 5 秒同步把用户收起的组又打开。
     // 「首次」按有没有分组节点判断，不能按 host 是否为空 —— 加载态 / 空态占位会让
@@ -7544,17 +7576,28 @@ function renderRailKanban() {
     const existing = host.querySelectorAll('details.rkb-group');
     const first = existing.length === 0;
     existing.forEach((d) => { opened[d.dataset.rkbGroup] = d.open; });
-    // 速览用 g.all：整页的搜索 / 受让人筛选不该悄悄改变这边的全局感
-    const shown = rkbFilter ? groups.filter((g) => g.key === rkbFilter) : groups;
-    host.innerHTML = shown.map((g) => rkbGroupHtml(g, { first, opened, flat: !!rkbFilter })).join('');
+    // 速览用 g.all：整页的搜索 / 受让人筛选不该悄悄改变这边的全局感。
+    // 不筛选时把 0 张的组整个藏掉 —— 一排「暂无任务」在速览里只是占地方，
+    // 想知道哪组是空的看上面的 chip 计数就够了；筛选时反而要留着（空态也是信息）。
+    const shown = rkbFilter
+      ? groups.filter((g) => g.key === rkbFilter)
+      : groups.filter((g) => g.all.length > 0);
+    host.innerHTML = shown.length
+      ? shown.map((g) => rkbGroupHtml(g, { first, opened, flat: !!rkbFilter })).join('')
+      : `<div class="rkb-empty">
+          <div class="rkb-empty-ico">◫</div>
+          <div class="rkb-empty-main">这个看板还没有任务</div>
+          <div class="rkb-empty-hint">点栏头的 ＋ 新建一个，或打开完整看板批量拆分</div>
+        </div>`;
   }
   const foot = $('#rkb-foot-text');
   if (foot) {
     // 筛选时脚注要说明「看到的是子集」：光看一组卡片会忘了全板还有多少
     const picked = groups.find((g) => g.key === rkbFilter);
     foot.textContent = KB.error || (!KB.board ? '等待数据'
-      : picked ? `${picked.label} ${picked.all.length} 张 / 共 ${total} 张 · 每 5 秒同步`
-        : `${total} 张${running ? ` · 进行中 ${running}` : ''} · 每 5 秒同步`);
+      : picked ? `${picked.label} ${picked.all.length} 张 / 共 ${total} 张`
+        // 「每 5 秒同步」在页签栏已经写着「实时同步」，脚注不再重复一遍
+        : `${total} 张${running ? ` · 进行中 ${running}` : ''}`);
   }
   kbRunWatch(); // 运行中的卡在缩略视图里也要走表；没有可见节点会自停
 }

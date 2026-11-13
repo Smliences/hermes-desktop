@@ -3628,7 +3628,7 @@ const previewSvc = read('main/services/hermes-preview.js');
 const mockBridgeSrc = read('renderer/mock-bridge.js');
 const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
   appSrc.indexOf('/* ---------- 全局快捷键'));
-const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* 右侧 rail：看板紧凑视图'));
+const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'));
 const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),
   htmlSrc.indexOf('<div class="rail-pane" id="kanban-pane"'));
 
@@ -3707,7 +3707,7 @@ t('自动跟随覆盖新类型，Demo 桥不再被 hasNative 挡住', () => {
 section('3ak. 右侧 rail 看板：双视图共享数据、写操作回整页、双主题与几何不变');
 const railHtml = htmlSrc.slice(htmlSrc.indexOf('<!-- ══════════ 右侧 rail'),
   htmlSrc.indexOf('<!-- ══════════ 新建弹窗'));
-const railCss = cssSrc.slice(cssSrc.indexOf('/* 右侧 rail：看板紧凑视图'),
+const railCss = cssSrc.slice(cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'),
   cssSrc.indexOf('/* ══════════ 命令面板'));
 const railApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
   appSrc.indexOf('/* ---------- 全局快捷键'));
@@ -3753,8 +3753,10 @@ t('紧凑视图只读，写操作一律回完整看板页', () => {
   assert.ok(rkbApp.includes('const first = existing.length === 0'),
     '「首次」按 host 是否为空判断会被加载态占位骗到，数据回来时五组全折叠');
   assert.ok(rkbApp.includes('g.all.slice(0, RKB_MAX_CARDS)'), '未限制单组卡片数，长列表会吃满 rail');
-  assert.ok(railApp.includes("$('#rkb-refresh').onclick = () => kanbanLoad(false)"),
-    '刷新按钮未接同一条加载链');
+  assert.ok(railApp.includes("$('#rkb-refresh').onclick = async () => {")
+    && railApp.includes('await kanbanLoad(false)'), '刷新按钮未接同一条加载链');
+  assert.ok(railApp.includes("classList.add('is-busy')") && railCss.includes('@keyframes rkb-spin'),
+    '刷新没有转起来的反馈，点下去像没反应');
   assert.ok(!/kanban(SetStatus|Reassign|DeleteTask|Dispatch)/.test(rkbApp),
     '紧凑视图不得自己写状态 / 改派 / 派发');
 });
@@ -3781,32 +3783,70 @@ t('状态 chip 在本地过滤，卡片压成单行', () => {
     railApp.includes("rkbFilter = rkbFilter === key ? '' : key"),
     '点 chip 未在本地切换筛选 / 无法回到全部');
   assert.ok(!railApp.includes('openFullKanban(b.dataset.rkbGroup)'), '点 chip 仍会跳走整页');
-  assert.ok(rkbApp.includes("const shown = rkbFilter ? groups.filter((g) => g.key === rkbFilter) : groups"),
+  assert.ok(rkbApp.includes('const shown = rkbFilter')
+    && rkbApp.includes(': groups.filter((g) => g.all.length > 0)'),
     '筛选没有落到渲染上');
-  assert.ok(rkbApp.includes('is-flat') && rkbApp.includes("g.all.length > 0 && g.key !== 'done'"),
+  assert.ok(rkbApp.includes('is-flat') && rkbApp.includes("state.first ? (g.key !== 'done')"),
     '筛到单组时不该再折叠；「已完成」默认应收起');
   assert.ok(rkbApp.includes('function rkbCardHtml(') && rkbApp.includes('data-rkb-more='),
     '缺单行卡片 / 「还有 N 张」入口');
 });
 t('新样式全走双主题 token，无硬编码色，每个 class 都有规则', () => {
-  for (const c of ['.rkb-bar', '.rkb-board', '.rkb-board .us-trigger', '.rkb-btn', '.rkb-btn:hover',
-    '.rkb-btn:focus-visible', '.rkb-summary', '.rkb-stat', '.rkb-stat:hover', '.rkb-stat:focus-visible',
-    '.rkb-stat.is-on', '.rkb-stat b', '.rkb-dot', '.rkb-stat[data-dot="yellow"] .rkb-dot',
-    '.rkb-scroll', '.rkb-list', '.rkb-group', '.rkb-group-head', '.rkb-group-head::before',
-    '.rkb-group[open] .rkb-group-head::before', '.rkb-group-head.is-static',
-    '.rkb-group-head:focus-visible', '.rkb-group-name', '.rkb-group-num', '.rkb-group-rule',
-    '.rkb-card', '.rkb-card:hover', '.rkb-card:focus-visible', '.rkb-title', '.rkb-st', '.rkb-meta',
-    '.rkb-asg', '.rkb-age', '.rkb-more', '.rkb-none', '.rkb-empty', '.rkb-foot']) {
+  for (const c of ['.rkb-bar', '.rkb-board', '.rkb-board .us-trigger', '.rkb-actions',
+    '.rkb-btn', '.rkb-btn:hover', '.rkb-btn:focus-visible', '.rkb-btn.is-busy svg', '.rkb-go',
+    '.rkb-overview', '.rkb-meter', '.rkb-seg', '.rkb-seg[data-dot="green"]',
+    '.rkb-summary', '.rkb-stat', '.rkb-stat:hover', '.rkb-stat:focus-visible',
+    '.rkb-stat.is-on', '.rkb-stat b', '.rkb-dot', '.rkb-dot[data-dot="yellow"]',
+    '.rkb-scroll', '.rkb-list', '.rkb-group', '.rkb-group + .rkb-group',
+    '.rkb-group-head', '.rkb-group[open] .rkb-caret', '.rkb-group-head.is-static',
+    '.rkb-group-head.is-hot .rkb-group-name', '.rkb-group-head:focus-visible',
+    '.rkb-group-name', '.rkb-group-num', '.rkb-caret',
+    '.rkb-card', '.rkb-card::before', '.rkb-card.is-running::before', '.rkb-card:hover',
+    '.rkb-card:focus-visible', '.rkb-title', '.rkb-st', '.rkb-meta',
+    '.rkb-age', '.rkb-run', '.rkb-more', '.rkb-none',
+    '.rkb-empty', '.rkb-empty-ico', '.rkb-empty-main', '.rkb-empty-hint', '.rkb-foot']) {
     assert.ok(railCss.includes(c), '缺少样式规则 ' + c);
   }
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(railCss), '出现硬编码色值，深色主题会失配');
   assert.ok(railCss.includes('var(--canvas)') && railCss.includes('var(--fill-2)'), '未使用双主题 token');
   assert.ok(railCss.includes('prefers-reduced-motion'), '动效未降级');
   assert.ok(railCss.includes('flex-wrap: wrap'), '280px 窄栏统计条会溢出');
-  // 单行卡片：高度必须写死，否则标题变长会把行撑成两行
-  assert.ok(/\.rkb-card \{[^}]*height: 27px/.test(railCss), '卡片不是定高单行，长标题会撑高');
+  // 行必须定高，否则标题变长会把行撑成两行（速览的价值全在"一眼扫完"）
+  assert.ok(/\.rkb-card \{[^}]*height: 30px/.test(railCss), '卡片不是定高单行，长标题会撑高');
   assert.ok(/\.rkb-title \{[^}]*white-space: nowrap/.test(railCss), '标题未单行省略');
   assert.ok(railCss.includes('position: sticky'), '分组标题没吸顶，滚下去就丢了状态');
+});
+t('比例条只给「进行中 / 受阻」上色，其余留中性', () => {
+  assert.ok(railHtml.includes('id="rkb-meter"'), '缺少状态比例条容器');
+  assert.ok(/\.rkb-seg\[data-dot="green"\]/.test(railCss) && /\.rkb-seg\[data-dot="red"\]/.test(railCss),
+    '进行中 / 受阻没有在比例条上着色');
+  // 五组各上一色会变成一条没重点的彩虹：黄 / 陶土 / 灰都必须是透明占位
+  for (const d of ['yellow', 'accent', 'muted']) {
+    assert.ok(!railCss.includes(`.rkb-seg[data-dot="${d}"]`), '比例条不该给 ' + d + ' 上色');
+  }
+  assert.ok(railCss.includes('background: var(--line); overflow: hidden'),
+    '比例条没有轨道底色，透明段会露出缝隙');
+  assert.ok(rkbApp.includes('style="flex-grow:${g.all.length}"'),
+    '分段宽度没按任务数分配（CSP 已允许内联样式）');
+  assert.ok(railCss.includes('.rkb-meter:empty'), '空看板会留一条纯灰轨道');
+});
+t('分组顺序按「要关心的先看」，空组不占地方', () => {
+  assert.ok(rkbApp.includes("const RKB_ORDER = Object.freeze(['running', 'blocked', 'ready', 'todo', 'done'])"),
+    '速览顺序没按紧迫度排（整页仍是流程序）');
+  assert.ok(rkbApp.includes('function rkbOrdered(') && rkbApp.includes('rkbOrdered(kbGroups())'),
+    '排序函数没有落到渲染上');
+  assert.ok(rkbApp.includes('groups.filter((g) => g.all.length > 0)'),
+    '零任务的组没有隐藏，速览里一排「暂无任务」纯属占地方');
+  assert.ok(rkbApp.includes('groups.filter((g) => g.key === rkbFilter)'),
+    '筛选态也要显示空组（「这一组是空的」本身是信息）');
+  assert.ok(rkbApp.includes('rkb-group-head${g.key === \'running\' ? \' is-hot\' : \'\'}'),
+    '进行中的组没有在组头上强调');
+});
+t('栏头三个图标是矢量，不是三个字形方块', () => {
+  const barHtml = railHtml.slice(railHtml.indexOf('id="rkb-refresh"'), railHtml.indexOf('id="rkb-meter"'));
+  assert.strictEqual((barHtml.match(/<svg /g) || []).length, 3, '三个按钮不是统一的矢量图标');
+  assert.ok(barHtml.includes('stroke="currentColor"'), '图标没吃主题色，深色下会发白');
+  assert.ok(/\.rkb-btn \{[^}]*border: 0/.test(railCss), '图标按钮还留着描边和底色');
 });
 t('外层定版几何不动，命令 / 快捷键文案去终端化', () => {
   assert.ok(/width:\s*var\(--rail-w, 400px\)/.test(cssSrc), 'rail 默认宽度被改');
@@ -3824,7 +3864,7 @@ const runPanel = appSrc.slice(appSrc.indexOf('function kbRunPanel('), appSrc.ind
 const runCard = appSrc.slice(appSrc.indexOf('function kbCardHtml('), appSrc.indexOf('/** 按归组摊平当前看板'));
 const runCss = cssSrc.slice(cssSrc.indexOf('/* 运行中卡片的秒表'), cssSrc.indexOf('.kbd-danger {'));
 const progCss = runCss;
-const rkbRunCss = cssSrc.slice(cssSrc.indexOf('.rkb-run {'), cssSrc.indexOf('.rkb-none, .rkb-empty'));
+const rkbRunCss = cssSrc.slice(cssSrc.indexOf('.rkb-run {'), cssSrc.indexOf('.rkb-more {'));
 
 t('计时口径只有一份：秒 / 毫秒兼容，卡片与抽屉共用同一套格式', () => {
   for (const fn of ['function kbRunStart(', 'function kbRunLimit(', 'function kbDur(',

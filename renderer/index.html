@@ -584,16 +584,39 @@
       </div>
 
       <!-- 紧凑看板：与整页共用 KB.board 与同一个轮询，不另开一条 REST。
-           400px 里放不下 5 列等分，所以排成「看板切换 + 状态筛选 + 单列密排」：
-           每张卡压成一行（标题 + 状态/时长/受让人），状态筛选只在本地过滤、不发请求。 -->
+           400px 里放不下 5 列等分，所以做成「一屏速览」：
+             栏头 = 看板下拉 + 三个 ghost 图标（刷新 / 新建 / 去完整看板）
+             概览 = 4px 比例条（按各组任务数分段）+ 一行状态筛选 chip
+             正文 = 按「进行中 → 受阻 → 就绪 → 待办 → 已完成」重排的分组，
+                    组头可折叠，每张任务压成 30px 单行（子状态 + 时间/秒表）。
+           状态筛选只做本地过滤、不发请求；写操作一律回完整看板页。 -->
       <div class="rail-pane" id="kanban-pane" hidden>
         <div class="rkb-bar">
           <hm-select id="rkb-board" class="ui-select rkb-board" aria-label="切换看板" placeholder="当前看板"></hm-select>
-          <button class="rkb-btn" id="rkb-refresh" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
-          <button class="rkb-btn" id="rkb-new" type="button" title="新建任务" aria-label="新建任务">＋</button>
-          <button class="rkb-btn" id="rkb-expand" type="button" title="打开完整看板" aria-label="打开完整看板">⤢</button>
+          <div class="rkb-actions">
+            <button class="rkb-btn" id="rkb-refresh" type="button" title="立即刷新" aria-label="立即刷新">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M13.4 7.2a5.4 5.4 0 1 0-.5 3.6" /><path d="M13.6 2.9v3.4h-3.4" />
+              </svg>
+            </button>
+            <button class="rkb-btn" id="rkb-new" type="button" title="新建任务" aria-label="新建任务">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3.4v9.2M3.4 8h9.2" /></svg>
+            </button>
+            <button class="rkb-btn rkb-go" id="rkb-expand" type="button" title="打开完整看板"
+              aria-label="打开完整看板">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6.2 9.8 12.6 3.4" /><path d="M7.6 3.4h5v5" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <div class="rkb-summary" id="rkb-summary" role="group" aria-label="按状态筛选任务"></div>
+        <div class="rkb-overview">
+          <div class="rkb-meter" id="rkb-meter" aria-hidden="true"></div>
+          <div class="rkb-summary" id="rkb-summary" role="group" aria-label="按状态筛选任务"></div>
+        </div>
         <div class="rkb-scroll" id="rkb-scroll"><div class="rkb-list" id="rkb-groups"></div></div>
         <div class="rkb-foot"><span id="rkb-foot-text">等待数据</span></div>
       </div>

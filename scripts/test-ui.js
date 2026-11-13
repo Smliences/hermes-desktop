@@ -408,6 +408,54 @@ let CHROME_BIN = null;
       && s12b2.opts.length >= 2 && s12b2.opts[s12b2.opts.length - 1].includes('新建看板'),
     JSON.stringify(s12b2));
 
+  // 视觉结构：分组顺序按紧迫度、比例条只高亮两种状态、行定高 30px、图标是矢量
+  const s12b1 = await cdp.ev(`(() => {
+    const segs = [...document.querySelectorAll('#rkb-meter .rkb-seg')];
+    const rows = [...document.querySelectorAll('.rkb-card')];
+    const order = [...document.querySelectorAll('.rkb-group')]
+      .map((g) => g.dataset.rkbGroup || (g.querySelector('.rkb-group-head') ? 'flat' : ''));
+    return {
+      order,
+      segs: segs.length,
+      grow: segs.map((s) => s.style.flexGrow),
+      colored: segs.map((s) => ({ dot: s.dataset.dot, bg: getComputedStyle(s).backgroundColor })),
+      h: rows.length ? Math.round(rows[0].getBoundingClientRect().height) : 0,
+      icons: document.querySelectorAll('#kanban-pane .rkb-btn svg').length,
+      hot: document.querySelectorAll('.rkb-group-head.is-hot').length,
+      sticky: [...document.querySelectorAll('.rkb-group-head')]
+        .every((h) => getComputedStyle(h).position === 'sticky')
+    };
+  })()`);
+  const TRANSPARENT = (bg) => /rgba?\(0, 0, 0, 0\)|transparent/.test(bg);
+  ok('分组按「进行中 → 受阻 → 就绪 → 待办 → 已完成」排，进行中组头强调',
+    s12b1.order[0] === 'running' && s12b1.order.join(',') === 'running,blocked,ready,todo,done'
+      && s12b1.hot === 1, JSON.stringify(s12b1.order));
+  ok('比例条按任务数分段，只有进行中 / 受阻上色（其余留中性轨）',
+    s12b1.segs === 5 && s12b1.grow.every((g) => Number(g) > 0)
+      && s12b1.colored.filter((c) => c.dot === 'green' || c.dot === 'red').every((c) => !TRANSPARENT(c.bg))
+      && s12b1.colored.filter((c) => c.dot !== 'green' && c.dot !== 'red').every((c) => TRANSPARENT(c.bg)),
+    JSON.stringify(s12b1.colored));
+  ok('任务行定高 30px 且组头吸顶（长列表滚下去还知道是哪一段）',
+    s12b1.h === 30 && s12b1.sticky, JSON.stringify({ h: s12b1.h, sticky: s12b1.sticky }));
+  ok('栏头三个图标都是矢量（不是三个字形方块）', s12b1.icons === 3, String(s12b1.icons));
+
+  // 空组不占地方：清空一组后组数与比例条段数同时减一，恢复后回来
+  const s12b3 = await cdp.ev(`(() => {
+    const col = KB.board.columns.find((c) => c.name === 'blocked');
+    const saved = (col.tasks || []).slice();
+    col.tasks = [];
+    renderRailKanban();
+    const empty = { groups: document.querySelectorAll('.rkb-group').length,
+      segs: document.querySelectorAll('.rkb-seg').length };
+    col.tasks = saved;
+    renderRailKanban();
+    return { empty, back: document.querySelectorAll('.rkb-group').length,
+      segsBack: document.querySelectorAll('.rkb-seg').length };
+  })()`);
+  ok('零任务的组整段隐藏，速览里不堆「暂无任务」',
+    s12b3.empty.groups === 4 && s12b3.empty.segs === 4
+      && s12b3.back === 5 && s12b3.segsBack === 5, JSON.stringify(s12b3));
+
   const s12c = await cdp.ev(`(() => {
     document.querySelector('.rkb-group[data-rkb-group="todo"]').open = false;
     renderRailKanban();
