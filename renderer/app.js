@@ -2137,6 +2137,29 @@ async function send(text, displayText) {
   const tab = activeTab();
   if (!tab || tab.running) return;
   text = text.trim(); if (!text) return;
+  /* 斜杠命令兜底：菜单被 Esc 关掉、或敲的是别名时，Enter 绝不能把 `/compact` 当正文
+     发给模型 —— 那正是「命令不能用」的样子。精确匹配（含别名）就跑命令；目录已就绪
+     但确实没这条，也交给 CLI 回答（它会回「Unknown command /x — nothing was sent.」）。
+     只有用户自己发起的那次发送（displayText 为空）才走这条，命令改写的 prompt 不受影响。 */
+  if (!displayText) {
+    const hit = resolveSlashCommand(text);
+    if (hit) {
+      $('#input').value = ''; autoGrow(); updateCount(); slashClose();
+      return runSlashCommand(hit.row, hit.arg, hit.row.aliasHit || hit.row.cmd);
+    }
+    const m = text.match(/^(\/[A-Za-z0-9][A-Za-z0-9_.:-]*)(\s+[\s\S]*)?$/);
+    if (m && !cliCatalog.ok) {
+      // 目录还在路上：别把 /compact 当正文发出去，也别默默吞掉 —— 说清楚在等什么
+      loadCliCatalog();
+      toast('命令目录还在加载，稍等一下再按 Enter', 2400);
+      return;
+    }
+    if (cliCatalog.ok && m) {
+      $('#input').value = ''; autoGrow(); updateCount(); slashClose();
+      return runSlashCommand({ cmd: m[1], desc: '', source: 'cli', argMode: null, sub: [], scope: '' },
+        (m[2] || '').trim(), m[1]);
+    }
+  }
   const shown = String(displayText || text).trim() || text;
   slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
   state.sendHistory.push(shown); state.histIdx = state.sendHistory.length;
@@ -2725,6 +2748,9 @@ function loadCliCatalog(force = false) {
           categories: Array.isArray(res.categories) ? res.categories : [],
           alias: res.alias || {}, error: '',
         });
+        // 目录回来时菜单若正开着（用户敲得太快，先看到的是「加载中」占位），就地重画一次，
+        // 否则那一屏占位会一直挂着，直到用户再敲一个字符。
+        if (typeof slashMenuOpen === 'function' && slashMenuOpen()) slashSync();
       } else {
         cliCatalog.error = (res && res.error) || '命令目录不可用';
       }
@@ -2750,6 +2776,22 @@ function commandScore(row, q) {
  * 同名已被主进程的 DESKTOP_OWN 过滤掉，这里不重复去重。
  */
 const CMD_MENU_MAX = 40;
+/** 别名表（`canon`）的用法：CLI 的目录**只列规范名**，别名只出现在 `canon` 里
+    （`command_discovery._catalog_registry` 只 add `/{cmd.name}`）。
+    所以 /compact 这种别名在菜单里永远匹配不到 —— 敲它只会看到「没有匹配的指令」，
+    Enter 再把 /compact 当正文发给模型，看起来就是「命令不能用」。 */
+function cliAliasIndex() {
+  const out = new Map(); // 规范名（小写，带 /）→ [别名…]
+  const map = (cliCatalog && cliCatalog.alias) || {};
+  for (const [from, to] of Object.entries(map)) {
+    if (typeof to !== 'string' || !to.startsWith('/')) continue;
+    const key = to.toLowerCase();
+    const list = out.get(key) || [];
+    list.push(String(from).toLowerCase());
+    out.set(key, list);
+  }
+  return out;
+}
 function commandRows(q) {
   const s = (q || '').trim().toLowerCase();
   const local = COMMANDS.map((c) => ({ cmd: c.cmd, desc: c.desc, source: 'local', argMode: null, sub: [], run: c.run }));
@@ -2758,10 +2800,17 @@ function commandRows(q) {
     const sc = commandScore(row, s);
     if (sc >= 0) scored.push({ row, sc, local: true });
   }
+  const aliases = cliAliasIndex();
   for (const c of cliCatalog.commands) {
     const row = { cmd: c.cmd, desc: c.desc || '', source: 'cli', argMode: c.argMode || null, sub: c.sub || [], scope: c.scope || '' };
-    const sc = commandScore(row, s);
-    if (sc >= 0) scored.push({ row, sc, local: false });
+    let sc = commandScore(row, s);
+    let aliasHit = '';
+    // 别名也参与匹配：敲 /compact 要能出 /compress 这一行（排在同名规范名之后，别抢排序）
+    for (const al of (aliases.get(String(c.cmd || '').toLowerCase()) || [])) {
+      const as = commandScore({ cmd: al, desc: '' }, s);
+      if (as >= 0 && (sc < 0 || as + 0.5 < sc)) { sc = as + 0.5; aliasHit = al; }
+    }
+    if (sc >= 0) scored.push({ row: aliasHit ? { ...row, aliasHit } : row, sc, local: false });
   }
   // 同分时本地优先；同组内保持目录原有顺序（sort 稳定）
   scored.sort((a, b) => a.sc - b.sc || (a.local === b.local ? 0 : a.local ? -1 : 1));
@@ -2773,6 +2822,34 @@ function commandRows(q) {
   return locals.concat(rest.slice(0, Math.max(0, CMD_MENU_MAX - locals.length)));
 }
 
+/** 一条完整的斜杠命令（可带参数）→ 目录行；只认**精确**名字，不做模糊匹配。
+    顺序：本地动作 → CLI 规范名 → CLI 别名（/compact → /compress）。
+    找不到返回 null（自由文本，按普通消息发）。 */
+function resolveSlashCommand(text) {
+  const s = String(text || '').trim();
+  if (!/^\/[A-Za-z0-9]/.test(s)) return null;
+  const at = s.search(/\s/);
+  const name = (at < 0 ? s : s.slice(0, at)).toLowerCase();
+  if (!/^\/[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(name)) return null;
+  const arg = at < 0 ? '' : s.slice(at + 1).trim();
+  const local = COMMANDS.find((c) => c.cmd.toLowerCase() === name);
+  if (local) return { row: { cmd: local.cmd, desc: local.desc, source: 'local', argMode: null, sub: [], run: local.run }, arg };
+  const cli = cliCatalog.commands.find((c) => String(c.cmd || '').toLowerCase() === name);
+  if (cli) {
+    return { row: { cmd: cli.cmd, desc: cli.desc || '', source: 'cli', argMode: cli.argMode || null, sub: cli.sub || [], scope: cli.scope || '' }, arg };
+  }
+  const canon = ((cliCatalog.alias || {})[name] || '').toLowerCase();
+  const viaAlias = canon && cliCatalog.commands.find((c) => String(c.cmd || '').toLowerCase() === canon);
+  if (viaAlias) {
+    return {
+      row: { cmd: viaAlias.cmd, desc: viaAlias.desc || '', source: 'cli', argMode: viaAlias.argMode || null,
+        sub: viaAlias.sub || [], scope: viaAlias.scope || '', aliasHit: name },
+      arg,
+    };
+  }
+  return null;
+}
+
 /**
  * 执行一条斜杠命令。
  * CLI 命令的三种返回（gateway/session_commands.py）：
@@ -2780,7 +2857,7 @@ function commandRows(q) {
  *   send / skill → 命令改写成一轮 prompt，回到正常提交流程
  * 失败也给出卡片：网关只放行审过的命令，被拒时它会给「改用哪条命令」的提示。
  */
-async function runSlashCommand(row, argText) {
+async function runSlashCommand(row, argText, typedName) {
   const tab = activeTab();
   if (!tab) return;
   if (row.source === 'local') {
@@ -2793,13 +2870,26 @@ async function runSlashCommand(row, argText) {
 
   const arg = String(argText || '').trim();
   const full = arg ? `${row.cmd} ${arg}` : row.cmd;
-  const item = { kind: 'command', cmd: full, state: 'running', text: '', ts: Date.now() };
+  // 卡片上写用户真正敲的名字（/compact），送进 CLI 的仍是规范名（/compress）
+  const shown = arg ? `${typedName || row.cmd} ${arg}` : (typedName || row.cmd);
+  const isCompress = /^\/(compress|compact)$/i.test(row.cmd);
+  const item = { kind: 'command', cmd: shown, state: 'running', text: '', ts: Date.now() };
   tab.items.push(item);
   renderChat(); scrollBottom(true);
 
   let res = null;
   try { res = await api.cliCommandExec({ sessionId: tab.sessionId, command: full }); }
   catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+  /* /compress 要的是「这个会话的活 agent」。刚打开的历史会话里 agent 是**异步**建起来的
+     （session.resume → _schedule_agent_build），此刻命令会返回空输出 —— 看起来就是点了没反应。
+     稍等一次再试，仍为空就给一句能照做的提示，而不是「（该命令没有输出）」。 */
+  if (isCompress && res && res.ok && !res.type && !String(res.text || '').trim()) {
+    await new Promise((r) => setTimeout(r, 900));
+    try {
+      const again = await api.cliCommandExec({ sessionId: tab.sessionId, command: full });
+      if (again && again.ok && String(again.text || '').trim()) res = again;
+    } catch { /* 保留第一次的空结果，下面给提示 */ }
+  }
 
   // 命令被改写成一轮 prompt：撤掉占位卡，走正常提交（显示命令原文，提交改写后的内容）
   if (res && res.ok && (res.type === 'send' || res.type === 'skill') && res.text) {
@@ -2810,8 +2900,11 @@ async function runSlashCommand(row, argText) {
     return;
   }
 
+  const emptyText = isCompress
+    ? 'CLI 还没把这个会话的 agent 建起来（刚打开的历史会话常见）。先发一条消息，或稍等几秒再敲一次。'
+    : '（该命令没有输出）';
   item.state = res && res.ok ? 'done' : 'error';
-  item.text = res && res.ok ? (res.text || '（该命令没有输出）') : (res && res.error) || '命令执行失败';
+  item.text = res && res.ok ? (res.text || emptyText) : (res && res.error) || '命令执行失败';
   if (tab.id === state.activeTabId) { renderChat(); scrollBottom(true); }
   else { renderTabs(); }
 }
@@ -3002,17 +3095,22 @@ function slashSync() {
   const rows = slashRows(q);
   const menu = $('#chip-menu');
   openChipMenu($('#composer'), rows.map((c) => ({
-    key: c.cmd, name: c.cmd, tag: c.desc, badge: c.source === 'cli' ? 'CLI' : '',
+    // 敲的是别名时把别名标出来（/compact），让人知道这一行就是它
+    key: c.cmd, name: c.cmd, tag: c.desc, badge: c.aliasHit ? c.aliasHit : (c.source === 'cli' ? 'CLI' : ''),
   })), null, (picked) => {
     const row = rows.find((c) => c.cmd === picked.key);
     if (!row) return;
     const spaceAt = q.search(/\s/);
     // 已有参数（`/title 新名字`）或命令本身要吃参数：交回给调用方，别把整串当命令名
     const argText = spaceAt >= 0 ? q.slice(spaceAt + 1) : '';
+    const typedName = '/' + (spaceAt >= 0 ? q.slice(0, spaceAt) : q).trim();
     // 命令名已经完整敲出来了（`/save` 而不是 `/sa`）＝ 用户就是要跑它：
     // 裸命令直接送给 CLI，它会回 usage；比「补个空格就没动静」清楚得多。
     // 只有还在输入命令名的中途（`/sa`）才补全并把焦点留在参数位。
-    const typedFull = q.trim().toLowerCase() === row.cmd.replace(/^\//, '').toLowerCase();
+    // 别名敲全（`/compact`）同样算敲全：它就是这个命令的另一个名字。
+    const qn = q.trim().toLowerCase();
+    const typedFull = qn === row.cmd.replace(/^\//, '').toLowerCase()
+      || (!!row.aliasHit && qn === row.aliasHit.replace(/^\//, '').toLowerCase());
     const needsArg = row.source === 'cli' && row.argMode && !argText && !typedFull;
     if (needsArg) {
       // 只补全命令名，把光标留在名字后面让用户接着敲参数
@@ -3024,7 +3122,8 @@ function slashSync() {
       return;
     }
     inp.value = ''; autoGrow(); updateCount();
-    runSlashCommand(row, argText);
+    // 只敲了半截就从菜单里点：卡片上写真正执行的那条命令，不是半截输入
+    runSlashCommand(row, argText, typedFull ? typedName : row.cmd);
   });
   menu.dataset.slash = '1'; // 必须在 openChipMenu 之后打标记（其入口会先清空）
   if (!rows.length) {
@@ -3054,7 +3153,10 @@ function slashNav(e) {
     return true;
   }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    // 没有候选时不发送：拦下 Enter，避免字面 /xyz 发给 CLI
+    // 没有候选时别把 Enter 拦死：alias / 目录里没列的命令交给 send() 的兜底 ——
+    // 它会精确解析（含别名）或让 CLI 自己回答「Unknown command」。
+    // 只有目录还没回来时才拦下，避免把 /compact 当正文发出去。
+    if (!rows.length && cliCatalog.ok) return false;
     e.preventDefault();
     if (rows.length) {
       const ae = document.activeElement;

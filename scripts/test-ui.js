@@ -276,13 +276,17 @@ let CHROME_BIN = null;
   await key(cdp, 'Enter', 13); await sleep(400);
   const s9d = await cdp.ev(`({ tabs: state.tabs.length, menuHidden: document.querySelector('#chip-menu').hidden, cleared: !document.getElementById('input').value })`);
   ok('Enter 执行 /new：新建页签、菜单收起、输入框清空', s9d.tabs === tabCountBefore + 1 && s9d.menuHidden && s9d.cleared, JSON.stringify(s9d));
-  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/zzz'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/zzz'; activeTab().sessionId = activeTab().sessionId || 's_demo_live'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
   await sleep(250);
   const s9e1 = await cdp.ev(`(() => ({ emptyRow: !!document.querySelector('#chip-menu .wb-menu-empty'), hidden: document.querySelector('#chip-menu').hidden }))()`);
   ok('无匹配显示占位行而非关菜单', s9e1.emptyRow && !s9e1.hidden, JSON.stringify(s9e1));
-  await key(cdp, 'Enter', 13); await sleep(300);
-  const s9e2 = await cdp.ev(`({ tabs: state.tabs.length, stillEmpty: !!document.querySelector('#chip-menu .wb-menu-empty'), inputVal: document.getElementById('input').value })`);
-  ok('无匹配 Enter 被拦下：不建页签、不发送、不清输入', s9e2.tabs === tabCountBefore + 1 && s9e2.stillEmpty && s9e2.inputVal === '/zzz', JSON.stringify(s9e2));
+  await key(cdp, 'Enter', 13); await sleep(500);
+  const s9e2 = await cdp.ev(`(() => { const cards = [...document.querySelectorAll('.msg-command .cmd-line')]; return { tabs: state.tabs.length, inputVal: document.getElementById('input').value, userMsgs: document.querySelectorAll('.msg-user').length, last: cards.length ? cards[cards.length - 1].textContent : '' }; })()`);
+  // 目录已就绪时不再把 Enter 拦死（按了没反应），也不许把 /zzz 当正文发给模型：
+  // 交给 CLI 回答，结果落成一张命令卡（Demo 桥回「不支持」）
+  ok('无匹配 Enter 不当作正文发送：交给 CLI 回答、落成命令卡',
+    s9e2.tabs === tabCountBefore + 1 && s9e2.inputVal === '' && s9e2.userMsgs === 0 && s9e2.last === '/zzz',
+    JSON.stringify(s9e2));
 
   /* CLI 命令（目录来自 serve 的 commands.catalog，Demo 桥给最小样例）：
      选中即执行、结果落成命令卡、吃参数的命令只补全不误跑 */
@@ -292,15 +296,17 @@ let CHROME_BIN = null;
   ok('CLI 命令进入候选、与本地动作同列但带 CLI 徽标', s9f.hit && s9f.badge === 'CLI', JSON.stringify(s9f));
   await cdp.ev(`(() => { activeTab().sessionId = 's_demo_live'; const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/status'); hit.click(); return 1; })()`);
   await sleep(700);
-  const s9g = await cdp.ev(`(() => { const card = document.querySelector('.msg-command .cmd-card'); return { has: !!card, done: !!document.querySelector('.cmd-card.is-done'), cmd: card ? card.querySelector('.cmd-line').textContent : '', out: card ? card.querySelector('.cmd-out').textContent.slice(0, 60) : '' }; })()`);
+  const s9g = await cdp.ev(`(() => { const cards = [...document.querySelectorAll('.msg-command .cmd-card')]; const card = cards[cards.length - 1]; return { has: !!card, done: !!document.querySelector('.cmd-card.is-done'), cmd: card ? card.querySelector('.cmd-line').textContent : '', out: card ? card.querySelector('.cmd-out').textContent.slice(0, 60) : '' }; })()`);
   ok('选中 CLI 命令即执行，并在对话里留下结果卡', s9g.has && s9g.done && s9g.cmd === '/status' && s9g.out.includes('Session'), JSON.stringify(s9g));
   // 只敲了命令名的一半（/tit）→ 选中只补全，把光标留在参数位，绝不误跑
+  const cardCountBefore = await cdp.ev(`document.querySelectorAll('.msg-command').length`);
   await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/tit'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
   await sleep(280);
   await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/title'); if (hit) hit.click(); return 1; })()`);
   await sleep(350);
   const s9h = await cdp.ev(`({ val: document.getElementById('input').value, cards: document.querySelectorAll('.msg-command').length })`);
-  ok('半截命令名只补全、把光标留在参数位', s9h.val === '/title ' && s9h.cards === 1, JSON.stringify(s9h));
+  ok('半截命令名只补全、把光标留在参数位',
+    s9h.val === '/title ' && s9h.cards === cardCountBefore, JSON.stringify(s9h));
 
   // 命令名敲全了（/title）→ Enter 就是要跑它：CLI 回 usage，落成结果卡
   await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/title'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
@@ -308,7 +314,19 @@ let CHROME_BIN = null;
   await key(cdp, 'Enter', 13); await sleep(600);
   const s9i = await cdp.ev(`(() => { const cards = [...document.querySelectorAll('.msg-command .cmd-card')]; const last = cards[cards.length - 1]; return { n: cards.length, val: document.getElementById('input').value, cmd: last ? last.querySelector('.cmd-line').textContent : '', out: last ? last.querySelector('.cmd-out').textContent : '' }; })()`);
   ok('敲全命令名后 Enter 直接执行（不再卡在补全空格）',
-    s9i.n === 2 && s9i.val === '' && s9i.cmd === '/title' && s9i.out.includes('Usage'), JSON.stringify(s9i));
+    s9i.n === cardCountBefore + 1 && s9i.val === '' && s9i.cmd === '/title' && s9i.out.includes('Usage'),
+    JSON.stringify(s9i));
+
+  // 别名：/compact 是 /compress 的别名（CLI 目录只列规范名，别名只在 canon 里）
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/compact'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(320);
+  const s9j = await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/compress'); return { n: rows.length, hit: !!hit, badge: hit && hit.querySelector('.wb-menu-badge') ? hit.querySelector('.wb-menu-badge').textContent : '' }; })()`);
+  ok('别名 /compact 能匹配到 /compress（徽标标出敲的是别名）', s9j.hit && s9j.badge === '/compact', JSON.stringify(s9j));
+  await key(cdp, 'Enter', 13); await sleep(700);
+  const s9k = await cdp.ev(`(() => { const cards = [...document.querySelectorAll('.msg-command .cmd-card')]; const last = cards[cards.length - 1]; return { n: cards.length, cmd: last ? last.querySelector('.cmd-line').textContent : '', out: last ? last.querySelector('.cmd-out').textContent : '', userMsgs: document.querySelectorAll('.msg-user').length }; })()`);
+  ok('别名敲全后 Enter 直接执行：卡片写 /compact、结果是压缩反馈',
+    s9k.n === cardCountBefore + 2 && s9k.cmd === '/compact' && s9k.out.includes('Compressed') && s9k.userMsgs === 0,
+    JSON.stringify(s9k));
   await cdp.ev(`(() => { document.getElementById('input').value = ''; slashClose(); return 1; })()`);
   await shot(cdp, 'hermes-ui-landing.png');
 

@@ -76,9 +76,13 @@
         { cmd: '/insights', desc: '用量与工具调用洞察', category: 'Info', argMode: null, sub: [], scope: '' },
         { cmd: '/title', desc: '重命名当前会话', category: 'Session', argMode: 'text', sub: [], scope: '' },
         { cmd: '/plan', desc: '先出计划再执行', category: 'Context', argMode: 'text', sub: [], scope: '' },
+        // 压缩会话上下文：真 CLI 里 /compact 只是它的别名，目录（canon）只列规范名
+        { cmd: '/compress', desc: '压缩会话上下文（先发一条消息再用）', category: 'Session', argMode: 'text', sub: [], scope: '' },
       ];
       return {
-        ok: true, at: Date.now(), commands, alias: {},
+        ok: true, at: Date.now(), commands,
+        // 别名表跟真 serve 一样：/compact → /compress
+        alias: { '/compact': '/compress' },
         categories: [{ name: 'Info', commands: commands.slice(0, 3) }, { name: 'Session', commands: commands.slice(3) }],
       };
     },
@@ -89,6 +93,8 @@
       if (name === '/insights') return { ok: true, type: 'exec', text: '近 7 天：18 轮对话 · 42 次工具调用 · 缓存命中 51%' };
       // 吃参数的命令裸执行：真 CLI 回的是 usage，桌面端照原样落成结果卡
       if (name === '/title') return { ok: true, type: 'exec', text: 'No title set. Usage: /title <your session title>' };
+      // 压缩：Demo 直接回一段结果文本（真机是 CLI 的压缩反馈）
+      if (name === '/compress') return { ok: true, type: 'exec', text: 'Compressed 38 messages → 6 (24.3k → 7.1k tokens). Recent turns kept.' };
       // send 类型：命令被改写成一轮 prompt，桌面端要回到正常提交（Demo 里只回显）
       if (name === '/plan') return { ok: true, type: 'send', text: 'plan ' + String(command).slice(5).trim(), display: command };
       return { ok: false, error: 'Demo 模式不支持 ' + name };

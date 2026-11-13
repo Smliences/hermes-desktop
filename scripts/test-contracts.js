@@ -2756,8 +2756,10 @@ t('内联指令菜单：/ 起手即弹，Enter 执行，无匹配不误发', () 
     'input 事件未接 slashSync');
   // 键盘接线：菜单开着时 Enter/↑↓ 拦在发送之前
   assert.ok(appSrc.includes('if (slashNav(e)) return;'), 'keydown 未先问 slashNav');
-  assert.ok(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.isComposing\) \{\s*\n\s*\/\/ 没有候选时不发送/.test(appSrc),
-    '无匹配时 Enter 必须拦下（/xyz 不得字面发给 CLI）');
+  // 无候选时不再把 Enter 拦死：交回 send() 兜底（精确解析 / 让 CLI 回答 Unknown command），
+  // 但目录还没回来时必须拦下，免得 /compact 被当正文发出去
+  assert.ok(appSrc.includes('if (!rows.length && cliCatalog.ok) return false;'),
+    '无匹配时 Enter 必须交回 send() 兜底，否则用户看到的是「按了没反应」');
   // 标记管理：openChipMenu 入口清标记、slashSync 打开后补标记（防 chip 菜单误判）
   assert.ok(appSrc.includes("menu.dataset.slash = '';"), 'openChipMenu 入口未清 slash 标记');
   assert.ok(appSrc.includes("menu.dataset.slash = '1'; // 必须在 openChipMenu 之后打标记"),
@@ -4178,16 +4180,49 @@ t('IPC 三层对齐：main 注入 gateway，渲染层拿不到连接细节', () 
 
 t('菜单合并本地动作与 CLI 命令，吃参数的命令只补全不误执行', () => {
   assert.ok(appSrc.includes('cliCatalog.commands'), '斜杠菜单没有合并 CLI 目录');
-  assert.ok(appSrc.includes("badge: c.source === 'cli' ? 'CLI' : ''"), 'CLI 命令没有视觉区分');
+  assert.ok(appSrc.includes("c.aliasHit ? c.aliasHit : (c.source === 'cli' ? 'CLI' : '')"),
+    'CLI 命令没有视觉区分（或别名没标出来）');
   assert.ok(appSrc.includes('function commandScore('), '缺少匹配打分（精确 > 前缀 > 包含）');
   assert.ok(appSrc.includes('const needsArg = row.source === \'cli\' && row.argMode && !argText && !typedFull;'),
     '吃参数的命令未走补全分支（或未区分「命令名已敲全」）');
   // 命令名敲全后再按 Enter 必须能真的执行：否则 62 条吃参数的命令永远停在「补个空格」
-  assert.ok(appSrc.includes("const typedFull = q.trim().toLowerCase() === row.cmd.replace(/^\\//, '').toLowerCase();"),
+  assert.ok(appSrc.includes("const typedFull = qn === row.cmd.replace(/^\\//, '').toLowerCase()"),
     '没有识别「命令名已完整输入」，吃参数的命令会卡在补全');
   assert.ok(appSrc.includes("inp.value = row.cmd + ' ';"), '补全没有留下参数位');
   assert.ok(appSrc.includes('CMD_MENU_MAX'), '候选没有上限，空查询会铺满整屏');
   assert.ok(appSrc.includes('if (row.source === \'local\')'), '本地动作未与 CLI 命令分流');
+});
+
+t('别名能用：/compact → /compress（目录只列规范名，别名只在 canon 里）', () => {
+  // CLI 侧的事实：command_discovery._catalog_registry 只 add /{cmd.name}，
+  // 别名只写进 canon，所以桌面端必须自己把 alias 表用起来，否则 /compact 永远匹配不到。
+  assert.ok(cmdSrc.includes('alias: Object.entries') || cmdSrc.includes('alias[k] = '),
+    '主进程没有把 canon 归一化成别名字典');
+  assert.ok(appSrc.includes('function cliAliasIndex('), '渲染层没有用上别名表');
+  assert.ok(appSrc.includes("aliases.get(String(c.cmd || '').toLowerCase())"), '别名没有参与菜单匹配');
+  assert.ok(appSrc.includes('function resolveSlashCommand('), '缺少「一整条命令」的解析（Enter 兜底要用）');
+  assert.ok(appSrc.includes("(cliCatalog.alias || {})[name]"), '解析没走别名映射');
+  // 别名敲全也算敲全，否则吃参数的别名命令会卡在补全
+  assert.ok(appSrc.includes('!!row.aliasHit && qn === row.aliasHit.replace(/^\\//, \'\').toLowerCase()'),
+    '别名敲全后仍被当成「没敲完」，会卡在补全一步');
+  // 卡片上写用户敲的名字，送进 CLI 的仍是规范名
+  assert.ok(appSrc.includes('runSlashCommand(row, argText, typedName)'), '执行时没把敲的名字带上');
+  assert.ok(appSrc.includes('const shown = arg ?'), '命令卡没有区分「显示名」与「送进 CLI 的名字」');
+});
+
+t('Enter 不能把斜杠命令当正文发给模型（Esc 关掉菜单 / 未知命令）', () => {
+  // 这是「/compact 不能用」的现场：菜单没匹配 → Enter 把 /compact 当聊天正文发出去
+  assert.ok(appSrc.includes('const hit = resolveSlashCommand(text);'), 'send() 没有命令解析兜底');
+  assert.ok(appSrc.includes('return runSlashCommand(hit.row, hit.arg'), '兜底命中后没有执行命令');
+  assert.ok(appSrc.includes('if (!rows.length && cliCatalog.ok) return false;'),
+    '菜单没候选时 Enter 仍被拦死：既不发也不执行，用户看到的就是「按了没反应」');
+  assert.ok(appSrc.includes("toast('命令目录还在加载，稍等一下再按 Enter'"), '目录没回来时静默吞掉 Enter');
+  // 目录回来时菜单要就地重画，不然「加载中」占位会一直挂着
+  assert.ok(appSrc.includes('if (typeof slashMenuOpen === \'function\' && slashMenuOpen()) slashSync();'),
+    '命令目录到达后没有重画已打开的菜单');
+  // /compress 要的是活 agent（session.resume 异步建），空输出要重试一次并给可照做的提示
+  assert.ok(appSrc.includes('isCompress && res && res.ok'), '空输出没有针对 /compress 重试一次');
+  assert.ok(appSrc.includes('还没把这个会话的 agent 建起来'), '空输出没有给出可读原因');
 });
 
 t('结果卡有独立渲染分支与双主题样式', () => {
