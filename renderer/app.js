@@ -242,21 +242,98 @@ function toolMeta(name, input, state) {
   const n = String(name || '');
   const spec = TOOL_SPECS.find((s) => s.re.test(n)) || TOOL_SPEC_FALLBACK;
   const label = state === 'running' ? spec.running : state === 'error' ? spec.error : spec.done;
-  return { icon: TOOL_ICONS[spec.kind] || TOOL_ICONS.unknown, label, obj: toolObject(input), extra: toolExtra(n, input) };
+  return { icon: TOOL_ICONS[spec.kind] || TOOL_ICONS.unknown, label, obj: toolObject(input), extra: toolExtra(n, input), kind: spec.kind };
 }
-/** 详情里的参数：浅层标量铺成「键 值」两列，比一整段 JSON 好读；
-    嵌套太深或值太长就退回等宽 JSON，免得键被挤成一条。 */
-function toolParamsHTML(input) {
-  if (input == null) return '';
-  let rows = null;
-  if (typeof input === 'object' && !Array.isArray(input)) {
-    const ent = Object.entries(input).filter(([, v]) => v !== null && v !== undefined && v !== '');
-    const flat = ent.map(([k, v]) => [k, typeof v === 'string' ? v : safeStringify(v)]);
-    if (ent.length > 0 && ent.length <= 8 && flat.every(([, v]) => String(v).length <= 400)) rows = flat;
+/** 行级 diff（LCS 回溯）：patch 的 old/new 通常十几行，O(n·m) 足够；
+    超过 400×400 就退化成「整段删 + 整段增」，不为超大文件构造表格。 */
+function lineDiff(oldText, newText) {
+  const A = String(oldText == null ? '' : oldText).split('\n');
+  const B = String(newText == null ? '' : newText).split('\n');
+  const n = A.length, m = B.length;
+  if (n * m > 160000) {
+    return [...A.map((s) => ({ t: '-', s })), ...B.map((s) => ({ t: '+', s }))];
   }
-  if (!rows) return `<div class="sec-label">参数</div><pre>${esc(clip(safeStringify(input), 12000))}</pre>`;
-  return `<div class="sec-label">参数</div><div class="tp-list">${rows.map(([k, v]) =>
-    `<div class="tp-row"><span class="tp-k">${esc(k)}</span><span class="tp-v">${esc(clip(String(v), 2000))}</span></div>`).join('')}</div>`;
+  // 从右下角倒推公共子序列长度；Uint16 足够（单文件不会超过 65535 行）
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push({ t: ' ', s: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: '-', s: A[i] }); i++; }
+    else { out.push({ t: '+', s: B[j] }); j++; }
+  }
+  while (i < n) out.push({ t: '-', s: A[i++] });
+  while (j < m) out.push({ t: '+', s: B[j++] });
+  return out;
+}
+/** WB 的 diff-viewer：一行一条，左侧 16px 竖条（增绿减红），行号条不画，
+    行高 18px 与它的 12px×1.5 一致。超过 400 行截断并提示，不塞满 DOM。 */
+function toolDiffHTML(oldText, newText) {
+  const rows = lineDiff(oldText, newText);
+  const CAP = 400;
+  const shown = rows.length > CAP ? rows.slice(0, CAP) : rows;
+  const body = shown.map((r) => {
+    const cls = r.t === '+' ? 'add' : r.t === '-' ? 'del' : 'same';
+    return `<div class="dv-row ${cls}"><span class="dv-g"></span><span class="dv-t">${esc(r.s) || '&nbsp;'}</span></div>`;
+  }).join('');
+  const more = rows.length > CAP
+    ? `<div class="dv-more">还有 ${rows.length - CAP} 行未显示</div>` : '';
+  return `<div class="dv">${body}${more}</div>`;
+}
+/** 命令类：WB 的 .execute-command .stdout-content —— 详情里只有输出本身，
+    不在详情里重复一遍命令行（命令已经在上面那行里了），无底色无描边。 */
+function toolStdoutHTML(item) {
+  const out = item.output == null ? '' : String(item.output);
+  const fail = !!item.isError;
+  if (!out.trim()) {
+    return `<div class="stdout-content"><span class="exec-status-text${fail ? ' err' : ''}">${fail ? '执行失败' : '运行成功'}</span></div>`;
+  }
+  return `<div class="stdout-content"><pre class="content${fail ? ' err-text' : ''}">${esc(clip(out, 20000))}</pre></div>`;
+}
+/** 详情内容：照 WB 的三个渲染器分流，而不是一套 JSON 走天下 ——
+    · 编辑类（patch/写文件）→ diff（WB 的 diff-viewer，绿增红删 + 竖条）
+    · 命令类（terminal/bash）→ 整块 stdout（WB 的 ExecuteCommandRenderer）
+    · 其余 → Arguments / Result 两段格式化 JSON（WB 的 DefaultToolRenderer）
+    段结构沿用 WB：.detail-section > .detail-label + .detail-content（pre）。 */
+function toolDetailHTML(item) {
+  const name = String(item.name || '');
+  const input = item.input;
+  const isEdit = /^(patch|edit_file|multi_edit|apply_layout|annotate_preview)/.test(name);
+  const isWrite = /^write_file/.test(name);
+  const isCmd = /^(terminal|bash|shell|exec_command|run_command|execute_code|process_manage|cronjob_manage)/.test(name);
+  const sec = (label, body) =>
+    `<div class="detail-section"><div class="detail-label">${esc(label)}</div>${body}</div>`;
+
+  if (isCmd) return toolStdoutHTML(item);
+
+  let html = '';
+  if (isEdit && input && typeof input === 'object') {
+    if (Array.isArray(input.edits) && input.edits.length) {
+      html += input.edits.map((e, i) => sec(`修改 ${i + 1}/${input.edits.length}`,
+        toolDiffHTML(e && e.old_string, e && e.new_string))).join('');
+    } else if (typeof input.old_string === 'string' || typeof input.new_string === 'string') {
+      html += sec('改动', toolDiffHTML(input.old_string, input.new_string));
+    }
+  } else if (isWrite && input && typeof input.content === 'string') {
+    html += sec('新内容', toolDiffHTML('', input.content));
+  }
+  // 参数：没走 diff 的工具才铺参数，且用格式化 JSON（WB 的 DefaultToolRenderer 就是
+  // JSON.stringify(args, null, 2)）—— 上一版的两列键值虽然好读，但不是 WB 的形态。
+  if (!html && input != null && input !== '') {
+    html += sec('参数', `<pre class="detail-content">${esc(clip(safeStringify(input), 12000))}</pre>`);
+  }
+  if (item.output != null) {
+    const out = String(item.output);
+    if (out.trim()) {
+      html += sec('输出', `<pre class="detail-content${item.isError ? ' err-text' : ''}">${esc(clip(out, 20000))}</pre>`);
+    }
+  }
+  return html;
 }
 /** 从错误文本里提取 mono 状态胶囊（如 MISSING_CREDENTIAL / exit=1） */
 function errorCodeOf(text) {
@@ -1462,21 +1539,67 @@ function renderChat() {
     return d;
   };
   let prevKind = null;
+  // 每条 assistant 的脚注先攒着，等这一轮（下一条 user 消息之前）结束再统一挂一次：
+  // 位置代表「这一整轮回复」，所以文本和 token 都按整轮累加，复制拿到的也是完整回复。
+  let tail = null;      // 本轮最后追加的节点，脚注挂在它后面
+  let acc = null;       // { text: [], tokens, ts, turnMs, tps }
+  const flushTurnFoot = () => {
+    if (acc) {
+      const merged = {
+        kind: 'assistant',
+        text: acc.text.join('\n\n'),
+        tokens: acc.real ? acc.tokens : 0,
+        ts: acc.ts,
+        turnMs: acc.turnMs,
+        tps: acc.tps,
+      };
+      const tpl = document.createElement('div');
+      tpl.innerHTML = msgActionBar(merged, false);
+      const foot = tpl.firstElementChild;
+      if (foot) {
+        foot._item = merged;
+        if (tail && tail.parentNode) tail.after(foot);
+        else chat.appendChild(foot);
+      }
+    }
+    acc = null;
+    tail = null;
+  };
   for (let i = 0; i < items.length; ) {
     const it = items[i];
     if (it.kind === 'tool') {
       const wrap = document.createElement('div');
       wrap.className = 'tool-stream';
       if (showHeads && prevKind === 'user') wrap.appendChild(turnHeadEl());
-      while (i < items.length && items[i].kind === 'tool') { wrap.appendChild(renderItem(items[i])); i++; }
+      // 连续 ≥2 次调用才收成「执行 N 步」的父行（单次不加一层壳）；
+      // 轨迹视图是逐条排查用的，保持平铺，不做折叠。
+      const run = [];
+      while (i < items.length && items[i].kind === 'tool') { run.push(items[i]); i++; }
+      if (run.length > 1 && state.view !== 'trace') wrap.appendChild(stepGroupEl(run));
+      else for (const t of run) wrap.appendChild(renderItem(t));
       chat.appendChild(wrap);
+      tail = wrap;
       prevKind = 'tool';
     } else {
+      if (it.kind === 'user') flushTurnFoot();
       const head = showHeads && it.kind === 'assistant' && prevKind === 'user';
-      chat.appendChild(renderItem(it, head));
+      const el = renderItem(it, head);
+      chat.appendChild(el);
+      if (it.kind === 'assistant') {
+        acc = acc || { text: [], tokens: 0, real: true, ts: 0, turnMs: 0, tps: 0 };
+        if (it.text) acc.text.push(it.text);
+        // 整轮 token 只在每条都是真实值时才相加；有一条是估算就整轮交给 msgTokens 估，
+        // 免得把「估的数」显示成「真实用量」。
+        if (it.tokens > 0) acc.tokens += it.tokens; else acc.real = false;
+        if (it.ts) acc.ts = it.ts;
+        if (it.turnMs) acc.turnMs = it.turnMs;
+        if (it.tps) acc.tps = it.tps;
+      }
+      tail = el;
       prevKind = it.kind; i++;
     }
   }
+  flushTurnFoot();
   if (tab.running && tab.showTyping) {
     chat.appendChild(typingIndicator(tab, showHeads && prevKind === 'user'));
   }
@@ -1588,7 +1711,65 @@ function msgActionBar(item, canRetry) {
     ${item.ts ? `<time class="msg-ts" title="发送于 ${esc(fmtTime(item.ts))}">${esc(fmtTime(item.ts).slice(0, 5))}</time>` : ''}
   </div>`;
 }
-function renderItem(item, header = false) {
+/** 连续调用的父行：WB 的 task-compact 树形头部 —— 一行说清「跑了几步、都是些什么」，
+    点开才铺开缩进的子项，子项自己仍能展开看详情（那就是第三层）。
+    WB 的多级本来就来自 Task 子代理（父 = 子代理、子 = 它内部调用的工具），
+    但 CLI 的 tool.start / tool.complete 是扁平事件、没有 parent 字段，
+    所以层级建在「一轮里的连续调用」上，视觉与交互沿用它的那一套。
+    默认展开条件：跑着或有失败（否则看不到进度），全部成功就收成一行。 */
+const STEP_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.4 4.2h3.2M2.4 8h3.2M2.4 11.8h3.2"></path><path d="M8.6 4.2h5M8.6 8h5M8.6 11.8h5"></path></svg>';
+/** 父行摘要用的短类型词（两个汉字），跟行上的三态词是两套：后者带时态不能拼句 */
+const STEP_BRIEF = {
+  read: '读取', write: '编辑', create: '写入', cmd: '运行', search: '搜索',
+  list: '列举', web: '网页', gen: '生成', dispatch: '派发', todo: '计划',
+  memory: '记忆', ask: '提问', unknown: '调用',
+};
+function stepGroupEl(list) {
+  const wrap = document.createElement('div');
+  wrap.className = 'step-group';
+  const running = list.some((t) => t.state === 'running');
+  const failed = list.some((t) => t.isError);
+  const state = running ? 'running' : failed ? 'error' : 'done';
+  let open = list[0].groupOpen;
+  if (typeof open !== 'boolean') open = running || failed;
+
+  // 摘要 = 各步动作去重（读取、编辑、运行），最多三个。
+  // 用类型词而不是三态词：「已读取」这类带时态的词拼成一句话读不通，也太长。
+  const verbs = [];
+  for (const t of list) {
+    const v = STEP_BRIEF[toolMeta(t.name, t.input, 'done').kind] || '调用';
+    if (!verbs.includes(v)) verbs.push(v);
+  }
+  const brief = verbs.slice(0, 3).join('、') + (verbs.length > 3 ? '等' : '');
+  const headText = `${running ? '正在执行' : '执行了'} ${list.length} 步`;
+
+  wrap.innerHTML = `<div class="step-head ${state}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(list.map((t) => t.name).join(' · '))}">
+      <span class="ticon" aria-hidden="true">${STEP_ICO}</span>
+      <span class="tstate${running ? ' loading-text' : ''}">${headText}</span>
+      <span class="tobj">${esc(brief)}</span>
+      <span class="tchev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6.5 4 4 4-4"></path></svg></span>
+    </div>`;
+  const body = document.createElement('div');
+  body.className = 'step-body' + (open ? '' : ' hidden');
+  for (const t of list) body.appendChild(renderItem(t, false, true));
+  wrap.appendChild(body);
+  wrap.classList.toggle('open', open);
+
+  const head = wrap.querySelector('.step-head');
+  const toggle = () => {
+    open = !open;
+    list[0].groupOpen = open; // 记住用户的选择，重绘不丢
+    wrap.classList.toggle('open', open);
+    body.classList.toggle('hidden', !open);
+    head.setAttribute('aria-expanded', String(open));
+  };
+  head.onclick = toggle;
+  head.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  };
+  return wrap;
+}
+function renderItem(item, header = false, sub = false) {
   const el = document.createElement('div');
   if (item.kind === 'user') {
     el.className = 'msg msg-user';
@@ -1604,12 +1785,16 @@ function renderItem(item, header = false) {
     const meta = item.done
       ? `<div class="turn-meta">已完成${item.turnMs >= 500 ? `，用时 ${fmtDur(item.turnMs)} 秒` : ''}${item.tps ? ` · ⌁ ${item.tps.toFixed(1)} tok/s` : ''}</div>`
       : '';
-    el.innerHTML = `${meta}<div class="content md">${renderMarkdown(item.text)}${cursor}</div>${msgActionBar(item, false)}`;
+    el.innerHTML = `${meta}<div class="content md">${renderMarkdown(item.text)}${cursor}</div>`;
+    // 脚注（N tok / 时间 / 复制）不挂在正文下面：一轮里正文之后还跟着工具调用，
+    // 挂在中间正好把「正文 → 步骤」切开（用户 2026-11-14 要求挪到结束）。
+    // 交给 renderChat 收到整轮末尾再挂，并按整轮合并文本与用量。
+    el._footHTML = msgActionBar(item, false);
   } else if (item.kind === 'tool') {
     /* WorkBuddy 的 single-line-tool-header：图标 · 状态词 · 对象 · 次要信息 · 箭头。
        状态词随三态换（读取 / 已读取 / 读取失败），运行中走渐变扫光而不是转圈；
        折叠只切 .card-content 的 hidden，行本身不动画。 */
-    el.className = 'tool-item' + (item.open ? ' open' : '');
+    el.className = 'tool-item' + (sub ? ' sub' : '') + (item.open ? ' open' : '');
     const running = item.state === 'running';
     const state = running ? 'running' : item.isError ? 'error' : 'done';
     const meta = toolMeta(item.name, item.input, state);
@@ -1629,9 +1814,7 @@ function renderItem(item, header = false) {
           <span class="tdh-name">${esc(item.name || '工具')}</span>
           <span class="tdh-state ${state}">${running ? '执行中' : item.isError ? '失败' : '完成'}${dur ? ' · ' + dur : ''}</span>
         </div>
-        ${toolParamsHTML(item.input)}
-        ${item.output != null ? `<div class="sec-label">输出</div><pre class="${item.isError ? 'err-text' : ''}">${esc(clip(item.output, 20000))}</pre>` : ''}
-        ${item.input == null && item.output == null ? '<div class="sec-label">暂无详情</div>' : ''}
+        ${toolDetailHTML(item) || '<div class="detail-section"><div class="detail-label">详情</div><pre class="detail-content">暂无</pre></div>'}
       </div>`;
     // 局部切 class 而不是整页 renderChat：详情是静态 HTML，不需要重绘；
     // 更重要的是键盘展开时焦点能留在这条工具行上。
@@ -6421,7 +6604,10 @@ $('#chat').addEventListener('click', (e) => {
   }
   const act = t.closest && t.closest('[data-msg-act]');
   if (act) {
-    const msg = act.closest('.msg'); const item = msg && msg._item;
+    // 助手脚注已经不在 .msg 里了（挪到了整轮末尾），兜一层从脚注行自己取回数据
+    const msg = act.closest('.msg');
+    const row = act.closest('.msg-foot-row');
+    const item = (msg && msg._item) || (row && row._item);
     if (!item) return;
     if (act.dataset.msgAct === 'copy') {
       copyText(item.text || item.output || '').then(() => toast('已复制该消息', 1200)).catch(() => toast('复制失败'));

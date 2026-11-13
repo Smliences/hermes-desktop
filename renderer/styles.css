@@ -655,16 +655,16 @@ body.resizing #sidebar { transition: none; }
 .tool-row.running .ticon { color: var(--yellow); }
 @keyframes tool-sweep { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* 展开的详情：WB 的 .card-content —— margin 4px 0、padding 8px 12px、圆角 4px、不加左缩进。
-   字体族是 sans（WB 的 card-content 不换字体，等宽只给里面的 .detail-content）；
+/* 展开的详情：WB 的 .default-tool-details —— 软底、圆角 4、padding 12，
+   段与段之间 12px、不画分隔线；字体 sans，等宽只给里面的 .detail-content。
    字号 = 正文 × 0.86，对齐 WB 的 12/14。 */
 .tool-detail {
-  display: block; box-sizing: border-box; min-width: 0; max-height: 420px;
-  margin: 4px 0; padding: 8px 12px;
+  display: block; box-sizing: border-box; min-width: 0;
+  margin: 4px 0; padding: 12px;
   border-radius: 4px;
   background: var(--fill-2); color: var(--text-2);
   font: 400 calc(var(--msg-font-size) * 0.86)/1.5 var(--sans);
-  word-break: break-word; overflow: auto;
+  word-break: break-word;
 }
 .tool-detail.hidden { display: none; }
 /* 标题行：WB 的 .default-tool-title —— gap 8、无描边无下距，靠段间距 12 分隔。
@@ -689,42 +689,100 @@ body.resizing #sidebar { transition: none; }
 .tool-detail-head .tdh-state.done { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .tool-detail-head .tdh-state.error { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .tool-detail-head .tdh-state.running { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
-/* 分段标签：WB 的 .detail-label —— 12px / 600 / 大写 / 字距 .5px / 下距 6px
-   （WB 里标签字号与详情正文同为 12px，所以这里是 1em 而不是再小一档）。
+/* 段：WB 是 .detail-section:not(:last-child){margin-bottom:12px} */
+.tool-detail .detail-section:not(:last-child) { margin-bottom: 12px; }
+/* 分段标签：WB 的 .detail-label —— 与详情正文同字号 / 600 / 大写 / 字距 .5px / 下距 6px；
    颜色取 WB 的 text-secondary，在暖色板里对应 --text-3：比正文暗一档，不抢内容。 */
-.tool-detail .sec-label {
+.tool-detail .detail-label {
   font: 600 1em/1 var(--sans); letter-spacing: .5px;
   text-transform: uppercase;
   color: var(--text-3); margin: 0 0 6px;
 }
 /* 代码块：WB 的 .detail-content —— 描边 + 圆角 4 + 8/12 内边距 + 最高 300px */
-.tool-detail pre {
-  margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
-  background: var(--canvas); font-family: var(--mono);
+.tool-detail .detail-content {
+  margin: 0; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--canvas); color: var(--text-2);
+  font: 400 1em/1.5 var(--mono);
   max-height: 300px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
 }
-/* 参数铺成两列网格：所有值左缘对齐成一列（flex 逐行排版时，键长短不一会让值参差）；
-   .tp-row 走 display:contents，键值直接成为网格项，不额外包一层盒子 */
-.tool-detail .tp-list {
-  display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr);
-  column-gap: 12px; row-gap: 4px; align-items: baseline;
-  font-family: var(--mono);
-  padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
-  background: var(--canvas); max-height: 300px; overflow: auto;
+.tool-detail .detail-content.err-text { color: var(--red); }
+/* 命令类：WB 的 .execute-command .stdout-content —— 详情里只有输出本身，
+   不重复命令行、无底色无描边，等宽 1.5 倍行高、break-all（WB 是 12px/18px）。 */
+.tool-detail .stdout-content { display: flex; padding: 0 4px; min-width: 0; }
+.tool-detail .stdout-content .content {
+  margin: 0; min-width: 0; padding: 0;
+  font: 400 1em/1.5 var(--mono);
+  white-space: pre-wrap; word-break: break-all; color: var(--text-2);
+  max-height: 320px; overflow: auto;
 }
-.tool-detail .tp-row { display: contents; }
-.tool-detail .tp-k {
-  max-width: 180px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--caption);
+.tool-detail .stdout-content .content.err-text { color: var(--red); }
+.tool-detail .stdout-content .exec-status-text { color: var(--text-3); font: 400 1em/1.5 var(--sans); }
+.tool-detail .stdout-content .exec-status-text.err { color: var(--red); }
+/* 改动：照 WB 的 diff-viewer —— 每行 18px、左侧 16px 竖条（2px 左边框），
+   增行绿、删行红，未变的行只有代码不着色。 */
+.tool-detail .dv {
+  border: 1px solid var(--line); border-radius: 4px; background: var(--canvas);
+  max-height: 300px; overflow: auto; padding: 4px 0;
+  font: 400 1em/1.5 var(--mono);
 }
-.tool-detail .tp-v { min-width: 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-/* 分段之间只留 12px 间距（WB 是 .detail-section:not(:last-child){margin-bottom:12px}），不画分隔线 */
-.tool-detail pre,
-.tool-detail .tp-list { margin-bottom: 12px; }
-.tool-detail pre:last-child,
-.tool-detail .tp-list:last-child { margin-bottom: 0; }
-.tool-detail pre.err-text { color: var(--red); }
+.tool-detail .dv-row { display: flex; align-items: stretch; width: max-content; min-width: 100%; }
+.tool-detail .dv-g { flex: 0 0 auto; width: 16px; border-left: 2px solid transparent; }
+.tool-detail .dv-t { flex: 1; min-width: 0; padding-right: 12px; white-space: pre; }
+.tool-detail .dv-row.add .dv-g {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  border-left-color: color-mix(in srgb, var(--green) 50%, transparent);
+}
+.tool-detail .dv-row.add .dv-t { background: color-mix(in srgb, var(--green) 20%, transparent); }
+.tool-detail .dv-row.del .dv-g {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+  border-left-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.tool-detail .dv-row.del .dv-t { background: color-mix(in srgb, var(--red) 20%, transparent); }
+.tool-detail .dv-more { color: var(--text-3); padding: 6px 12px 2px; font-style: italic; }
+
+/* ══════════ 步骤组（连续调用的父行）══════════
+   WB 的 task-compact 树形：父行与工具行同几何，展开后子项缩进 12px + 2px 竖线，
+   子项字号比父行小一号（它父行 14 / 子行 13，这里按同一比例 0.93 派生）。
+   子项自己不折叠，点它展开的是详情 —— 那就是第三层。 */
+.step-group { min-width: 0; margin-bottom: 12px; }
+.step-head {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 1.75em;
+  font: 400 var(--msg-font-size)/1.75 var(--sans); color: var(--text-2);
+  cursor: pointer; user-select: none;
+}
+.step-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-xs); }
+.step-head .ticon {
+  flex: 0 0 auto; width: 1em; height: 1em;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--caption);
+}
+.step-head .ticon svg { display: block; width: 1em; height: 1em; }
+.step-head .tstate { flex: 0 0 auto; color: var(--caption); white-space: nowrap; }
+.step-head .tobj {
+  flex: 0 1 auto; min-width: 0; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.step-head .tchev {
+  flex: 0 0 auto; width: 1.14em; height: 1.14em; margin-left: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); opacity: .55;
+  transition: color .16s, opacity .16s;
+}
+.step-head .tchev svg { width: 1.14em; height: 1.14em; transform: rotate(-90deg); transition: transform .16s; }
+.step-group.open .step-head .tchev svg { transform: rotate(0deg); }
+.step-head:hover .tstate, .step-head:hover .tobj, .step-head:hover .tchev { color: var(--text); }
+.step-head:hover .tchev, .step-group.open .step-head .tchev { opacity: 1; }
+.step-head.error .tstate, .step-head.error .tobj { color: var(--red); }
+.step-head.error .ticon { color: var(--red); }
+.step-head.running .ticon { color: var(--yellow); }
+/* 子项容器：那条 2px 竖线就是层级指示灯（WB 的 .cb-task-tool-item-inner） */
+.step-body { border-left: 2px solid var(--line-2); margin: 2px 0 0; padding-left: 12px; }
+.step-body.hidden { display: none; }
+.step-body .tool-item { margin-bottom: 8px; }
+.step-body .tool-item:last-child { margin-bottom: 0; }
+.step-body .tool-row { font-size: calc(var(--msg-font-size) * 0.93); }
 
 /* 详情卡与行同宽（WB 也不缩进），窄栏不需要额外回落；只留减少动效那条 */
 @media (prefers-reduced-motion: reduce) {

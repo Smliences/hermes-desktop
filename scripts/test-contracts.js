@@ -3621,21 +3621,26 @@ t('箭头常显、默认朝右、展开转正；折叠只切 hidden', () => {
   assert.ok(toolRender.includes("body.classList.toggle('hidden', !item.open)"), '点开时没切 hidden');
 });
 
-t('详情：WB 的分段结构 —— 名称 + 状态胶囊、参数两列、结果代码块', () => {
-  for (const c of ['tool-detail-head', 'tdh-name', 'tdh-state', 'tp-list', 'tp-row', 'tp-k', 'tp-v', 'sec-label']) {
+t('详情按 WB 的三个渲染器分流：编辑走 diff、命令走 stdout、其余铺 JSON', () => {
+  for (const c of ['tool-detail-head', 'tdh-name', 'tdh-state', 'detail-section', 'detail-label', 'detail-content']) {
     assert.ok(toolCss.includes('.' + c), 'CSS 缺少 .' + c + '，会按默认字号渲染');
   }
   assert.ok(/\.tool-detail-head \.tdh-name \{[^}]*font-weight: 500/.test(toolCss), '详情头工具名不是 500 字重');
   assert.ok(/\.tool-detail-head \.tdh-state \{[^}]*padding: 2px 8px/.test(toolCss), '状态没用 WB 的胶囊（2px 8px）');
   assert.ok(/\.tool-detail-head \.tdh-state \{[^}]*border-radius: 3px/.test(toolCss), '胶囊圆角不是 WB 的 3px');
-  // 间距/字号照 WB 的 .card-content / .detail-label / .detail-content 三个规则
-  assert.ok(/\.tool-detail \{[^}]*margin: 4px 0; padding: 8px 12px/.test(toolCss),
-    '详情外距/内边距不是 WB 的 4px 0 + 8px 12px');
+  // 外层照 WB 的 .default-tool-details：margin 4px 0 / padding 12 / 圆角 4
+  assert.ok(/\.tool-detail \{[^}]*margin: 4px 0; padding: 12px/.test(toolCss),
+    '详情外距/内边距不是 WB 的 4px 0 + 12px');
   assert.ok(/\.tool-detail \{[^}]*border-radius: 4px/.test(toolCss), '详情圆角不是 WB 的 4px');
-  assert.ok(/\.tool-detail \.sec-label \{[^}]*font: 600 1em\/1[^}]*letter-spacing: \.5px/.test(toolCss),
+  // 段与段 12px、标签 600 / 大写 / 字距 .5px、内容块 300px 上限
+  assert.ok(toolCss.includes('.tool-detail .detail-section:not(:last-child) { margin-bottom: 12px; }'),
+    '段间距不是 WB 的 .detail-section:not(:last-child) 12px');
+  assert.ok(/\.tool-detail \.detail-label \{[^}]*font: 600 1em\/1[^}]*letter-spacing: \.5px/.test(toolCss),
     '分段标签字号/字重/字距没照 WB（与详情正文同字号、600、字距 .5px）');
-  // 字体族：WB 的 .card-content 不换字体（sans），等宽只给里面的 .detail-content。
-  // 整块套等宽会把工具名和「参数/输出」标签也变成代码，读起来像终端 dump。
+  assert.ok(/\.tool-detail \.detail-label \{[^}]*text-transform: uppercase/.test(toolCss), '分段标签不是大写');
+  assert.ok(/\.tool-detail \.detail-content \{[^}]*max-height: 300px/.test(toolCss), '内容块没照 WB 的 300px 上限');
+  assert.ok(/\.tool-detail \.detail-content \{[^}]*border: 1px solid var\(--line\)/.test(toolCss), '内容块缺少描边');
+  // 字体族：详情块整体 sans（WB 的 card-content 不换字体），等宽只给内容块
   const detailRule = (toolCss.match(/\.tool-detail \{[^}]*\}/) || [''])[0];
   assert.ok(/var\(--sans\)/.test(detailRule) && !/var\(--mono\)/.test(detailRule),
     '详情块整体换成了等宽字体，WB 只有代码块是等宽');
@@ -3647,13 +3652,62 @@ t('详情：WB 的分段结构 —— 名称 + 状态胶囊、参数两列、结
   assert.ok(!/\.tdh-state\.ok\b/.test(toolCss), 'CSS 用了 .ok，但渲染层产出的是 .done，胶囊样式不会生效');
   assert.ok(toolRender.includes("const state = running ? 'running' : item.isError ? 'error' : 'done'"),
     '三态类名变了，胶囊与行状态色会全部失配');
-  assert.ok(/\.tool-detail pre \{[^}]*max-height: 300px/.test(toolCss), '代码块没照 WB 的 300px 上限');
-  assert.ok(toolCss.includes('margin-bottom: 12px'), '分段间距不是 WB 的 12px');
-  assert.ok(appSrc.includes('function toolParamsHTML(') && toolRender.includes('toolParamsHTML(item.input)'),
-    '参数仍是一整段 JSON dump');
+  assert.ok(toolRender.includes('toolDetailHTML(item)'), '渲染没走按工具类型分流的详情');
+  // 分流三条 + 各自的实现都要在，缺一条就退回「什么都是 JSON dump」
+  for (const fn of ['function toolDetailHTML(', 'function toolDiffHTML(', 'function toolStdoutHTML(', 'function lineDiff(']) {
+    assert.ok(appSrc.includes(fn), '缺少 ' + fn + '，详情没有按工具类型分流');
+  }
+  const detailFn = appSrc.slice(appSrc.indexOf('function toolDetailHTML('), appSrc.indexOf('function errorCodeOf('));
+  for (const k of ['isEdit', 'isWrite', 'isCmd']) assert.ok(detailFn.includes(k), '详情分流缺少 ' + k + ' 判断');
+  assert.ok(detailFn.includes('safeStringify(input)'), '其余工具的参数不是格式化 JSON（WB 的 DefaultToolRenderer）');
+  assert.ok(!appSrc.includes('tp-list') && !toolCss.includes('.tp-list'), '两列键值的老实现没删干净');
+  // diff：WB 的 diff-viewer —— 左侧竖条 + 增绿减红
+  assert.ok(toolCss.includes('.tool-detail .dv-g'), 'diff 缺少左侧竖条');
+  assert.ok(/\.tool-detail \.dv-row\.add \.dv-t \{[^}]*var\(--green\)/.test(toolCss), '增行没上绿');
+  assert.ok(/\.tool-detail \.dv-row\.del \.dv-t \{[^}]*var\(--red\)/.test(toolCss), '删行没上红');
+  assert.ok(/\.tool-detail \.dv-row\.add \.dv-g \{[^}]*var\(--green\)/.test(toolCss), '增行的竖条没上绿');
+  // 命令输出：WB 的 .execute-command .stdout-content —— 无描边、break-all
+  assert.ok(/\.tool-detail \.stdout-content \.content \{[^}]*break-all/.test(toolCss),
+    '命令输出没按 WB 用 break-all（长路径会撑出横向滚动）');
+  assert.ok(/\.tool-detail \.stdout-content \.content \{[^}]*var\(--mono\)/.test(toolCss), '命令输出不是等宽');
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(toolCss), '出现硬编码色值，深色主题会失配');
   const reduced = toolCss.slice(toolCss.indexOf('@media (prefers-reduced-motion: reduce)'));
   assert.ok(reduced.includes('.tool-row .tstate.loading-text') && reduced.includes('animation: none'),
     '扫光没有 reduced-motion 回落');
+});
+
+t('多级下拉：连续调用收成父行，子项缩进 + 竖线 + 小一号字号', () => {
+  assert.ok(appSrc.includes('function stepGroupEl('), '缺少步骤组父行');
+  assert.ok(appSrc.includes('run.length > 1 && state.view !== \'trace\''), '单次调用也套了一层壳，或轨迹视图被折叠');
+  assert.ok(appSrc.includes('stepGroupEl(run)'), '渲染层没接上步骤组');
+  assert.ok(appSrc.includes('renderItem(t, false, true)'), '子项没有标记成 sub');
+  assert.ok(toolRender.includes("(sub ? ' sub' : '')"), '渲染层没把子项标成 sub');
+  // 父行几何与工具行一致，子项缩进 12px + 2px 竖线（WB 的 .cb-task-tool-item-inner）
+  assert.ok(/\.step-head \{[^}]*gap: 8px/.test(toolCss), '父行几何与工具行不一致');
+  assert.ok(/\.step-body \{[^}]*border-left: 2px solid/.test(toolCss), '子项缺少层级竖线');
+  assert.ok(/\.step-body \{[^}]*padding-left: 12px/.test(toolCss), '子项未缩进 12px');
+  assert.ok(/\.step-body \.tool-row \{ font-size: calc\(var\(--msg-font-size\) \* 0\.93\)/.test(toolCss),
+    '子项未按 WB 的比例（父 14 / 子 13）小一号');
+  assert.ok(toolCss.includes('.step-body.hidden { display: none; }'), '折叠没走 hidden');
+  assert.ok(toolCss.includes('.step-group.open .step-head .tchev svg { transform: rotate(0deg); }'), '父行箭头没有展开态');
+  assert.ok(appSrc.includes('list[0].groupOpen = open'), '用户展开/收起的选择没有记住，重绘就丢');
+  // 默认展开条件：跑着或有失败才展开，否则收成一行
+  assert.ok(/if \(typeof open !== 'boolean'\) open = running \|\| failed;/.test(appSrc),
+    '默认展开条件变了：全成功的组会白白铺开，或运行中收起看不到进度');
+  assert.ok(appSrc.includes('step-head') && appSrc.includes('aria-expanded'), '父行键盘/读屏不可达');
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(toolCss.slice(toolCss.indexOf('步骤组'))), '步骤组出现硬编码色');
+});
+
+t('本轮脚注挂在整轮末尾，不在正文与工具之间', () => {
+  const asst = appSrc.slice(appSrc.indexOf("} else if (item.kind === 'assistant')"), appSrc.indexOf("} else if (item.kind === 'tool')"));
+  assert.ok(!/msgActionBar\(item, false\)`/.test(asst), '脚注又内联回正文下面了');
+  assert.ok(asst.includes('el._footHTML = msgActionBar(item, false)'), '脚注没交给整轮末尾统一挂');
+  assert.ok(appSrc.includes('const flushTurnFoot = '), '缺少整轮的脚注收口');
+  assert.ok(appSrc.includes("if (it.kind === 'user') flushTurnFoot()"), '换轮时没有收口上一轮');
+  assert.ok(appSrc.includes('tail.after(foot)'), '脚注没挂在整轮最后一个节点之后');
+  assert.ok(appSrc.includes('foot._item = merged'), '脚注没带回复数据，复制按钮会失效');
+  assert.ok(appSrc.includes('acc.real ? acc.tokens : 0'), '把估算的 token 当成真实用量相加了');
+  assert.ok(appSrc.includes("(msg && msg._item) || (row && row._item)"), '事件委托取不到挪出去的脚注对应的消息');
 });
 
 t('展开走局部切换，键盘可达且不整页重绘', () => {
