@@ -3778,7 +3778,7 @@ t('栏头带看板切换：换板走同一条 kanbanLoad，不新增通道', () 
   assert.ok(railApp.includes("kbModalOpen('board')"), '缺「＋ 新建看板…」入口');
   assert.ok(!rkbApp.includes('kanbanOverview('), '紧凑视图不得自己拉 overview');
 });
-t('状态 chip 在本地过滤，卡片压成单行', () => {
+t('状态 chip 在本地过滤，卡片是两列方块', () => {
   assert.ok(railApp.includes("const key = String(b.dataset.rkbGroup || '')") &&
     railApp.includes("rkbFilter = rkbFilter === key ? '' : key"),
     '点 chip 未在本地切换筛选 / 无法回到全部');
@@ -3788,8 +3788,14 @@ t('状态 chip 在本地过滤，卡片压成单行', () => {
     '筛选没有落到渲染上');
   assert.ok(rkbApp.includes('is-flat') && rkbApp.includes("state.first ? (g.key !== 'done')"),
     '筛到单组时不该再折叠；「已完成」默认应收起');
-  assert.ok(rkbApp.includes('function rkbCardHtml(') && rkbApp.includes('data-rkb-more='),
-    '缺单行卡片 / 「还有 N 张」入口');
+  assert.ok(rkbApp.includes('function rkbCardHtml(') && rkbApp.includes('class="rkb-cards"')
+    && rkbApp.includes('data-rkb-more='), '缺方块网格 / 卡片 / 「还有 N 张」入口');
+  // 方块卡的三块：顶行状态、标题 + 摘要、底行受让人。少一块卡里就会留一片空
+  assert.ok(rkbApp.includes('class="rkb-card-top"') && rkbApp.includes('class="rkb-card-bot"'),
+    '卡片缺顶行 / 底行，内容会全挤在上半张');
+  assert.ok(rkbApp.includes('t.latest_summary || t.body'),
+    '摘要没复用整页卡片的字段，方块卡里会空一大片');
+  assert.ok(rkbApp.includes("pri > 0 ? `<span class=\"rkb-pri"), 'P0 也会渲染成胶囊，等于给每张卡加噪点');
 });
 t('新样式全走双主题 token，无硬编码色，每个 class 都有规则', () => {
   for (const c of ['.rkb-bar', '.rkb-board', '.rkb-board .us-trigger', '.rkb-actions',
@@ -3801,8 +3807,11 @@ t('新样式全走双主题 token，无硬编码色，每个 class 都有规则'
     '.rkb-group-head', '.rkb-group[open] .rkb-caret', '.rkb-group-head.is-static',
     '.rkb-group-head.is-hot .rkb-group-name', '.rkb-group-head:focus-visible',
     '.rkb-group-name', '.rkb-group-num', '.rkb-caret',
-    '.rkb-card', '.rkb-card::before', '.rkb-card.is-running::before', '.rkb-card:hover',
-    '.rkb-card:focus-visible', '.rkb-title', '.rkb-st', '.rkb-meta',
+    '.rkb-card', '.rkb-cards', '.rkb-card-top', '.rkb-card-bot', '.rkb-card.is-running',
+    '.rkb-card.is-running::after', '.rkb-card:hover', '.rkb-card-top .rkb-age',
+    '.rkb-card-top .rkb-run', '.rkb-card:focus-visible', '.rkb-card > *',
+    '.rkb-pri', '.rkb-pri.p3', '.rkb-pri.p2', '.rkb-pri.p1',
+    '.rkb-title', '.rkb-sum', '.rkb-st', '.rkb-asg',
     '.rkb-age', '.rkb-run', '.rkb-more', '.rkb-none',
     '.rkb-empty', '.rkb-empty-ico', '.rkb-empty-main', '.rkb-empty-hint', '.rkb-foot']) {
     assert.ok(railCss.includes(c), '缺少样式规则 ' + c);
@@ -3811,10 +3820,17 @@ t('新样式全走双主题 token，无硬编码色，每个 class 都有规则'
   assert.ok(railCss.includes('var(--canvas)') && railCss.includes('var(--fill-2)'), '未使用双主题 token');
   assert.ok(railCss.includes('prefers-reduced-motion'), '动效未降级');
   assert.ok(railCss.includes('flex-wrap: wrap'), '280px 窄栏统计条会溢出');
-  // 行必须定高，否则标题变长会把行撑成两行（速览的价值全在"一眼扫完"）
-  assert.ok(/\.rkb-card \{[^}]*height: 30px/.test(railCss), '卡片不是定高单行，长标题会撑高');
-  assert.ok(/\.rkb-title \{[^}]*white-space: nowrap/.test(railCss), '标题未单行省略');
+  // 方块卡：两列网格 + 截断 + 高度自适应。锁死宽高比会让短标题的卡空出小半张
+  assert.ok(/\.rkb-cards \{[^}]*repeat\(auto-fill, minmax\(146px, 1fr\)\)/.test(railCss),
+    '卡片网格没做成自适应列，rail 拉宽后仍只有一列');
+  assert.ok(/\.rkb-card \{[^}]*min-height: 104px/.test(railCss), '卡片没有最小高度，网格会退化成一排横条');
+  assert.ok(!/\.rkb-card \{[^}]*aspect-ratio/.test(railCss),
+    '卡片锁死了宽高比：一行标题的任务会在方形卡里空出小半张');
+  assert.ok(/\.rkb-title \{[^}]*line-clamp: 2/.test(railCss), '标题没截断，长标题会顶出卡片');
+  assert.ok(/\.rkb-sum \{[^}]*line-clamp: 2/.test(railCss), '摘要没截断，会撑破卡片');
   assert.ok(railCss.includes('position: sticky'), '分组标题没吸顶，滚下去就丢了状态');
+  assert.ok(railCss.includes('.rkb-cards:has(> .rkb-card:only-child)'),
+    '单卡组仍占半行，右边空出半张卡位');
 });
 t('比例条只给「进行中 / 受阻」上色，其余留中性', () => {
   assert.ok(railHtml.includes('id="rkb-meter"'), '缺少状态比例条容器');

@@ -1033,13 +1033,13 @@ body.rail-resizing iframe { pointer-events: none; }
 /* ══════════ 右侧 rail：看板速览 ══════════
    400px 放不下五列等分，所以做成一屏速览，三层信息：
      栏头  看板下拉（兼换板）+ 三个 ghost 图标（刷新 / 新建 / 去完整看板）
-     概览  4px 比例条（按各组任务数分段）+ 一行状态 chip（本地筛选，不发请求）
+     概览  3px 比例条（按各组任务数分段）+ 一行状态 chip（本地筛选，不发请求）
      正文  分组（进行中 → 受阻 → 就绪 → 待办 → 已完成），组头可折叠，
-           每张任务 30px 单行：标题 + 子状态 + 一个「时效」槽（秒表 / 多久前）
-   层级只用三样东西表达：比例条说整体健康，组头说这一段是什么，行首 2px 色槽
-   只点亮运行中的卡 —— 每行都挂一根色条，五组叠起来就是一列竖线噪声。
-   左边线对齐：scroll padding 10px + 组头 padding 2px + 6px 点 + 6px gap，
-   与行 10px + 6px + 2px 槽 + 6px gap 都落在 24px，组名与任务标题同一竖线。 */
+           每张任务是一块方块卡：顶行状态点 + 时效，中间标题 4 行，底行受让人
+   层级只用三样东西表达：比例条说整体健康，组头说这一段是什么，卡片描边与色点
+   说单张卡的状态 —— 每行都挂一根饱和色条，五组叠起来就是一列竖线噪声。
+   格子宽由 minmax(146px) 决定：rail 默认 400px 恰好两列，拉宽到 520 / 760
+   自动变 3 / 4 列，不需要 media query（rail 宽度是内联变量，query 也读不到）。 */
 #kanban-pane { background: var(--canvas); }
 
 /* ---- 栏头 ---- */
@@ -1118,7 +1118,7 @@ body.rail-resizing iframe { pointer-events: none; }
 .rkb-list { display: block; }
 .rkb-group { margin: 0; }
 /* 组间靠留白分开，不画横线：五组各画一条会把列表切成碎片 */
-.rkb-group + .rkb-group { margin-top: 10px; }
+.rkb-group + .rkb-group { margin-top: 14px; }
 /* 组头 sticky：长列表滚下去还知道这一段是什么状态；底色必须不透明 */
 .rkb-group-head {
   position: sticky; top: 0; z-index: 2;
@@ -1139,44 +1139,86 @@ body.rail-resizing iframe { pointer-events: none; }
 }
 .rkb-caret { flex-shrink: 0; color: var(--caption); transition: transform .14s ease; }
 .rkb-group[open] .rkb-caret { transform: rotate(90deg); }
-/* 行 = 30px 药丸：hover 才显形，平时整块读起来是一张列表而不是一面卡片墙。
-   行首 2px 色槽是空的，只有运行中的卡点亮 —— 那是唯一值得一直亮着的信息。 */
+/* 行 = 方块卡：网格单元，三块信息各占一个方向（顶行状态 / 中间标题 + 摘要 / 底行受让人）。
+   400px 里排两列：再窄（三列 120px）标题会断成两三个字一行、顶行的秒表也放不下。
+   高度交给内容，再用网格拉成同行等高 —— 锁死 1:1 的方形看着最整齐，但一行标题的
+   任务会在卡里空出小半张、比横条更难看；方块感来自「两列 + 描边 + 卡面」，不是比例。
+   卡面用 --fill-2 而不是 --canvas：面板底色就是 canvas，同色只剩一根描边，
+   一屏十几张会读成一片连着的表格线。 */
+.rkb-cards {
+  display: grid; gap: 6px; padding: 1px 0 3px;
+  grid-template-columns: repeat(auto-fill, minmax(146px, 1fr));
+}
+/* 这一组只有一张卡时占满整行：半张卡孤零零挂在左列，比「这一组卡不一样宽」更晃眼 */
+.rkb-cards:has(> .rkb-card:only-child) { grid-template-columns: 1fr; }
 .rkb-card {
-  display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box;
-  height: 30px; padding: 0 8px 0 6px; margin: 0;
-  border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text);
-  text-align: left; cursor: pointer; min-width: 0;
-  transition: background .12s;
+  position: relative; display: flex; flex-direction: column; gap: 5px;
+  box-sizing: border-box; min-width: 0; padding: 9px 10px 10px;
+  min-height: 104px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--fill-2); color: var(--text);
+  text-align: left; cursor: pointer;
+  transition: background .12s, border-color .12s;
 }
-.rkb-card::before {
-  content: ''; flex: 0 0 2px; height: 13px; border-radius: 1px;
-  background: transparent; transition: background .12s;
-}
-/* hover 时色槽浅浅亮一下，给个可点的落点；运行中的绿槽优先级更高（写在后面） */
-.rkb-card:hover::before { background: var(--line-2); }
-.rkb-card.is-running::before { background: var(--green); }
-.rkb-card:hover { background: var(--fill-2); }
+/* 子项一律不收缩：被压扁的多行文本会从 line-clamp 漏出半行 */
+.rkb-card > * { flex-shrink: 0; }
+.rkb-card:hover { background: var(--fill-3); border-color: var(--line-2); }
 .rkb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 运行中的卡给一点点绿边：格子铺开后只看底边进度条不够，扫视时要先认出它在跑 */
+.rkb-card.is-running { border-color: color-mix(in srgb, var(--green) 30%, var(--line)); }
+/* 底边 2px 进度条：宽度走内联 --rkb-p，没预算（无上限）时不画 */
+.rkb-card.is-running::after {
+  content: ''; position: absolute; left: 0; bottom: 0; height: 2px;
+  width: var(--rkb-p, 0%); background: var(--green); border-radius: 0 1px 1px 0;
+}
+.rkb-card-top {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  min-width: 0; color: var(--caption); font: 400 10px/1 var(--sans);
+}
+/* 时效 / 秒表永远贴右：同一列的卡片左边状态、右边时间，扫视路线是直的 */
+.rkb-card-top .rkb-age, .rkb-card-top .rkb-run { margin-left: auto; }
+/* 优先级胶囊：和整页卡片同一套语义色（P3 红 / P2 黄 / P1 绿），P0 不渲染 */
+.rkb-pri {
+  flex: 0 0 auto; height: 14px; padding: 0 4px; border-radius: 3px;
+  font: 500 9px/14px var(--mono);
+}
+.rkb-pri.p3 { background: var(--red-soft); color: var(--red); }
+.rkb-pri.p2 { background: color-mix(in srgb, var(--yellow) 14%, var(--canvas)); color: var(--yellow); }
+.rkb-pri.p1 { background: color-mix(in srgb, var(--green) 13%, var(--canvas)); color: var(--green); }
 .rkb-title {
-  flex: 1 1 auto; min-width: 0; color: var(--text); font: 400 12.5px/1.3 var(--sans);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 0 auto; min-width: 0; color: var(--text);
+  font: 400 12.5px/1.45 var(--sans); word-break: break-word;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 .rkb-card.is-running .rkb-title { font-weight: 500; }
+/* 摘要：整页卡片的 latest_summary / body 也搬过来，否则方块卡中间会空一大片。
+   只留两行：方块卡不是读者，一行半摘要够判断「这卡在做什么」。 */
+.rkb-sum {
+  flex: 0 1 auto; min-height: 0; min-width: 0;
+  color: var(--text-3); font: 400 11px/1.5 var(--sans);
+  word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; overflow: hidden;
+}
+.rkb-card-bot {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  min-width: 0; margin-top: auto;
+  color: var(--caption); font: 400 10px/1 var(--sans);
+}
 /* 子状态：只给收集箱 / 已排期 / 待验收这三种「组名说不清」的细状态用 */
 .rkb-st {
-  flex: 0 0 auto; height: 16px; padding: 0 5px; border-radius: 4px;
-  background: var(--fill-2); color: var(--text-3); font: 400 9.5px/16px var(--sans);
+  flex: 0 0 auto; height: 14px; padding: 0 4px; border-radius: 3px;
+  background: var(--canvas); color: var(--text-3); font: 400 9px/14px var(--sans);
 }
-.rkb-card:hover .rkb-st { background: var(--fill-3); }
-.rkb-meta { flex: 0 0 auto; display: flex; align-items: center; min-width: 0; }
-.rkb-age { color: var(--caption); font: 400 10.5px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.rkb-age { color: var(--caption); font: 400 10px/1 var(--sans); font-variant-numeric: tabular-nums; }
 /* 秒表用组的语义色（进行中 = 绿），和组头那个点同一套 */
 .rkb-run {
   flex-shrink: 0; color: var(--green);
-  font: 500 10.5px/1 var(--mono); font-variant-numeric: tabular-nums;
+  font: 500 10px/1 var(--mono); font-variant-numeric: tabular-nums;
 }
+.rkb-asg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rkb-more {
-  display: block; width: 100%; height: 26px; padding: 0 8px 0 14px;
+  display: block; width: 100%; height: 26px; padding: 0 8px;
   border: 0; border-radius: var(--r-sm); background: transparent;
   color: var(--text-3); text-align: left; cursor: pointer;
   font: 400 10.5px/26px var(--sans);
@@ -1195,7 +1237,7 @@ body.rail-resizing iframe { pointer-events: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) {
-  .rkb-caret, .rkb-card, .rkb-card::before, .rkb-btn, .rkb-stat, .rkb-more { transition: none; }
+  .rkb-caret, .rkb-card, .rkb-btn, .rkb-stat, .rkb-more { transition: none; }
   .rkb-btn.is-busy svg { animation: none; }
 }
 

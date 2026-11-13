@@ -408,18 +408,30 @@ let CHROME_BIN = null;
       && s12b2.opts.length >= 2 && s12b2.opts[s12b2.opts.length - 1].includes('新建看板'),
     JSON.stringify(s12b2));
 
-  // 视觉结构：分组顺序按紧迫度、比例条只高亮两种状态、行定高 30px、图标是矢量
+  // 视觉结构：分组顺序按紧迫度、比例条只高亮两种状态、卡片是两列方块、图标是矢量
   const s12b1 = await cdp.ev(`(() => {
     const segs = [...document.querySelectorAll('#rkb-meter .rkb-seg')];
     const rows = [...document.querySelectorAll('.rkb-card')];
     const order = [...document.querySelectorAll('.rkb-group')]
       .map((g) => g.dataset.rkbGroup || (g.querySelector('.rkb-group-head') ? 'flat' : ''));
+    const rect = (el) => { const b = el.getBoundingClientRect();
+      return { x: Math.round(b.left), y: Math.round(b.top),
+        w: Math.round(b.width), h: Math.round(b.height) }; };
+    const boxes = rows.slice(0, 4).map(rect);
+    // 同一组里两张卡才是「同一行」：跨组的相邻卡各自在自己的网格里，不等高是正常的
+    const grid = [...document.querySelectorAll('.rkb-cards')].find((g) => g.children.length > 1);
+    const pair = grid ? [...grid.children].slice(0, 2).map(rect) : [];
+    const cols = grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0;
+    const first = rows[0];
     return {
       order,
       segs: segs.length,
       grow: segs.map((s) => s.style.flexGrow),
       colored: segs.map((s) => ({ dot: s.dataset.dot, bg: getComputedStyle(s).backgroundColor })),
-      h: rows.length ? Math.round(rows[0].getBoundingClientRect().height) : 0,
+      boxes, pair, cols,
+      parts: first ? { top: !!first.querySelector('.rkb-card-top'),
+        bot: !!first.querySelector('.rkb-card-bot'),
+        clamp: getComputedStyle(first.querySelector('.rkb-title')).webkitLineClamp } : {},
       icons: document.querySelectorAll('#kanban-pane .rkb-btn svg').length,
       hot: document.querySelectorAll('.rkb-group-head.is-hot').length,
       sticky: [...document.querySelectorAll('.rkb-group-head')]
@@ -435,8 +447,13 @@ let CHROME_BIN = null;
       && s12b1.colored.filter((c) => c.dot === 'green' || c.dot === 'red').every((c) => !TRANSPARENT(c.bg))
       && s12b1.colored.filter((c) => c.dot !== 'green' && c.dot !== 'red').every((c) => TRANSPARENT(c.bg)),
     JSON.stringify(s12b1.colored));
-  ok('任务行定高 30px 且组头吸顶（长列表滚下去还知道是哪一段）',
-    s12b1.h === 30 && s12b1.sticky, JSON.stringify({ h: s12b1.h, sticky: s12b1.sticky }));
+  ok('任务卡是两列方块：同行等宽等高、有顶行与底行、标题按行截断',
+    s12b1.cols === 2 && s12b1.parts.top && s12b1.parts.bot && s12b1.parts.clamp === '2'
+      && s12b1.pair.length === 2 && s12b1.pair[0].y === s12b1.pair[1].y
+      && s12b1.pair[0].h === s12b1.pair[1].h
+      && s12b1.boxes.every((b) => b.h >= 104 && b.w > 140),
+    JSON.stringify({ pair: s12b1.pair, parts: s12b1.parts, cols: s12b1.cols }));
+  ok('组头吸顶（长列表滚下去还知道是哪一段）', s12b1.sticky, String(s12b1.sticky));
   ok('栏头三个图标都是矢量（不是三个字形方块）', s12b1.icons === 3, String(s12b1.icons));
 
   // 空组不占地方：清空一组后组数与比例条段数同时减一，恢复后回来

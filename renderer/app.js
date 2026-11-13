@@ -7435,14 +7435,15 @@ function renderKanban() {
 
 /* ---- 右侧 rail 紧凑看板 -------------------------------------------------
    与整页共用 KB.board / kbGroups()，不另开 REST、不另起轮询。400px 放不下
-   五列等分，所以排成「看板切换 + 状态筛选 + 单列密排」：
+   五列等分，所以排成「看板切换 + 状态筛选 + 方块卡片网格」：
      · 栏头是看板下拉，换板 = 改 KB.filters.board（走同一条 kanbanLoad）；
      · 状态 chip 只在本地过滤，点一下只看这一组、再点回到全部，不发请求；
-     · 每张卡压成一行（色条 + 标题 + 状态/时长/受让人），比原来的两行卡片矮一半；
-     · 折叠状态存 DOM，轮询重渲染不重置；每组最多 RKB_MAX_CARDS 行。
+     · 正文是按紧迫度分组的两列方块卡（宽度自适应 2–4 列），标题 4 行截断；
+     · 折叠状态存 DOM，轮询重渲染不重置；每组最多 RKB_MAX_CARDS 张。
    写操作一律回完整看板页（详情抽屉挂在整页里），这里只留「新建任务 / 新建看板」
    两个全局弹窗入口，避免两处状态机各写一份。 */
-const RKB_MAX_CARDS = 7;
+/** 一屏两列 × 4 行：再多的卡就在详情抽屉里看，速览不负责穷举。 */
+const RKB_MAX_CARDS = 8;
 /** rail 的分组顺序：先看「在跑 / 卡住」的，再看排队与历史。
  *  整页五列仍用 KB_GROUPS 原序（那里是流程顺序，看得见全貌）；
  *  这里是速览，顺序应该按「我现在要关心什么」排。 */
@@ -7484,10 +7485,11 @@ function rkbSyncBoardSwitch() {
     // 占位项显示的就是看板名本身：多一个「看板 · 」前缀只是把这一行最要紧的字推远
     cur || '当前看板');
 }
-/** 一张卡一行（30px）：[色槽] 标题 …… 子状态 时间。
- *  右侧只留一个「时效」槽 —— 运行中看秒表，其余看多久前建。受让人不再单独占位：
- *  它是"人"不是"时间"，和「收集箱 / 1 天前」挤在同一列时每行都要重新解析一遍；
- *  人放在 title 里，整页卡片和抽屉里都能看到。 */
+/** 一张方块卡（网格单元）：顶行 [状态点] [优先级] [细状态] …… [时效]，
+ *  中间标题最多 3 行 + 摘要最多 3 行，底行受让人；运行中的卡在底边压一条
+ *  2px 进度条（宽度走内联 --rkb-p）。
+ *  方形卡如果只放标题和一行名字，中间会空出一大片——所以把整页卡片用的
+ *  latest_summary / body 摘要也搬过来：有摘要时刚好填满，没摘要时留白当呼吸。 */
 function rkbCardHtml(t) {
   const st = String((t && t.status) || '');
   const asg = String((t && t.assignee) || '').trim();
@@ -7496,16 +7498,29 @@ function rkbCardHtml(t) {
   const stLabel = KB_STATUS_LABEL[st] || st;
   // 组名已经说明了状态（待办 / 进行中），只有更细的（收集箱 / 已排期 / 待验收）才标
   const sub = RKB_SUB_STATUS.indexOf(st) >= 0 ? stLabel : '';
+  const pri = Number((t && t.priority) || 0);
   const runStart = st === 'running' ? kbRunStart(t) : 0;
-  const slot = runStart
-    ? `<span class="rkb-run" data-kb-run="${runStart}" data-kb-run-max="${kbRunLimit(t)}"><span class="kb-run-txt">${esc(kbRunClockText(kbRunElapsed(runStart), kbRunLimit(t)))}</span></span>`
+  const limit = runStart ? kbRunLimit(t) : 0;
+  const sum = String((t && (t.latest_summary || t.body)) || '').trim();
+  const time = runStart
+    ? `<span class="rkb-run" data-kb-run="${runStart}" data-kb-run-max="${limit}"><span class="kb-run-txt">${esc(kbRunClockText(kbRunElapsed(runStart), limit))}</span></span>`
     : (ago ? `<span class="rkb-age">${esc(ago)}</span>` : '');
+  const dot = rkbDotFor(st);
+  const pct = runStart && limit ? Math.round(kbRunPct(kbRunElapsed(runStart), limit)) : 0;
   const tip = [title, stLabel || '未知状态', asg, ago].filter(Boolean).join(' · ');
-  return `<button class="rkb-card${st === 'running' ? ' is-running' : ''}" type="button"`
-    + ` data-rkb-task="${esc((t && t.id) || '')}" data-dot="${esc(rkbDotFor(st))}" title="${esc(tip)}">`
-    + `<span class="rkb-title">${esc(title)}</span>`
+  return `<button class="rkb-card${runStart ? ' is-running' : ''}" type="button"`
+    + ` data-rkb-task="${esc((t && t.id) || '')}" data-dot="${esc(dot)}" title="${esc(tip)}"`
+    + (pct ? ` style="--rkb-p:${pct}%"` : '') + '>'
+    + '<span class="rkb-card-top">'
+    + `<span class="rkb-dot" data-dot="${esc(dot)}"></span>`
+    // P0 = 未设优先级，标出来只有噪音；有优先级才占位
+    + (pri > 0 ? `<span class="rkb-pri p${Math.min(3, pri)}" title="优先级 P${pri}">P${pri}</span>` : '')
     + (sub ? `<span class="rkb-st">${esc(sub)}</span>` : '')
-    + (slot ? `<span class="rkb-meta">${slot}</span>` : '')
+    + time
+    + '</span>'
+    + `<span class="rkb-title">${esc(title)}</span>`
+    + (sum ? `<span class="rkb-sum">${esc(clip(sum, 160))}</span>` : '')
+    + `<span class="rkb-card-bot">${asg ? `<span class="rkb-asg">${esc(asg)}</span>` : ''}</span>`
     + '</button>';
 }
 /** 组头右侧的折叠箭头：三个按钮已经是矢量图标了，箭头再用字符会跟字体基线打架。 */
@@ -7518,7 +7533,7 @@ function rkbGroupHtml(g, state) {
   const more = g.all.length > tasks.length
     ? `<button class="rkb-more" type="button" data-rkb-more="${esc(g.key)}">还有 ${g.all.length - tasks.length} 张 →</button>`
     : '';
-  const body = cards || '<div class="rkb-none">这一组是空的</div>';
+  const body = cards ? `<div class="rkb-cards">${cards}</div>` : '<div class="rkb-none">这一组是空的</div>';
   // 进行中永远是这一屏的主角：组名给正文色 + 加粗，眼睛第一眼就落在上面
   const cls = `rkb-group-head${g.key === 'running' ? ' is-hot' : ''}`;
   const head = `<span class="rkb-dot" data-dot="${esc(g.dot)}"></span>`
