@@ -87,6 +87,8 @@
       if (name === '/status') return { ok: true, type: 'exec', text: 'Session  demo-20261104\nModel    deepseek-v4.1-flash\nTokens   24341 in / 130 out\nProfile  default' };
       if (name === '/context') return { ok: true, type: 'exec', text: 'context window  12% 已用（24341 / 200000）\ncompaction      未触发' };
       if (name === '/insights') return { ok: true, type: 'exec', text: '近 7 天：18 轮对话 · 42 次工具调用 · 缓存命中 51%' };
+      // 吃参数的命令裸执行：真 CLI 回的是 usage，桌面端照原样落成结果卡
+      if (name === '/title') return { ok: true, type: 'exec', text: 'No title set. Usage: /title <your session title>' };
       // send 类型：命令被改写成一轮 prompt，桌面端要回到正常提交（Demo 里只回显）
       if (name === '/plan') return { ok: true, type: 'send', text: 'plan ' + String(command).slice(5).trim(), display: command };
       return { ok: false, error: 'Demo 模式不支持 ' + name };

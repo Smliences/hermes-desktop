@@ -294,12 +294,21 @@ let CHROME_BIN = null;
   await sleep(700);
   const s9g = await cdp.ev(`(() => { const card = document.querySelector('.msg-command .cmd-card'); return { has: !!card, done: !!document.querySelector('.cmd-card.is-done'), cmd: card ? card.querySelector('.cmd-line').textContent : '', out: card ? card.querySelector('.cmd-out').textContent.slice(0, 60) : '' }; })()`);
   ok('选中 CLI 命令即执行，并在对话里留下结果卡', s9g.has && s9g.done && s9g.cmd === '/status' && s9g.out.includes('Session'), JSON.stringify(s9g));
-  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/title'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  // 只敲了命令名的一半（/tit）→ 选中只补全，把光标留在参数位，绝不误跑
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/tit'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
   await sleep(280);
   await cdp.ev(`(() => { const rows = [...document.querySelectorAll('#chip-menu .wb-menu-row')]; const hit = rows.find((r) => r.dataset.key === '/title'); if (hit) hit.click(); return 1; })()`);
   await sleep(350);
   const s9h = await cdp.ev(`({ val: document.getElementById('input').value, cards: document.querySelectorAll('.msg-command').length })`);
-  ok('吃参数的命令只补全命令名、不立即执行', s9h.val === '/title ' && s9h.cards === 1, JSON.stringify(s9h));
+  ok('半截命令名只补全、把光标留在参数位', s9h.val === '/title ' && s9h.cards === 1, JSON.stringify(s9h));
+
+  // 命令名敲全了（/title）→ Enter 就是要跑它：CLI 回 usage，落成结果卡
+  await cdp.ev(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '/title'; i.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(280);
+  await key(cdp, 'Enter', 13); await sleep(600);
+  const s9i = await cdp.ev(`(() => { const cards = [...document.querySelectorAll('.msg-command .cmd-card')]; const last = cards[cards.length - 1]; return { n: cards.length, val: document.getElementById('input').value, cmd: last ? last.querySelector('.cmd-line').textContent : '', out: last ? last.querySelector('.cmd-out').textContent : '' }; })()`);
+  ok('敲全命令名后 Enter 直接执行（不再卡在补全空格）',
+    s9i.n === 2 && s9i.val === '' && s9i.cmd === '/title' && s9i.out.includes('Usage'), JSON.stringify(s9i));
   await cdp.ev(`(() => { document.getElementById('input').value = ''; slashClose(); return 1; })()`);
   await shot(cdp, 'hermes-ui-landing.png');
 

@@ -2735,7 +2735,11 @@ function slashSync() {
     const spaceAt = q.search(/\s/);
     // 已有参数（`/title 新名字`）或命令本身要吃参数：交回给调用方，别把整串当命令名
     const argText = spaceAt >= 0 ? q.slice(spaceAt + 1) : '';
-    const needsArg = row.source === 'cli' && row.argMode && !argText;
+    // 命令名已经完整敲出来了（`/save` 而不是 `/sa`）＝ 用户就是要跑它：
+    // 裸命令直接送给 CLI，它会回 usage；比「补个空格就没动静」清楚得多。
+    // 只有还在输入命令名的中途（`/sa`）才补全并把焦点留在参数位。
+    const typedFull = q.trim().toLowerCase() === row.cmd.replace(/^\//, '').toLowerCase();
+    const needsArg = row.source === 'cli' && row.argMode && !argText && !typedFull;
     if (needsArg) {
       // 只补全命令名，把光标留在名字后面让用户接着敲参数
       inp.value = row.cmd + ' ';

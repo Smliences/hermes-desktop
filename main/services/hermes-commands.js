@@ -222,11 +222,17 @@ async function exec(gw, { sessionId, command } = {}) {
       return { ok: true, type: 'skill', text: String(res.message || res.text || ''), display: cmd };
     }
     // type === 'exec'
-    return { ok: true, type: 'exec', text: String((res && res.output) || '') };
+    const out = String((res && res.output) || '');
+    // 少数命令会额外带 warning（如 /model 写不进去）：output 里通常已有同样一句，
+    // 没有才补上，避免同一句话在卡片里出现两遍
+    const warn = String((res && res.warning) || '');
+    return { ok: true, type: 'exec', text: warn && !out.includes(warn) ? `${out}\n\n${warn}` : out };
   } catch (err) {
     // 网关拒绝时会带 data.detail：CLI 给的「改用哪条命令」提示，比英文原句有用得多
     const detail = err && err.data && typeof err.data === 'object' ? err.data.detail : '';
-    const main = String((err && err.message) || err || '命令执行失败');
+    const main = String((err && err.message) || err || '命令执行失败')
+      // CLI 侧未捕获异常会包成 `handler error: ...`，这层包裹对用户没意义，换成一句能读的
+      .replace(/^handler error:\s*/i, 'CLI 内部错误：');
     const text = detail ? `${main}\n${detail}` : main;
     log.info('commands', 'exec rejected', { command: cmd.split(/\s+/)[0], err: main, detail: String(detail || '') });
     return { ok: false, error: text, refused: /unsupported_command|not available/i.test(`${main} ${detail}`) };

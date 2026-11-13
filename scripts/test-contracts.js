@@ -4004,6 +4004,11 @@ t('三种返回都接住，被拒时把 CLI 的替代方案给用户', () => {
     assert.ok(cmdSrc.includes(ty), '未处理返回类型 ' + ty);
   }
   assert.ok(cmdSrc.includes('res.output'), 'exec 类型没有取 output');
+  // 少数命令（如 /model 写不进去）只在 warning 里说真话，丢了就等于谎报成功
+  assert.ok(cmdSrc.includes('res.warning'), 'exec 丢弃了 warning 字段');
+  assert.ok(cmdSrc.includes('!out.includes(warn)'), 'warning 未去重，会与 output 里同一句重复');
+  // CLI 侧未捕获异常包成 handler error:，原样贴给用户读不懂
+  assert.ok(cmdSrc.includes('CLI 内部错误'), 'handler error 未换成人话');
   assert.ok(cmdSrc.includes('err.data'), '拒绝原因没有读 error.data');
   assert.ok(cmdSrc.includes('detail'), '没有把 data.detail（改用哪条命令）带给用户');
   // 失败必须 resolve 成 ok:false：命令不可用是常态，抛异常会变成 IPC 错误弹窗
@@ -4037,8 +4042,11 @@ t('菜单合并本地动作与 CLI 命令，吃参数的命令只补全不误执
   assert.ok(appSrc.includes('cliCatalog.commands'), '斜杠菜单没有合并 CLI 目录');
   assert.ok(appSrc.includes("badge: c.source === 'cli' ? 'CLI' : ''"), 'CLI 命令没有视觉区分');
   assert.ok(appSrc.includes('function commandScore('), '缺少匹配打分（精确 > 前缀 > 包含）');
-  assert.ok(appSrc.includes('const needsArg = row.source === \'cli\' && row.argMode && !argText;'),
-    '吃参数的命令未走补全分支');
+  assert.ok(appSrc.includes('const needsArg = row.source === \'cli\' && row.argMode && !argText && !typedFull;'),
+    '吃参数的命令未走补全分支（或未区分「命令名已敲全」）');
+  // 命令名敲全后再按 Enter 必须能真的执行：否则 62 条吃参数的命令永远停在「补个空格」
+  assert.ok(appSrc.includes("const typedFull = q.trim().toLowerCase() === row.cmd.replace(/^\\//, '').toLowerCase();"),
+    '没有识别「命令名已完整输入」，吃参数的命令会卡在补全');
   assert.ok(appSrc.includes("inp.value = row.cmd + ' ';"), '补全没有留下参数位');
   assert.ok(appSrc.includes('CMD_MENU_MAX'), '候选没有上限，空查询会铺满整屏');
   assert.ok(appSrc.includes('if (row.source === \'local\')'), '本地动作未与 CLI 命令分流');

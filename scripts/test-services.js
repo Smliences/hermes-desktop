@@ -2244,6 +2244,27 @@ async function run() {
     assert.strictEqual(r.refused, true, '未标记为「服务端拒绝」');
   });
 
+  await t('warning 只在 output 没说时才补上，handler error 换成能读的话', async () => {
+    commands.invalidate();
+    const mk = (res) => ({ rpc: async (m) => (m === 'session.resume' ? { session_id: 'L' } : res) });
+    // /model 失败时 output 与 warning 是同一句：不能重复展示两遍
+    const dup = await commands.exec(mk({ output: '别名无效', warning: '别名无效' }), { sessionId: 's', command: '/model x' });
+    assert.strictEqual(dup.text, '别名无效', '同一句话被贴了两遍');
+    const add = await commands.exec(mk({ output: '结果', warning: '只在这说' }), { sessionId: 's', command: '/x' });
+    assert.ok(add.text.includes('结果') && add.text.includes('只在这说'), 'warning 被丢掉了');
+    // CLI 侧未捕获异常原样是 `handler error: 'NoneType' object ...`
+    const boom = {
+      rpc: async (m) => {
+        if (m === 'session.resume') return { session_id: 'L' };
+        throw new Error("handler error: 'NoneType' object has no attribute 'x'");
+      },
+    };
+    const r = await commands.exec(boom, { sessionId: 's', command: '/compact' });
+    assert.strictEqual(r.ok, false);
+    assert.ok(!/^handler error/.test(r.error), '仍把 handler error 原样甩给用户');
+    assert.ok(r.error.startsWith('CLI 内部错误'), '未给出可读的失败原因: ' + r.error);
+  });
+
   await t('参数校验：缺会话 / 非 / 开头 / 超长都直接拒绝，不打后端', async () => {
     let calls = 0;
     const gw = { rpc: async () => { calls++; return {}; } };
