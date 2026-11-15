@@ -412,6 +412,38 @@ let CHROME_BIN = null;
       && s11h.rail === railBefore && s11h.views, JSON.stringify(s11h));
   await cdp.ev(`document.documentElement.setAttribute('data-theme', 'light'); 'ok'`);
 
+  /* S11+ 自动跟随口径：只读工具不抢页签，只认确实写了文件的工具。
+     桩一律回 !ok —— 只记录「有没有打算跟随」，不真的 setPreview，零副作用。 */
+  console.log('\nS11+ 自动跟随只认写入类工具');
+  await cdp.ev(`(() => {
+    window.__pvOrigResolve = api.previewResolve;
+    window.__pvCalls = [];
+    api.previewResolve = async (p) => { window.__pvCalls.push(p); return { ok: false }; };
+    return 1;
+  })()`);
+  const pvTrial = (evt) => cdp.ev(`(async () => {
+    window.__pvCalls = [];
+    await maybeAutoPreview(${JSON.stringify(evt)});
+    return window.__pvCalls.slice();
+  })()`);
+  const P = '/tmp/demo/report.md';
+  const t1 = await pvTrial({ name: 'read_file', input: { file_path: P }, output: `Contents of ${P}` });
+  ok('Agent 只读一个 .md 不再弹预览', t1.length === 0, JSON.stringify(t1));
+  const t2 = await pvTrial({ name: 'grep', input: { pattern: 'x' }, output: `${P}:1: hit` });
+  ok('grep 结果里的路径不算产物', t2.length === 0, JSON.stringify(t2));
+  const t3 = await pvTrial({ name: 'write_file', input: { file_path: P, content: '见 /tmp/demo/data.csv' }, output: 'ok' });
+  ok('write_file 跟随目标文件，且不把 content 里提到的路径当产物',
+    t3.length > 0 && t3[0] === P && !t3.includes('/tmp/demo/data.csv'), JSON.stringify(t3));
+  const t4 = await pvTrial({ name: 'write_file', input: { file_path: P }, output: 'failed', isError: true });
+  ok('执行失败不跟随', t4.length === 0, JSON.stringify(t4));
+  const t5 = await pvTrial({ name: 'bash', input: { command: 'ls -la /tmp/demo' }, output: P });
+  ok('ls / git status 输出里的路径不误触发', t5.length === 0, JSON.stringify(t5));
+  const t6 = await pvTrial({ name: 'bash', input: { command: `python gen.py > ${P}` }, output: '' });
+  ok('命令带重定向目标时仍会跟随', t6.length > 0 && t6[0] === P, JSON.stringify(t6));
+  const t7 = await pvTrial({ name: 'bash', input: { command: 'node gen.js' }, output: `Wrote ${P}` });
+  ok('结果里有写入信号时仍会跟随', t7.length > 0 && t7.includes(P), JSON.stringify(t7));
+  await cdp.ev(`(api.previewResolve = window.__pvOrigResolve, 1)`);
+
   /* S12 右侧 rail 看板：终端下线、紧凑视图与整页共用数据 */
   console.log('\nS12 右侧 rail 看板（替代终端页签）');
   const s12a = await cdp.ev(`(() => ({

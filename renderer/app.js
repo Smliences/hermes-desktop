@@ -2029,8 +2029,7 @@ function routeEvent(evt, explicitTabId) {
     tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', ts: Date.now() });
     tab.showTyping = true; tab.activity = label;
     if (visible) { renderChat(); setActivity(label); syncActivityBar(); }
-    maybeAutoPreview(evt).catch(() => {});
-    maybeAutoPreview(evt).catch(() => {});
+    // 自动跟随只在工具跑完之后做：此刻文件还没写出来，先 resolve 只会拿到旧内容或失败。
   } else if (evt.type === 'tool_result') {
     const item = [...tab.items].reverse().find((i) => i.kind === 'tool' && i.name === evt.name && i.state === 'running');
     if (item) {
@@ -2038,7 +2037,10 @@ function routeEvent(evt, explicitTabId) {
       item.durationMs = evt.duration_ms || 0; item.state = 'done'; item.done = true;
       tab.showTyping = true; tab.activity = '生成中…';
       if (visible) renderChat();
-      maybeAutoPreview({ input: item.input, output: evt.output, preview: evt.preview }).catch(() => {});
+      maybeAutoPreview({
+        name: item.name, input: item.input, output: evt.output,
+        preview: evt.preview, isError: !!evt.is_error,
+      }).catch(() => {});
     }
   } else if (evt.type === 'usage') {
     // 后端 session.usage（回合中按间隔推送 / resume 初值）：token、tps、上下文占用
@@ -3824,13 +3826,44 @@ function extractPreviewPaths(text) {
   }
   return found;
 }
+/** 自动跟随只认「确实会产出/改写文件」的工具，且只在工具跑完之后。
+ *  开关写的是「跟随 Agent 生成的文件」，但只读类（read_file / cat / grep /
+ *  glob / list_files / web_fetch…）的参数与输出里同样满是已存在的路径，
+ *  不拦住的话 Agent 只是读一个 .md 也会把 rail 页签抢到预览上。 */
+const PV_WRITE_TOOLS = /^(write_file|save_file|create_file|patch|edit_file|multi_edit|image_generate|video_generate|text_to_speech)/i;
+const PV_CMD_TOOLS = /^(terminal|bash|shell|exec_command|run_command|execute_code|process_manage|cronjob_manage)/i;
+// 命令类没有 file_path 参数：要么命令里带明确的重定向目标，要么结果里有写入信号，
+// 否则 `ls` / `git status` / `cat` 输出里的一串路径都会误触发。
+const PV_WRITE_SIGNAL = /\b(?:wrote|written|created|generated|saved|exported|updated)\b|已(?:生成|写入|保存|创建|导出)/i;
+const PV_REDIRECT = />{1,2}\s*["']?(~?\/[^\s"'>;|]+\.[a-z0-9]+)/i;
+const PV_PATH_KEYS = ['file_path', 'filePath', 'path', 'filename', 'output_path', 'out_path', 'target'];
 let pvAutoAt = 0;
 async function maybeAutoPreview(evt) {
-  if (!pvAvailable() || !$('#pv-auto').checked) return;
+  if (!pvAvailable() || !$('#pv-auto').checked || evt.isError) return;
+  const name = String(evt.name || '');
+  const isWrite = PV_WRITE_TOOLS.test(name);
+  const isCmd = PV_CMD_TOOLS.test(name);
+  if (!isWrite && !isCmd) return;   // 新工具默认不打扰，想跟随就加进白名单
   const parts = [];
-  collectStrings(evt.input, parts, 0);
-  if (typeof evt.output === 'string') parts.push(evt.output);
-  if (typeof evt.preview === 'string') parts.push(evt.preview);
+  const inp = evt.input;
+  if (isWrite) {
+    if (inp && typeof inp === 'object' && !Array.isArray(inp)) {
+      // 只取路径类字段：write_file 的 content 是整篇文件内容，整段丢进正则
+      // 会把文档里提到的其它路径也当成产物。
+      for (const k of PV_PATH_KEYS) if (typeof inp[k] === 'string') parts.push(inp[k]);
+    }
+    if (!parts.length) collectStrings(inp, parts, 0);
+  }
+  const out = [
+    typeof evt.output === 'string' ? evt.output : '',
+    typeof evt.preview === 'string' ? evt.preview : '',
+  ].join('\n');
+  const cmd = isCmd && inp && typeof inp === 'object'
+    ? String(inp.command || inp.cmd || inp.script || '') : '';
+  const redirected = isCmd ? cmd.match(PV_REDIRECT) : null;
+  if (isCmd && !redirected && !PV_WRITE_SIGNAL.test(out)) return;
+  if (redirected) parts.unshift(redirected[1]);
+  if (out.trim()) parts.push(out);
   const paths = extractPreviewPaths(parts.join('\n'));
   if (!paths.length) return;
   for (const p of paths.slice(0, 3)) {

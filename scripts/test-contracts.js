@@ -3858,6 +3858,33 @@ t('自动跟随覆盖新类型，Demo 桥不再被 hasNative 挡住', () => {
     assert.ok(mockBridgeSrc.includes(fn), 'Demo 桥缺少 ' + fn);
   }
 });
+t('自动跟随只认写入类工具：只读不抢页签、失败不跟随、只在结果阶段触发', () => {
+  for (const c of ['const PV_WRITE_TOOLS =', 'const PV_CMD_TOOLS =',
+    'const PV_WRITE_SIGNAL =', 'const PV_REDIRECT =', 'const PV_PATH_KEYS =']) {
+    assert.ok(pvApp.includes(c), '缺少写入类判定常量 ' + c);
+  }
+  const writeLine = pvApp.split('\n').find((l) => l.includes('const PV_WRITE_TOOLS =')) || '';
+  for (const ro of ['read_file', 'grep', 'glob', 'list_files', 'web_fetch', 'cat']) {
+    assert.ok(!writeLine.includes(ro), '只读工具混进写入白名单：' + ro);
+  }
+  assert.ok(pvApp.includes('if (!isWrite && !isCmd) return;'),
+    '未拦住只读 / 未知工具，Agent 读个 .md 又会弹面板');
+  assert.ok(pvApp.includes('|| evt.isError) return'), '失败的工具结果不该跟随');
+  assert.ok(pvApp.includes('if (isCmd && !redirected && !PV_WRITE_SIGNAL.test(out)) return;'),
+    '命令类没有写入信号或重定向目标就该放过，否则 ls / git status 会误触发');
+  assert.ok(pvApp.includes('for (const k of PV_PATH_KEYS)') && pvApp.includes('if (!parts.length) collectStrings'),
+    'write_file 的 content 整段扫会把文中提到的路径当成产物');
+  // 全文件只有「定义 + 一次调用」：tool_use 阶段文件还没写出来，跟随只会拿到旧内容
+  const calls = appSrc.match(/maybeAutoPreview\(/g) || [];
+  assert.strictEqual(calls.length, 2, 'maybeAutoPreview 调用点重复或残留 tool_use 阶段调用');
+  const useBranch = appSrc.slice(appSrc.indexOf("evt.type === 'tool_use'"),
+    appSrc.indexOf("evt.type === 'tool_result'"));
+  assert.ok(!useBranch.includes('maybeAutoPreview('), '工具刚起手就跟随，文件还不存在');
+  const resBranch = appSrc.slice(appSrc.indexOf("evt.type === 'tool_result'"),
+    appSrc.indexOf("evt.type === 'usage'"));
+  assert.ok(resBranch.includes('name: item.name') && resBranch.includes('isError: !!evt.is_error'),
+    '结果阶段没把工具名 / 失败态传给自动跟随');
+});
 
 section('3ak. 右侧 rail 看板：双视图共享数据、写操作回整页、双主题与几何不变');
 const railHtml = htmlSrc.slice(htmlSrc.indexOf('<!-- ══════════ 右侧 rail'),
