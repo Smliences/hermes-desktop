@@ -860,6 +860,151 @@ let CHROME_BIN = null;
     s16a.logVisible && s16a.logText.includes('worker started'), JSON.stringify(s16a));
   await cdp.ev(`(() => { closeKanbanDrawer(); closeKanbanPage(); return 1; })()`);
 
+  /* S17 看板第二期：排序 / 持久化 / 快捷键 / 搜索高亮 / 卡住提示 / 列折叠 / 抽屉切卡 / 整列落点 */
+  console.log('\nS17 看板第二期交互完善');
+  await cdp.ev(`(() => { localStorage.removeItem('kb-prefs'); KB._prefsScope = ''; kbResetFilters(); showKanban(true); return 1; })()`);
+  await sleep(600);
+
+  // F5 卡住提示
+  const s17Stuck = await cdp.ev(`(() => {
+    const badges = [...document.querySelectorAll('.kb-card .kb-stuck')].map((el) => el.textContent.trim());
+    return { count: badges.length, sample: badges.slice(0, 3) };
+  })()`);
+  ok('卡住提示：就绪 / 受阻超时卡片显示琥珀色「已等 X」小标',
+    s17Stuck.count >= 1 && s17Stuck.sample.some((t) => /^已等\s+/.test(t)), JSON.stringify(s17Stuck));
+
+  // F3 '/' 聚焦搜索 + F4 搜索高亮（含 XSS 安全转义）
+  const pressChar = async (ch, code, vk) => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: vk });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code, windowsVirtualKeyCode: vk });
+  };
+  await cdp.ev(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`);
+  await pressChar('/', 'Slash', 191);
+  await sleep(150);
+  const s17Slash = await cdp.ev(`(() => { const q = document.querySelector('#kb-search'); return { focused: document.activeElement === q, val: q ? q.value : null }; })()`);
+  ok('快捷键 / 聚焦搜索框且不把斜杠输入文本框', s17Slash.focused && s17Slash.val === '', JSON.stringify(s17Slash));
+
+  await cdp.ev(`(() => { const q = document.querySelector('#kb-search'); q.value = '反馈'; q.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await sleep(250);
+  const s17Mark = await cdp.ev(`(() => {
+    const marks = [...document.querySelectorAll('#kb-scroll .kb-card mark.kb-mark')].map((m) => m.textContent);
+    return { count: marks.length, first: marks[0] || '' };
+  })()`);
+  ok('搜索命中词在标题/摘要内以 <mark> 高亮', s17Mark.count >= 1 && s17Mark.first === '反馈', JSON.stringify(s17Mark));
+  await key(cdp, 'Escape', 27);
+  await sleep(150);
+  await cdp.ev(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`);
+
+  // F1 ⋯ 菜单排序
+  await cdp.ev(`(() => { kbMoreToggle(true); document.querySelector('#kb-more-menu [data-kb-sort="priority"]').click(); kbMoreToggle(false); return 1; })()`);
+  await sleep(200);
+  const s17Sort = await cdp.ev(`(() => {
+    const ids = [...document.querySelectorAll('.kb-col[data-group="ready"] .kb-card')].map((c) => c.dataset.kbTask);
+    const pris = ids.map((id) => {
+      const t = (KB.board.columns || []).flatMap((c) => c.tasks || []).find((x) => x.id === id);
+      return t ? (Number(t.priority) || 0) : -1;
+    });
+    const sorted = pris.every((v, i) => i === 0 || pris[i - 1] >= v);
+    return { sort: KB.sort, ids, pris, sorted };
+  })()`);
+  ok('⋯ 菜单按优先级排序只在本地重排且降序生效', s17Sort.sort === 'priority' && s17Sort.ids.length >= 2 && s17Sort.sorted, JSON.stringify(s17Sort));
+
+  // F6 列折叠为 44px 竖条
+  await cdp.ev(`document.querySelector('.kb-col[data-group="done"] [data-kb-collapse="done"]').click()`);
+  await sleep(150);
+  const s17Col = await cdp.ev(`(() => {
+    const col = document.querySelector('.kb-col[data-group="done"]');
+    const r = col ? col.getBoundingClientRect() : { width: 0 };
+    const wm = col ? getComputedStyle(col.querySelector('.kb-col-name')).writingMode : '';
+    return { collapsed: !!col && col.classList.contains('is-collapsed'), width: Math.round(r.width), wm };
+  })()`);
+  ok('列折叠收成 44px 竖条且列名竖排', s17Col.collapsed && s17Col.width === 44 && /vertical/.test(s17Col.wm), JSON.stringify(s17Col));
+
+  // F8 整列虚线落点 + 空列动作文案（暂时筛到 writer 让 todo 列为空）
+  await cdp.ev(`(() => { KB.filters.assignee = 'writer'; renderKanbanStatusbar(); renderKanbanBody(); return 1; })()`);
+  await sleep(150);
+  const dEmpty = await drag('.kb-card[data-kb-task="t_demo07"]', '.kb-col[data-group="todo"]');
+  const s17Drop = await cdp.ev(`(() => {
+    const col = document.querySelector('.kb-col[data-group="todo"]');
+    const prompt = col ? col.querySelector('.kb-drop-prompt') : null;
+    const vis = prompt ? getComputedStyle(prompt).display !== 'none' : false;
+    return { dragging: document.body.classList.contains('kb-dragging'), empty: !!col && col.classList.contains('is-empty'), over: !!col && col.classList.contains('over'), vis, text: prompt ? prompt.textContent : '' };
+  })()`);
+  await key(cdp, 'Escape', 27);
+  if (dEmpty) await mouse('mouseReleased', dEmpty.b.x, dEmpty.b.y);
+  await cdp.ev(`(() => { KB.filters.assignee = ''; kbSavePrefs(); renderKanbanStatusbar(); renderKanbanBody(); return 1; })()`);
+  await sleep(150);
+  ok('拖拽时整列落点高亮，空列显示动作文案「松手 → 放回待办」',
+    s17Drop.dragging && s17Drop.empty && s17Drop.over && s17Drop.vis && s17Drop.text.includes('放回待办'), JSON.stringify(s17Drop));
+
+  // F2 偏好持久化（按 profile + 看板保存，搜索词不落盘）
+  const s17Persist = await cdp.ev(`(() => {
+    const raw = JSON.parse(localStorage.getItem('kb-prefs') || '{}');
+    closeKanbanPage();
+    KB.sort = 'default'; KB.collapsed = new Set(); KB.status = 'blocked'; KB._prefsScope = '';
+    KB.filters.q = 'should-not-persist';
+    showKanban(true);
+    return {
+      keys: Object.keys(raw),
+      sortRestored: KB.sort === 'priority',
+      colRestored: KB.collapsed.has('done'),
+      statusRestored: KB.status === '',
+      noSearchSaved: !JSON.stringify(raw).includes('should-not-persist'),
+    };
+  })()`);
+  await sleep(500);
+  ok('偏好持久化按 profile + 看板恢复 sort / 折叠列 / 分组，不保存搜索词',
+    s17Persist.sortRestored && s17Persist.colRestored && s17Persist.statusRestored && s17Persist.noSearchSaved, JSON.stringify(s17Persist));
+  await cdp.ev(`(() => { KB.filters.q = ''; renderKanbanStatusbar(); renderKanbanBody(); return 1; })()`);
+  await sleep(150);
+
+  // F3 N 新建弹窗快捷键 + ←/→/Enter 导航开抽屉
+  await cdp.ev(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`);
+  await pressChar('n', 'KeyN', 78);
+  await sleep(200);
+  const s17N = await cdp.ev(`(() => {
+    const m = document.querySelector('#kb-modal'), t = document.querySelector('#kb-f-title');
+    return { open: !!m && !m.hidden, mode: KB.modal, titleEmpty: t ? t.value === '' : false };
+  })()`);
+  ok('快捷键 N 打开新建弹窗且不带入字符 n', s17N.open && s17N.mode === 'task' && s17N.titleEmpty, JSON.stringify(s17N));
+  await key(cdp, 'Escape', 27);
+  await sleep(200);
+
+  await cdp.ev(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`);
+  await key(cdp, 'ArrowRight', 39); await sleep(120);
+  await key(cdp, 'ArrowRight', 39); await sleep(120);
+  const s17Nav = await cdp.ev(`(() => {
+    const ae = document.activeElement;
+    return {
+      isCard: !!ae && ae.classList.contains('kb-card'),
+      id: ae && ae.dataset ? (ae.dataset.kbTask || '') : '',
+      tag: ae ? ae.tagName : '',
+      focusId: KB.focusId,
+      cards: document.querySelectorAll('#kb-scroll .kb-card[data-kb-task]').length,
+    };
+  })()`);
+  await key(cdp, 'Enter', 13);
+  await sleep(400);
+  const s17Open = await cdp.ev(`({ open: !document.querySelector('#kb-drawer').hidden, detailId: KB.detailId })`);
+  ok('← / → 在卡片间移动焦点，Enter 打开对应详情抽屉',
+    s17Nav.isCard && s17Nav.id && s17Open.open && s17Open.detailId === s17Nav.id, JSON.stringify({ s17Nav, s17Open }));
+
+  // F7 抽屉内 ‹ › 与 ↑/↓ 切到同列上一张 / 下一张
+  await cdp.ev(`openKanbanTask('t_demo03')`); await sleep(400);
+  const s17Step0 = await cdp.ev(`({ id: KB.detailId, pos: (document.querySelector('#kbd-nav-pos') || {}).textContent, hidden: document.querySelector('#kbd-nav').hidden })`);
+  await key(cdp, 'ArrowDown', 40); await sleep(350);
+  const s17Step1 = await cdp.ev(`({ id: KB.detailId, pos: (document.querySelector('#kbd-nav-pos') || {}).textContent })`);
+  await key(cdp, 'ArrowUp', 38); await sleep(350);
+  const s17Step2 = await cdp.ev(`({ id: KB.detailId, pos: (document.querySelector('#kbd-nav-pos') || {}).textContent })`);
+  ok('抽屉内 ↑ / ↓ 与 ‹ › 切换同列上一张 / 下一张卡片',
+    !s17Step0.hidden && s17Step1.id !== s17Step0.id && s17Step2.id === s17Step0.id, JSON.stringify({ s17Step0, s17Step1, s17Step2 }));
+
+  await cdp.ev(`(() => { closeKanbanDrawer(); closeKanbanPage(); toggleHelp(true); return 1; })()`);
+  await sleep(150);
+  const s17Help = await cdp.ev(`[...document.querySelectorAll('#help-body .help-group h3')].map((h) => h.textContent)`);
+  ok('快捷键帮助页包含「看板」分组', s17Help.includes('看板'), JSON.stringify(s17Help));
+  await cdp.ev(`(() => { toggleHelp(false); localStorage.removeItem('kb-prefs'); return 1; })()`);
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);

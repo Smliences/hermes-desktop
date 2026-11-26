@@ -1340,7 +1340,9 @@ t('看板样式只用设计 token，双主题与键盘可达性齐备', () => {
   assert.ok(kbCss.includes(':focus-visible'), '卡片 / 控件缺少键盘焦点');
   assert.ok(kbCss.includes('[hidden] { display: none !important; }'), 'display:flex 会盖过 UA 的 hidden');
   assert.ok(kbCss.includes('.compact .kb-group-cards') && kbCss.includes('prefers-reduced-motion'), '缺少窄主区 / 动效降级');
-  assert.ok(!kbCss.includes('writing-mode: vertical'), '空状态不得再用竖排文字');
+  const emptyCss = (kbCss.match(/\.kb-col\.is-empty[^{]*\{[^}]*\}/g) || []).join('\n')
+    + (kbCss.match(/\.kb-empty-state[^{]*\{[^}]*\}/g) || []).join('\n');
+  assert.ok(!emptyCss.includes('writing-mode: vertical'), '空状态不得再用竖排文字');
   assert.ok(kbCss.includes('color-mix('), '遮罩必须用主题色混合而非写死色值');
 });
 t('新建弹窗里的每个类都有样式，不许退回浏览器默认正文', () => {
@@ -4310,6 +4312,66 @@ t('目录拿不到也不影响输入：菜单退回本地命令', () => {
   assert.ok(appSrc.includes('if (!cliCatalog.ok) loadCliCatalog();'), '斜杠菜单没有按需拉取目录');
   assert.ok(appSrc.includes("if (mode === 'ready' && s.linked && !cliCatalog.ok"), '已建连时没有补拉目录');
   assert.ok(!/\n  loadCliCatalog\(\);\n/.test(appSrc), '启动流程仍在预热目录（会为空闲启动唤醒 serve）');
+});
+
+section('3an. Kanban 第二期：排序 / 持久化 / 快捷键 / 搜索高亮 / 卡住提示 / 列折叠 / 抽屉切卡 / 整列落点');
+
+t('本地排序与偏好持久化（按 profile + 看板隔离，搜索词不落盘）', () => {
+  assert.ok(kbAppSrc.includes("const KB_SORT_MODES = Object.freeze(['default', 'priority', 'updated', 'created'])"),
+    '缺少排序模式常量');
+  assert.ok(kbAppSrc.includes('function kbSortTasks(') && kbAppSrc.includes('kbSortTasks('),
+    '缺少本地排序函数');
+  for (const mode of ['default', 'priority', 'updated', 'created']) {
+    assert.ok(htmlSrc.includes(`data-kb-sort="${mode}"`), '「⋯」菜单缺少排序项 ' + mode);
+  }
+  assert.ok(kbAppSrc.includes("const KB_PREFS_KEY = 'kb-prefs'"), '持久化键名不是 kb-prefs');
+  assert.ok(kbAppSrc.includes('function kbPrefScope(') && kbAppSrc.includes('`${prof}::${board}`'),
+    '持久化未按 profile + 看板区分作用域');
+  const saveFn = kbAppSrc.slice(kbAppSrc.indexOf('function kbSavePrefs('), kbAppSrc.indexOf('function kbSavePrefs(') + 450);
+  for (const k of ['view:', 'sort:', 'status:', 'assignee:', 'collapsed:']) {
+    assert.ok(saveFn.includes(k), '持久化缺少字段 ' + k);
+  }
+  assert.ok(!saveFn.includes('filters.q'), '搜索词不得持久化');
+});
+
+t('看板键盘快捷键 + 帮助页同步 + 不抢输入框', () => {
+  assert.ok(kbAppSrc.includes('function kbHandleKeydown(') && kbAppSrc.includes("document.addEventListener('keydown', kbHandleKeydown)"),
+    '缺少看板键盘事件处理');
+  const fn = kbAppSrc.slice(kbAppSrc.indexOf('function kbHandleKeydown('), kbAppSrc.indexOf('function setupKanban('));
+  assert.ok(fn.includes('e.metaKey || e.ctrlKey || e.altKey'), '未放行全局组合键');
+  assert.ok(fn.includes('kbIsTypingTarget('), '未过滤输入控件焦点');
+  for (const k of ["k === 'n'", "e.key === '/'", "k === 'r'", "e.key === 'ArrowRight'", "e.key === 'ArrowLeft'", "e.key === 'Enter'"]) {
+    assert.ok(fn.includes(k), '看板快捷键缺少分支 ' + k);
+  }
+  assert.ok(appSrc.includes("['看板',"), '快捷键帮助页缺少「看板」分组');
+});
+
+t('搜索高亮先转义再包 <mark> + 卡住提示阈值常量化', () => {
+  assert.ok(kbAppSrc.includes('function kbHighlight('), '缺少搜索高亮函数');
+  const hl = kbAppSrc.slice(kbAppSrc.indexOf('function kbHighlight('), kbAppSrc.indexOf('function kbStuckInfo('));
+  assert.ok(hl.includes('<mark class="kb-mark">') && hl.includes('esc('), '高亮未走 esc 转义');
+  assert.ok(kbAppSrc.includes('ready: 30 * 60') && kbAppSrc.includes('blocked: 86400') && kbAppSrc.includes('review: 86400'),
+    '卡住提示阈值常量与约定不一致');
+  assert.ok(kbAppSrc.includes('function kbStuckInfo(') && kbAppSrc.includes('已等 ${dur}'),
+    '缺少卡住提示计算');
+  assert.ok(kbCss.includes('.kb-mark {') && kbCss.includes('.kb-stuck {'), '缺少高亮 / 卡住提示样式');
+});
+
+t('列折叠 44px 竖条、抽屉内 ‹ › / ↑↓ 切卡、整列虚线落点', () => {
+  assert.ok(kbAppSrc.includes('function kbToggleCol(') && kbAppSrc.includes('data-kb-collapse='),
+    '缺少列折叠交互');
+  assert.ok(/\.kb-columns \.kb-col\.is-collapsed\s*\{[^}]*width:\s*44px/.test(kbCss),
+    '折叠列宽度不是 44px');
+  assert.ok(kbCss.includes('.kb-col.is-collapsed .kb-col-name') && kbCss.includes('writing-mode: vertical-rl'),
+    '折叠列未竖排列名');
+  assert.ok(htmlSrc.includes('id="kbd-prev"') && htmlSrc.includes('id="kbd-next"'),
+    '抽屉头缺少 ‹ / › 切卡按钮');
+  assert.ok(kbAppSrc.includes('function kbDrawerStep(') && kbAppSrc.includes("e.key === 'ArrowUp'") && kbAppSrc.includes("e.key === 'ArrowDown'"),
+    '抽屉缺少 ↑/↓ 切卡逻辑');
+  assert.ok(kbAppSrc.includes('KB_STATUS_ACTION[dropVerb]') && kbCss.includes('.kb-drop-prompt'),
+    '空列拖拽落点未复用 KB_STATUS_ACTION 文案');
+  assert.ok(kbCss.includes('body.kb-dragging .kb-col[data-group]:not([data-group="archived"])'),
+    '拖拽时未对可落点整列做虚线高亮');
 });
 
 console.log('\n' + '─'.repeat(56));

@@ -58,6 +58,14 @@ const KB_STATUS_ACTION = Object.freeze({
 });
 /** 渲染层能请求的落地状态集合（= 上表的取值），拖拽入口据此做最后一道校验。 */
 const KB_STATUS_SETTABLE = Object.freeze(Object.values(KB_GROUP_STATUS));
+/** 卡住提示阈值（秒）：就绪 > 30m、受阻 > 1d、待验收 > 1d 在卡面时间旁标「已等 X」。 */
+const KB_STUCK_THRESHOLDS = Object.freeze({
+  ready: 30 * 60,
+  blocked: 86400,
+  review: 86400,
+});
+const KB_SORT_MODES = Object.freeze(['default', 'priority', 'updated', 'created']);
+const KB_PREFS_KEY = 'kb-prefs';
 /** 指针拖拽的共享状态（一次只有一个拖动中的卡片）。 */
 const KbDrag = {
   armed: false, on: false, id: '', title: '', status: '',
@@ -69,7 +77,8 @@ const KB = {
   board: null, overview: null, detail: null, detailId: '',
   lastEventId: 0, error: '',
   // 默认列视图：5 组固定成列，一屏看清全貌；网格视图留给窄主区（⋯ 菜单里切）
-  view: 'cols', status: '', modal: '', modalKey: '', modalBusy: false,
+  view: 'cols', sort: 'default', status: '', collapsed: new Set(), focusId: '', _prefsScope: '',
+  modal: '', modalKey: '', modalBusy: false,
   dispatch: { open: false, busy: false, epoch: 0 },
   // 拆解会调用辅助模型（计费、最长 3 分钟）：全局只允许一次在途，防重复计费
   decomposeBusy: false,
@@ -85,6 +94,129 @@ const KB = {
   projFolders: [], projectDialog: null, delProject: null,
 };
 let kbSelectSig = '';
+
+function kbSec(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 1e12 ? Math.round(n) : Math.round(n / 1000);
+}
+function kbTaskUpdatedAt(t) {
+  if (!t || typeof t !== 'object') return 0;
+  return Math.max(
+    kbSec(t.updated_at),
+    kbSec(t.completed_at),
+    kbSec(t.current_run_started_at),
+    kbSec(t.started_at),
+    kbSec(t.created_at)
+  );
+}
+function kbSortTasks(list) {
+  const arrList = Array.isArray(list) ? list : [];
+  if (KB.sort === 'default' || arrList.length < 2) return arrList.slice();
+  return arrList.map((t, i) => ({ t, i })).sort((a, b) => {
+    if (KB.sort === 'priority') {
+      return (Number(b.t.priority) || 0) - (Number(a.t.priority) || 0)
+        || kbSec(b.t.created_at) - kbSec(a.t.created_at)
+        || a.i - b.i;
+    }
+    if (KB.sort === 'updated') {
+      return kbTaskUpdatedAt(b.t) - kbTaskUpdatedAt(a.t)
+        || (Number(b.t.priority) || 0) - (Number(a.t.priority) || 0)
+        || a.i - b.i;
+    }
+    if (KB.sort === 'created') {
+      return kbSec(b.t.created_at) - kbSec(a.t.created_at)
+        || (Number(b.t.priority) || 0) - (Number(a.t.priority) || 0)
+        || a.i - b.i;
+    }
+    return a.i - b.i;
+  }).map((x) => x.t);
+}
+/** 先转义再包裹 <mark>，避免命中 HTML 实体或引入 XSS。 */
+function kbHighlight(raw, query) {
+  const text = String(raw || '');
+  const q = String(query || '').trim();
+  if (!q) return esc(text);
+  const needle = q.toLowerCase();
+  const hay = text.toLowerCase();
+  let idx = hay.indexOf(needle, 0);
+  if (idx < 0) return esc(text);
+  let out = '';
+  let pos = 0;
+  while (idx >= 0) {
+    if (idx > pos) out += esc(text.slice(pos, idx));
+    out += '<mark class="kb-mark">' + esc(text.slice(idx, idx + needle.length)) + '</mark>';
+    pos = idx + needle.length;
+    idx = hay.indexOf(needle, pos);
+  }
+  if (pos < text.length) out += esc(text.slice(pos));
+  return out;
+}
+function kbStuckInfo(t, st, nowSec) {
+  const limit = KB_STUCK_THRESHOLDS[st];
+  if (!limit || !t) return null;
+  const ref = Math.max(kbSec(t.updated_at), kbSec(t.started_at), kbSec(t.created_at));
+  if (!ref) return null;
+  const now = nowSec || Math.floor(Date.now() / 1000);
+  const wait = Math.max(0, now - ref);
+  if (wait < limit) return null;
+  const dur = kbAge(wait);
+  return {
+    wait,
+    label: `已等 ${dur}`,
+    title: `${KB_STATUS_LABEL[st] || st}已等待 ${dur}（超过 ${kbAge(limit)} 阈值）`,
+  };
+}
+function kbCurrentProfile() {
+  try {
+    if (typeof pfSnapshot === 'object' && pfSnapshot && pfSnapshot.current) return String(pfSnapshot.current);
+  } catch {}
+  const el = $('#pf-name');
+  return (el && el.textContent ? el.textContent.trim() : '') || 'default';
+}
+function kbPrefScope() {
+  const prof = kbCurrentProfile();
+  const board = String(KB.filters.board || (KB.overview && KB.overview.currentBoard) || 'default');
+  return `${prof}::${board}`;
+}
+function kbReadAllPrefs() {
+  try {
+    const parsed = JSON.parse(safeGet(KB_PREFS_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+function kbValidGroupKey(k) {
+  return KB_GROUPS.some((g) => g.key === k) || k === KB_GROUP_ARCHIVED.key;
+}
+function kbLoadPrefs(force) {
+  const scope = kbPrefScope();
+  if (!force && KB._prefsScope === scope) return;
+  KB._prefsScope = scope;
+  const all = kbReadAllPrefs();
+  const p = all[scope] && typeof all[scope] === 'object' ? all[scope] : {};
+  KB.view = p.view === 'grid' ? 'grid' : 'cols';
+  KB.sort = KB_SORT_MODES.includes(p.sort) ? p.sort : 'default';
+  KB.status = kbValidGroupKey(p.status) ? p.status : '';
+  KB.filters.assignee = typeof p.assignee === 'string' && p.assignee.length <= 64 ? p.assignee : '';
+  const colList = Array.isArray(p.collapsed) ? p.collapsed.filter(kbValidGroupKey) : [];
+  KB.collapsed = new Set(colList);
+  const asgEl = $('#kb-assignee');
+  if (asgEl) asgEl.value = KB.filters.assignee;
+  kbMoreSync();
+}
+function kbSavePrefs() {
+  const scope = kbPrefScope();
+  KB._prefsScope = scope;
+  const all = kbReadAllPrefs();
+  all[scope] = {
+    view: KB.view === 'grid' ? 'grid' : 'cols',
+    sort: KB_SORT_MODES.includes(KB.sort) ? KB.sort : 'default',
+    status: KB.status || '',
+    assignee: KB.filters.assignee || '',
+    collapsed: [...KB.collapsed].filter(kbValidGroupKey),
+  };
+  safeSet(KB_PREFS_KEY, JSON.stringify(all));
+}
 
 /* 看板 API 的取用口。不再用 hasNative 拦：Demo 模式的 mock-bridge 已经实现了
    全部看板方法与演示数据，能不能用应该按「这个桥有没有 kanbanBoard」判断，
@@ -268,7 +400,10 @@ async function kanbanLoad(initial) {
     } else {
       KB.error = (b && b.error) || '看板读取失败';
     }
-    if (o && o.ok) KB.overview = o;
+    if (o && o.ok) {
+      KB.overview = o;
+      if (kbPrefScope() !== KB._prefsScope) kbLoadPrefs();
+    }
   } catch (e) {
     if (my === KB.epoch) KB.error = (e && e.message) || '看板读取失败';
   } finally {
@@ -280,7 +415,7 @@ async function kanbanLoad(initial) {
   }
 }
 
-/* ---- 「⋯」菜单：新建看板 / 手动派发 / 切换视图 / 显示已归档 ----
+/* ---- 「⋯」菜单：新建看板 / 手动派发 / 切换视图 / 显示已归档 / 排序 ----
    这几个都是低频入口，放常驻按钮会把首屏挤掉；菜单只是一个 absolute 面板，
    不新增通道、不改任何写路径。 */
 function kbMoreToggle(open) {
@@ -290,10 +425,15 @@ function kbMoreToggle(open) {
   if (menu) menu.hidden = !on;
   if (on) kbMoreSync();
 }
-/** 视图项文字跟着当前视图走（菜单里只有一项，不另做两态按钮）。 */
+/** 视图项文字与排序选项状态跟着当前状态走。 */
 function kbMoreSync() {
   const item = document.querySelector('#kb-more-menu [data-kb-more="view"]');
   if (item) item.textContent = KB.view === 'grid' ? '切换到列视图' : '切换到网格视图';
+  document.querySelectorAll('#kb-more-menu [data-kb-sort]').forEach((el) => {
+    const active = el.getAttribute('data-kb-sort') === KB.sort;
+    el.classList.toggle('on', active);
+    el.setAttribute('aria-checked', active ? 'true' : 'false');
+  });
 }
 function showKanban(force) {
   const page = $('#kanban-page');
@@ -308,6 +448,7 @@ function showKanban(force) {
   try { toggleSettings(false); } catch {}
   try { togglePalette(false); } catch {}
   page.hidden = false;
+  kbLoadPrefs();
   closeKanbanDrawer();
   kanbanLoad(true);
   kbLoadMode();
@@ -358,7 +499,7 @@ function kbSyncSelects() {
   kbToggleField('#kb-tenant', tenants.length > 0);
   // 藏起来之前先把对应的筛选清掉，否则会出现「看不见的筛选还在生效」
   if (boards.length <= 1 && KB.filters.board) KB.filters.board = '';
-  if (!assignees.length && KB.filters.assignee) KB.filters.assignee = '';
+  if (b && !assignees.some((x) => x.value === KB.filters.assignee) && KB.filters.assignee) KB.filters.assignee = '';
   if (!tenants.length && KB.filters.tenant) KB.filters.tenant = '';
   const sig = JSON.stringify([boards, assignees, tenants]);
   const ph = o.currentBoard || '当前看板';
@@ -370,6 +511,9 @@ function kbSyncSelects() {
     kbFillSelect('#kb-board', cur ? boards.filter((x) => x.value !== cur) : boards, KB.filters.board, ph);
     kbFillSelect('#kb-assignee', assignees, KB.filters.assignee, '全部受让人');
     kbFillSelect('#kb-tenant', tenants, KB.filters.tenant, '全部租户');
+  } else {
+    const asgEl = $('#kb-assignee');
+    if (asgEl && asgEl.value !== KB.filters.assignee) asgEl.value = KB.filters.assignee;
   }
   // 新建弹窗里的目标看板不随筛选联动，但列表要跟着 overview 更新
   // （当前看板用空值选项表示，别在列表里再重复一份）
@@ -970,7 +1114,10 @@ function kbCardHtml(t, colName, opts) {
   const pm = kbPriMeta(pri);
   const priHtml = pri > 0 ? `<span class="kb-pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>` : '';
   const ago = kbAgo(t.created_at);
+  const stuck = kbStuckInfo(t, st);
+  const stuckHtml = stuck ? `<span class="kb-stuck" title="${esc(stuck.title)}">${esc(stuck.label)}</span>` : '';
   const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
+  const timeWrap = (stuckHtml || whenHtml) ? `<span class="kb-card-time">${stuckHtml}${whenHtml}</span>` : '';
   // 来源行：细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要；
   // 受让人与弱指标收进发丝脚行（ID 只留在抽屉里）。
   const chips = [];
@@ -979,7 +1126,7 @@ function kbCardHtml(t, colName, opts) {
   const wn = t.warnings && Number(t.warnings.count);
   if (wn) chips.push(`<span class="kb-chip warn" title="有诊断告警">${wn} 项告警</span>`);
 
-  // 脚行：受让人徽标 · 评论图标计数 · 子任务迷你进度 + 右侧弱化时间。
+  // 脚行：受让人徽标 · 评论图标计数 · 子任务迷你进度 + 右侧卡住标与弱化时间。
   const foot = [];
   const asg = kbAssigneeFoot(t.assignee);
   if (asg) foot.push(asg);
@@ -997,6 +1144,7 @@ function kbCardHtml(t, colName, opts) {
   // 卡面描述：优先最新执行回报（latest_summary = task_runs.summary），
   // 没跑过 worker 的任务回退到建任务时写的描述 body —— 否则新卡永远是光杆标题。
   const sum = String(t.latest_summary || t.body || '').trim();
+  const q = KB.filters.q;
   // 运行中的卡：顶部 2px 绿条 + 秒表，不用点开就知道进度；
   const runHtml = st === 'running' ? kbRunStrip(t) : '';
   const dragHint = draggable === '1'
@@ -1004,11 +1152,11 @@ function kbCardHtml(t, colName, opts) {
     : `${st || '该状态'} 不支持拖拽（已归档的卡片不参与拖动）`;
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
     ${priHtml}
-    <div class="kb-card-title">${esc(t.title || '(无标题)')}</div>
-    ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
+    <div class="kb-card-title">${kbHighlight(t.title || '(无标题)', q)}</div>
+    ${sum ? `<div class="kb-card-sum">${kbHighlight(clip(sum, 200), q)}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
     ${runHtml}
-    <div class="kb-card-foot">${foot.join('')}${whenHtml}</div>
+    <div class="kb-card-foot">${foot.join('')}${timeWrap}</div>
   </button>`;
 }
 
@@ -1025,7 +1173,7 @@ function kbGroups() {
   }
   const defs = KB.filters.archived ? [...KB_GROUPS, KB_GROUP_ARCHIVED] : [...KB_GROUPS];
   return defs.map((g) => {
-    const all = g.statuses.reduce((acc, s) => acc.concat(by.get(s) || []), []);
+    const all = kbSortTasks(g.statuses.reduce((acc, s) => acc.concat(by.get(s) || []), []));
     return { key: g.key, label: g.label, hint: g.hint, dot: g.dot, all, tasks: all.filter(kbMatch) };
   });
 }
@@ -1125,6 +1273,10 @@ function renderKanbanStatusbar() {
  *  在其余列放这个按钮只会建出一张落在收集箱的卡，文案会骗人。 */
 function renderKanbanBody() {
   const groupsHost = $('#kb-groups'), colsHost = $('#kb-columns');
+  const ae = document.activeElement;
+  const focusedCardId = ae && ae.classList && ae.classList.contains('kb-card')
+    ? String(ae.getAttribute('data-kb-task') || '') : '';
+  const focusedCollapseKey = ae && ae.getAttribute ? ae.getAttribute('data-kb-collapse') : null;
   const groups = kbGroups();
   const wanted = KB.status ? groups.filter((g) => g.key === KB.status) : groups;
   let shown = 0, total = 0;
@@ -1168,23 +1320,40 @@ function renderKanbanBody() {
            <button class="kb-btn primary" type="button" data-kb-new="task">＋ 新建第一个任务</button></div>`
       : '';
     const body = wanted.map((g) => {
-      const collapsed = g.tasks.length === 0 ? ' is-empty' : '';
+      const emptyCls = g.tasks.length === 0 ? ' is-empty' : '';
+      const isCollapsed = !KB.status && KB.collapsed.has(g.key);
+      const colCls = emptyCls + (isCollapsed ? ' is-collapsed' : '');
       const canAdd = g.key === 'todo' || g.key === 'ready';
       const addStatus = g.key === 'ready' ? 'ready' : 'triage';
       const add = canAdd
         ? `<button class="kb-add-col" type="button" data-kb-new="task" data-kb-new-status="${addStatus}"
              title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：派发器不会直接拉起，等自动分解补全后才会被派发'}">＋ 添加任务</button>`
         : '';
-      return `<div class="kb-col${collapsed}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
+      const dropVerb = KB_GROUP_STATUS[g.key] || '';
+      const dropPrompt = dropVerb ? `<span class="kb-drop-prompt">松手 → ${esc(KB_STATUS_ACTION[dropVerb] || g.label)}</span>` : '';
+      const collapseBtn = !KB.status
+        ? `<button class="kb-col-collapse" type="button" data-kb-collapse="${esc(g.key)}"
+             aria-expanded="${isCollapsed ? 'false' : 'true'}"
+             title="${isCollapsed ? '展开「' + esc(g.label) + '」列' : '收起「' + esc(g.label) + '」列'}"
+             aria-label="${isCollapsed ? '展开' : '收起'}${esc(g.label)}列"><svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${isCollapsed ? 'M4.5 2.5 8 6 4.5 9.5' : 'M7.5 2.5 4 6l3.5 3.5'}"/></svg></button>`
+        : '';
+      return `<div class="kb-col${colCls}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
         <div class="kb-col-head"><span class="kb-col-dot" aria-hidden="true"></span><span class="kb-col-name">${esc(g.label)}</span>
-          <span class="kb-col-num">${g.tasks.length}${g.tasks.length !== g.all.length ? '/' + g.all.length : ''}</span></div>
+          <span class="kb-col-num">${g.tasks.length}${g.tasks.length !== g.all.length ? '/' + g.all.length : ''}</span>${collapseBtn}</div>
         <div class="kb-col-body">${g.tasks.length
           ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')
-          : `<div class="kb-col-empty"><b>${g.all.length ? '无匹配' : '暂无任务'}</b><span class="kb-hint-long">${esc(g.hint)}</span></div>`}${add}</div>
+          : `<div class="kb-col-empty"><b>${g.all.length ? '无匹配' : '暂无任务'}</b><span class="kb-hint-long">${esc(g.hint)}</span>${dropPrompt}</div>`}${add}</div>
       </div>`;
     }).join('');
     if (colsHost) colsHost.innerHTML = body + empty;
     if (groupsHost) groupsHost.innerHTML = '';
+  }
+  if (focusedCardId) {
+    const back = document.querySelector(`#kb-scroll .kb-card[data-kb-task="${focusedCardId}"]`);
+    if (back) { try { back.focus({ preventScroll: true }); } catch {} }
+  } else if (focusedCollapseKey) {
+    const back = document.querySelector(`#kb-columns [data-kb-collapse="${focusedCollapseKey}"]`);
+    if (back) { try { back.focus({ preventScroll: true }); } catch {} }
   }
   // 只有筛选生效时才出数字：平时任务数只在分组 chip 上出现一次
   const count = $('#kb-count');
@@ -1208,6 +1377,7 @@ function kbResetFilters() {
   if (qc) qc.hidden = true;
   if ($('#kb-assignee')) $('#kb-assignee').value = '';
   if ($('#kb-tenant')) $('#kb-tenant').value = '';
+  kbSavePrefs();
   if (hadTenant) kanbanLoad(false);
   else renderKanban();
 }
@@ -1234,6 +1404,7 @@ function renderKanban() {
   renderKanbanStatusbar();
   renderKanbanDock();
   renderKanbanBody();
+  if (!$('#kb-drawer').hidden && KB.detailId) kbSyncDrawerNav();
   // 只保留错误条：「没有进行中的任务」这类提示交给列本身表达，
   // 再挂一条横幅等于把首屏又挤掉一行（五列的计数已经说得很清楚）。
   const msg = $('#kb-message');
@@ -1427,6 +1598,43 @@ function renderRailKanban() {
 }
 
 /* ---- 任务详情抽屉 ---- */
+function kbDrawerNeighbors(id) {
+  if (!id) return { prev: '', next: '', index: -1, total: 0 };
+  const groups = kbGroups();
+  for (const g of groups) {
+    const list = g.tasks.some((x) => x.id === id) ? g.tasks
+      : (g.all.some((x) => x.id === id) ? g.all : null);
+    if (!list) continue;
+    const idx = list.findIndex((x) => x.id === id);
+    return {
+      prev: idx > 0 ? list[idx - 1].id : '',
+      next: idx >= 0 && idx < list.length - 1 ? list[idx + 1].id : '',
+      index: idx,
+      total: list.length,
+    };
+  }
+  return { prev: '', next: '', index: -1, total: 0 };
+}
+function kbSyncDrawerNav() {
+  const nav = $('#kbd-nav'), prev = $('#kbd-prev'), next = $('#kbd-next'), pos = $('#kbd-nav-pos');
+  if (!nav) return;
+  const info = kbDrawerNeighbors(KB.detailId);
+  if (info.index < 0 || info.total <= 0) { nav.hidden = true; return; }
+  nav.hidden = false;
+  if (prev) prev.disabled = !info.prev;
+  if (next) next.disabled = !info.next;
+  if (pos) pos.textContent = `${info.index + 1}/${info.total}`;
+}
+function kbDrawerStep(dir) {
+  if (!KB.detailId) return false;
+  const info = kbDrawerNeighbors(KB.detailId);
+  const target = dir < 0 ? info.prev : info.next;
+  if (!target) return false;
+  openKanbanTask(target);
+  const card = document.querySelector(`#kb-scroll .kb-card[data-kb-task="${target}"]`);
+  if (card && card.scrollIntoView) card.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
 function kbdMoreToggle(open) {
   const btn = $('#kbd-more'), menu = $('#kbd-menu');
   const on = !!open;
@@ -1434,9 +1642,10 @@ function kbdMoreToggle(open) {
   if (menu) menu.hidden = !on;
 }
 function closeKanbanDrawer() {
-  const d = $('#kb-drawer'), m = $('#kb-drawer-mask'), mw = $('#kbd-more-wrap');
+  const d = $('#kb-drawer'), m = $('#kb-drawer-mask'), mw = $('#kbd-more-wrap'), nav = $('#kbd-nav');
   kbdMoreToggle(false);
   if (mw) mw.hidden = true;
+  if (nav) nav.hidden = true;
   if (d) d.hidden = true;
   if (m) m.hidden = true;
   KB.detailEpoch += 1;
@@ -1451,6 +1660,8 @@ async function openKanbanTask(id, silent) {
   const a = kbApi();
   const my = ++KB.detailEpoch;
   KB.detailId = id;
+  KB.focusId = id;
+  kbSyncDrawerNav();
   const d = $('#kb-drawer'), m = $('#kb-drawer-mask'), body = $('#kb-drawer-body');
   if (!d || !m || !body) return;
   d.hidden = false; m.hidden = false;
@@ -2933,6 +3144,91 @@ function kbToggleAdv(prefix, forceOpen) {
   btn.textContent = (open ? '▾ ' : '▸ ') + label;
 }
 
+function kbToggleCol(key) {
+  const k = String(key || '');
+  if (!k || KB.status || !kbValidGroupKey(k)) return;
+  if (KB.collapsed.has(k)) KB.collapsed.delete(k);
+  else KB.collapsed.add(k);
+  kbSavePrefs();
+  renderKanbanBody();
+}
+function kbIsTypingTarget(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable) return true;
+  if (el.closest && el.closest('.us-pop')) return true;
+  return false;
+}
+function kbMoveCardFocus(dir) {
+  const cards = [...document.querySelectorAll('#kb-scroll .kb-card[data-kb-task]')]
+    .filter((el) => el.getClientRects().length > 0);
+  if (!cards.length) return false;
+  const ae = document.activeElement;
+  let idx = ae && ae.classList && ae.classList.contains('kb-card')
+    ? cards.indexOf(ae)
+    : cards.findIndex((c) => c.getAttribute('data-kb-task') === KB.focusId);
+  if (idx < 0) idx = dir > 0 ? 0 : cards.length - 1;
+  else idx = Math.max(0, Math.min(cards.length - 1, idx + dir));
+  const target = cards[idx];
+  if (!target) return false;
+  KB.focusId = String(target.getAttribute('data-kb-task') || '');
+  try { target.focus({ preventScroll: false }); } catch {}
+  if (target.scrollIntoView) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
+function kbHandleKeydown(e) {
+  if (!e || e.metaKey || e.ctrlKey || e.altKey) return;
+  const page = $('#kanban-page');
+  if (!page || page.hidden) return;
+  if (KbDrag.on || KbDrag.armed) return;
+  // 任何全局 / 看板弹层或菜单打开时不抢键位
+  for (const sel of ['#kb-modal', '#palette', '#help-modal', '#settings-page', '#kb-more-menu', '#kbd-menu', '#kb-dispatch-panel']) {
+    const el = $(sel);
+    if (el && !el.hidden) return;
+  }
+  if (document.querySelector('.us-pop:not([hidden])')) return;
+  if (kbIsTypingTarget(e.target) || kbIsTypingTarget(document.activeElement)) return;
+
+  const drawer = $('#kb-drawer');
+  if (drawer && !drawer.hidden) {
+    if (e.key === 'ArrowUp') { e.preventDefault(); kbDrawerStep(-1); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); kbDrawerStep(1); return; }
+    return;
+  }
+  const k = (e.key || '').toLowerCase();
+  if (k === 'n') { e.preventDefault(); kbModalOpen('task'); return; }
+  if (e.key === '/') {
+    e.preventDefault();
+    const q = $('#kb-search');
+    if (q) { q.focus(); q.select(); }
+    return;
+  }
+  if (k === 'r') {
+    e.preventDefault();
+    const rf = $('#kb-refresh');
+    if (rf) rf.click(); else kanbanLoad(true);
+    return;
+  }
+  if (e.key === 'ArrowRight') { e.preventDefault(); kbMoveCardFocus(1); return; }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); kbMoveCardFocus(-1); return; }
+  if (e.key === 'Enter') {
+    const ae = document.activeElement;
+    if (ae && ae.classList && ae.classList.contains('kb-card')) {
+      const id = ae.getAttribute('data-kb-task');
+      if (id) { e.preventDefault(); KB.focusId = id; openKanbanTask(id); }
+      return;
+    }
+    if (KB.focusId && (!ae || ae === document.body || ae === page || ae.id === 'kb-scroll')) {
+      const visCard = document.querySelector(`#kb-scroll .kb-card[data-kb-task="${KB.focusId}"]`);
+      if (visCard && visCard.getClientRects().length > 0) {
+        e.preventDefault();
+        openKanbanTask(KB.focusId);
+      }
+    }
+  }
+}
+
 function setupKanban() {
   const refresh = $('#kb-refresh');
   if (refresh) refresh.onclick = async () => {
@@ -2947,6 +3243,8 @@ function setupKanban() {
   if (modeChip) modeChip.onclick = () => { settingsCat = 'kanban'; try { toggleSettings(true); } catch {} };
   const dclose = $('#kb-drawer-close'); if (dclose) dclose.onclick = () => closeKanbanDrawer();
   const mask = $('#kb-drawer-mask'); if (mask) mask.onclick = () => closeKanbanDrawer();
+  const kbdPrev = $('#kbd-prev'); if (kbdPrev) kbdPrev.onclick = () => kbDrawerStep(-1);
+  const kbdNext = $('#kbd-next'); if (kbdNext) kbdNext.onclick = () => kbDrawerStep(1);
   const kbdMoreBtn = $('#kbd-more'), kbdMenu = $('#kbd-menu'), kbdDel = $('#kbd-menu-delete');
   if (kbdMoreBtn) kbdMoreBtn.onclick = () => kbdMoreToggle(kbdMenu ? kbdMenu.hidden : true);
   if (kbdDel) kbdDel.onclick = () => {
@@ -2970,6 +3268,18 @@ function setupKanban() {
   if (moreBtn) moreBtn.onclick = () => kbMoreToggle(moreMenu ? moreMenu.hidden : true);
   if (moreMenu) {
     moreMenu.addEventListener('click', (e) => {
+      const sortBtn = e.target.closest && e.target.closest('[data-kb-sort]');
+      if (sortBtn) {
+        const nextSort = sortBtn.getAttribute('data-kb-sort') || 'default';
+        if (KB_SORT_MODES.includes(nextSort) && KB.sort !== nextSort) {
+          KB.sort = nextSort;
+          kbSavePrefs();
+          kbMoreSync();
+          renderKanbanBody();
+          if (!$('#kb-drawer').hidden && KB.detailId) kbSyncDrawerNav();
+        }
+        return;
+      }
       const item = e.target.closest && e.target.closest('[data-kb-more]');
       if (!item) return;
       const what = item.getAttribute('data-kb-more');
@@ -2980,6 +3290,7 @@ function setupKanban() {
       if (what === 'dispatch') { kbMoreToggle(false); kbDispatchToggle(!KB.dispatch.open); return; }
       if (what === 'view') {
         KB.view = KB.view === 'grid' ? 'cols' : 'grid';
+        kbSavePrefs();
         kbMoreSync(); renderKanbanBody(); return;
       }
     });
@@ -3053,6 +3364,7 @@ function setupKanban() {
     if (!chip) return;
     const v = chip.getAttribute('data-kb-status') || '';
     KB.status = KB.status === v ? '' : v;
+    kbSavePrefs();
     renderKanbanStatusbar();
     renderKanbanBody();
   });
@@ -3099,6 +3411,7 @@ function setupKanban() {
   const assignee = $('#kb-assignee');
   if (assignee) assignee.onchange = () => {
     KB.filters.assignee = assignee.value;
+    kbSavePrefs();
     renderKanbanStatusbar(); renderKanbanBody();
   };
   const tenant = $('#kb-tenant');
@@ -3107,6 +3420,7 @@ function setupKanban() {
   if (boardSel) boardSel.onchange = () => {
     KB.filters.board = boardSel.value;
     KB.overview = null; kbSelectSig = '';
+    kbLoadPrefs();
     kanbanLoad(true);
   };
   const archived = $('#kb-archived');
@@ -3122,10 +3436,14 @@ function setupKanban() {
     scroll.addEventListener('click', (e) => {
       // 拖动结束后浏览器补发的 click 要吞掉，否则会顺手打开详情抽屉
       if (KbDrag.suppressClick) { KbDrag.suppressClick = false; return; }
+      const colToggle = e.target.closest && e.target.closest('[data-kb-collapse]');
+      if (colToggle) { kbToggleCol(colToggle.getAttribute('data-kb-collapse')); return; }
+      const collapsedCol = e.target.closest && e.target.closest('.kb-col.is-collapsed');
+      if (collapsedCol) { kbToggleCol(collapsedCol.getAttribute('data-group')); return; }
       const n = e.target.closest && e.target.closest('[data-kb-new]');
       if (n) { kbModalOpen('task', n.getAttribute('data-kb-new-status') || ''); return; }
       const card = e.target.closest && e.target.closest('[data-kb-task]');
-      if (card) openKanbanTask(card.getAttribute('data-kb-task'));
+      if (card) { KB.focusId = String(card.getAttribute('data-kb-task') || ''); openKanbanTask(card.getAttribute('data-kb-task')); }
     });
   }
   // 拖拽走指针事件：document 级监听才能接住「拖出滚动区再松手」
@@ -3145,6 +3463,7 @@ function setupKanban() {
     KB.filters.assignee = KB.filters.assignee === name ? '' : name;
     const sel = $('#kb-assignee');
     if (sel) sel.value = KB.filters.assignee;
+    kbSavePrefs();
     renderKanbanStatusbar();
     renderKanbanBody();
   });
@@ -3183,6 +3502,7 @@ function setupKanban() {
     const s = e.target.closest && e.target.closest('[data-kb-session]');
     if (s) kbJumpToSession(s.getAttribute('data-kb-session'));
   });
+  document.addEventListener('keydown', kbHandleKeydown);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && $('#kanban-page') && !$('#kanban-page').hidden) kanbanLoad(false);
   });

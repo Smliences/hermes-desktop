@@ -449,6 +449,12 @@
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="project">新建项目…</button>
                   <button class="kb-more-item" type="button" role="menuitem" data-kb-more="bind">绑定项目…</button>
                   <label class="kb-more-item is-check"><input type="checkbox" id="kb-archived" /> 显示已归档</label>
+                  <div class="kb-more-sep" role="separator"></div>
+                  <div class="kb-more-label" aria-hidden="true">排序方式</div>
+                  <button class="kb-more-item is-opt on" type="button" role="menuitemradio" aria-checked="true" data-kb-sort="default"><span>默认顺序</span><span class="kb-more-check" aria-hidden="true">✓</span></button>
+                  <button class="kb-more-item is-opt" type="button" role="menuitemradio" aria-checked="false" data-kb-sort="priority"><span>按优先级</span><span class="kb-more-check" aria-hidden="true">✓</span></button>
+                  <button class="kb-more-item is-opt" type="button" role="menuitemradio" aria-checked="false" data-kb-sort="updated"><span>按最近更新</span><span class="kb-more-check" aria-hidden="true">✓</span></button>
+                  <button class="kb-more-item is-opt" type="button" role="menuitemradio" aria-checked="false" data-kb-sort="created"><span>按创建时间</span><span class="kb-more-check" aria-hidden="true">✓</span></button>
                 </div>
               </div>
               <button class="pp-icon-btn" id="kb-refresh" title="重新读取看板" aria-label="重新读取看板"><span class="kb-spin" hidden>◠</span><span class="kb-refresh-glyph">↻</span></button>
@@ -533,7 +539,14 @@
         <div class="kb-drawer-mask" id="kb-drawer-mask" hidden></div>
         <aside class="kb-drawer" id="kb-drawer" hidden aria-label="任务详情">
           <div class="kb-drawer-head">
-            <span class="kb-drawer-kicker">任务详情</span>
+            <div class="kb-drawer-head-left">
+              <span class="kb-drawer-kicker">任务详情</span>
+              <div class="kb-drawer-nav" id="kbd-nav" hidden>
+                <button class="pp-icon-btn kbd-nav-btn" id="kbd-prev" type="button" title="同列上一张 (↑)" aria-label="同列上一张任务">‹</button>
+                <span class="kbd-nav-pos" id="kbd-nav-pos"></span>
+                <button class="pp-icon-btn kbd-nav-btn" id="kbd-next" type="button" title="同列下一张 (↓)" aria-label="同列下一张任务">›</button>
+              </div>
+            </div>
             <div class="kb-drawer-head-actions">
               <div class="kb-more-wrap" id="kbd-more-wrap" hidden>
                 <button class="pp-icon-btn" id="kbd-more" type="button" aria-haspopup="true" aria-expanded="false"

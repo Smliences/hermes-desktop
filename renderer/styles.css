@@ -3062,10 +3062,15 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 /* 「⋯」菜单：低频入口收纳，absolute 面板，不新增任何通道 */
 .kb-more-wrap { position: relative; }
 .kb-more-menu {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 16; min-width: 178px;
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 16; min-width: 184px;
   display: flex; flex-direction: column; gap: 1px; padding: 5px;
   border: 1px solid var(--line-2); border-radius: var(--r-md);
   background: var(--canvas); box-shadow: var(--elev);
+}
+.kb-more-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.kb-more-label {
+  padding: 4px 9px 2px; color: var(--caption);
+  font: 500 10.5px/1.3 var(--sans); letter-spacing: .04em;
 }
 .kb-more-item {
   display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
@@ -3073,6 +3078,10 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
   color: var(--text-2); font: 400 12px/1.4 var(--sans); text-align: left; cursor: pointer;
 }
 .kb-more-item:hover { background: var(--hover); color: var(--text); }
+.kb-more-item.is-opt { justify-content: space-between; }
+.kb-more-item.is-opt.on { color: var(--text); font-weight: 500; }
+.kb-more-check { opacity: 0; color: var(--blue); font-size: 11px; flex: 0 0 auto; }
+.kb-more-item.is-opt.on .kb-more-check { opacity: 1; }
 .kb-more-item.is-danger { color: var(--red); }
 .kb-more-item.is-danger:hover { background: var(--red-soft); color: var(--red); }
 .kb-more-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -3359,6 +3368,11 @@ body.kb-dragging * { cursor: grabbing !important; }
   margin-top: 4px; color: var(--text-3); font-size: 11.5px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+.kb-mark {
+  padding: 0 2px; border-radius: 2px;
+  background: color-mix(in srgb, var(--yellow) 26%, transparent);
+  color: var(--text);
+}
 .kb-card-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
 /* 发丝脚行：受让人头像徽标 + 评论数 / 子任务进度 + 右端时间 */
 .kb-card-foot {
@@ -3388,8 +3402,17 @@ body.kb-dragging * { cursor: grabbing !important; }
   background: var(--fill-3); overflow: hidden; vertical-align: middle;
 }
 .kb-sub-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--text-3); }
-.kb-card-when {
+.kb-card-time {
   margin-left: auto; flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.kb-stuck {
+  padding: 0 5px; border-radius: var(--r-xs);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  color: var(--yellow); font: 500 9.5px/1.55 var(--sans); white-space: nowrap;
+}
+.kb-card-when {
+  flex: 0 0 auto;
   color: var(--caption); font: 400 10px/1.4 var(--sans); font-variant-numeric: tabular-nums;
 }
 .kb-card-foot code { font: 400 9.5px/1.45 var(--mono); letter-spacing: -.01em; }
@@ -3453,8 +3476,13 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-col[data-dot="red"] { --kb-dot: var(--red); }
 .kb-col[data-dot="muted"] { --kb-dot: var(--n-400); }
 .kb-col-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--kb-dot); flex: 0 0 auto; }
-/* 拖动中指针落在哪一列：整列描边 + 底色提亮 —— 「松手就落进这一列」要能一眼看出来 */
+/* 拖动中所有可落点列露虚线框，悬停落点列整列高亮 —— 「松手就落进这一列」要能一眼看出来 */
+body.kb-dragging .kb-col[data-group]:not([data-group="archived"]) {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
 .kb-col.over {
+  border-style: dashed;
   border-color: var(--accent);
   background: color-mix(in oklab, var(--accent) 7%, var(--fill-2));
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 55%, transparent);
@@ -3464,6 +3492,19 @@ body.kb-dragging * { cursor: grabbing !important; }
   flex: 0 0 calc((100% - var(--kb-gap) * 4) / 5);
   min-width: 200px;
 }
+.kb-columns .kb-col.is-collapsed {
+  flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; cursor: pointer;
+}
+.kb-col.is-collapsed .kb-col-head {
+  flex: 1 1 auto; flex-direction: column; align-items: center; gap: 10px;
+  padding: 12px 4px 10px; border-bottom: 0;
+}
+.kb-col.is-collapsed .kb-col-name {
+  writing-mode: vertical-rl; text-orientation: mixed; letter-spacing: .08em; line-height: 1.2;
+}
+.kb-col.is-collapsed .kb-col-num { margin-left: 0; }
+.kb-col.is-collapsed .kb-col-collapse { margin-top: auto; }
+.kb-col.is-collapsed .kb-col-body { display: none; }
 .kb-col-head {
   display: flex; align-items: center; gap: 7px; padding: 10px 11px 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); flex: 0 0 auto;
@@ -3473,6 +3514,13 @@ body.kb-dragging * { cursor: grabbing !important; }
   margin-left: auto; padding: 1px 6px; border-radius: 99px;
   background: var(--fill-2); color: var(--caption); font: 400 10.5px/1.3 var(--mono);
 }
+.kb-col-collapse {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; flex: 0 0 auto;
+  border: 0; border-radius: var(--r-xs); background: transparent; color: var(--caption);
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.kb-col-collapse:hover { background: var(--fill-3); color: var(--text); }
+.kb-col-collapse:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kb-col-body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin;
   padding: 8px; display: flex; flex-direction: column; gap: 8px;
@@ -3492,11 +3540,25 @@ body.kb-dragging * { cursor: grabbing !important; }
   border-radius: var(--r-md); color: var(--caption); font: 400 11px/1.6 var(--sans);
 }
 .kb-col-empty b { display: block; font-weight: 500; color: var(--text-3); margin-bottom: 2px; }
+.kb-drop-prompt { display: none; color: var(--accent); font: 500 11.5px/1.5 var(--sans); }
 /* 空列不缩宽（宽度由 .kb-col 统一决定），只把内部排版收紧一点 */
 .kb-col.is-empty .kb-col-head { padding: 10px 9px 8px; }
 .kb-col.is-empty .kb-col-name { overflow-wrap: anywhere; }
 .kb-col.is-empty .kb-col-empty { padding: 14px 6px; }
 .kb-col.is-empty .kb-hint-long { display: none; }
+/* 拖拽期间空列整列撑开成落点提示区，显示「松手 → 标记受阻」等动作文案 */
+body.kb-dragging .kb-col.is-empty[data-group]:not([data-group="archived"]) .kb-col-empty {
+  flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in oklab, var(--accent) 4%, transparent);
+}
+body.kb-dragging .kb-col.is-empty[data-group]:not([data-group="archived"]) .kb-col-empty b,
+body.kb-dragging .kb-col.is-empty[data-group]:not([data-group="archived"]) .kb-hint-long { display: none; }
+body.kb-dragging .kb-col.is-empty[data-group]:not([data-group="archived"]) .kb-drop-prompt { display: block; }
+body.kb-dragging .kb-col.is-empty.over .kb-col-empty {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 9%, transparent);
+}
 
 /* ---- 常驻新建占位卡 ---- */
 .kb-add-row {
@@ -3540,6 +3602,14 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-drawer-head {
   display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto;
   padding: 11px 16px; border-bottom: 1px solid var(--line); background: var(--fill-2);
+}
+.kb-drawer-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.kb-drawer-nav { display: inline-flex; align-items: center; gap: 2px; }
+#kanban-page .kbd-nav-btn { height: 22px; min-width: 22px; font-size: 14px; line-height: 1; }
+#kanban-page .kbd-nav-btn:disabled { opacity: .35; cursor: default; }
+.kbd-nav-pos {
+  min-width: 26px; text-align: center;
+  color: var(--caption); font: 400 10.5px/1 var(--mono); font-variant-numeric: tabular-nums;
 }
 .kb-drawer-head-actions { display: flex; align-items: center; gap: 4px; }
 .kb-drawer-kicker { font: 500 11.5px/1 var(--sans); color: var(--caption); letter-spacing: .04em; }
