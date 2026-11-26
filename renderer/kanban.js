@@ -361,7 +361,7 @@ function kbSyncSelects() {
   if (!assignees.length && KB.filters.assignee) KB.filters.assignee = '';
   if (!tenants.length && KB.filters.tenant) KB.filters.tenant = '';
   const sig = JSON.stringify([boards, assignees, tenants]);
-  const ph = o.currentBoard ? `当前看板 (${o.currentBoard})` : '当前看板';
+  const ph = o.currentBoard || '当前看板';
   if (sig !== kbSelectSig) {
     kbSelectSig = sig;
     // 占位项（空值）本身就代表当前看板，候选里必须把当前看板剔除，
@@ -492,6 +492,16 @@ function kbAssigneeChip(name) {
     return `<span class="kb-chip" title="受让人 = Hermes profile：派发时用 hermes -p ${esc(n)} 启动 worker">${esc(n)}</span>`;
   }
   return `<span class="kb-chip warn" title="${esc(n)} 不是磁盘上的 Hermes profile，调度器不会为它启动 worker（事件里记为 skipped_nonspawnable）">${esc(n)} · 非 profile</span>`;
+}
+/** 卡片脚行受让人：首字母小圆徽标 + 名字，不做重描边胶囊。 */
+function kbAssigneeFoot(name) {
+  const n = String(name || '');
+  if (!n) return '';
+  const init = n.slice(0, 1).toUpperCase();
+  if (kbIsProfile(n)) {
+    return `<span class="kb-asg" title="受让人 = Hermes profile：派发时用 hermes -p ${esc(n)} 启动 worker"><span class="kb-asg-av" aria-hidden="true">${esc(init)}</span>${esc(n)}</span>`;
+  }
+  return `<span class="kb-asg warn" title="${esc(n)} 不是磁盘上的 Hermes profile，调度器不会为它启动 worker（事件里记为 skipped_nonspawnable）"><span class="kb-asg-av" aria-hidden="true">${esc(init)}</span>${esc(n)} · 非 profile</span>`;
 }
 
 /* ---- worker 投放区：拖卡片到 profile 上 = 改派受让人，再决定要不要立刻启动 worker ----
@@ -934,10 +944,11 @@ function kbMatch(t) {
   return [t.id, t.title, t.body, t.latest_summary, t.result, t.assignee, t.tenant]
     .some((v) => String(v || '').toLowerCase().includes(q));
 }
-/** 统一 P 级映射：后端 priority 数值越大越先派发（10/3/2/1/0），前端按工程习惯展示 P0 最紧急 → P4 普通。 */
+/** 统一 P 级映射：后端 priority 数值越大越先派发（10/3/2/1/0），前端按工程习惯展示 P0 最紧急 → P4 普通。
+ *  视觉梯度：P0/P1 红 → P2 陶土橙 → P3 赭黄，P4 在卡面不渲染以减少噪点。 */
 function kbPriMeta(raw) {
   const n = Number(raw) || 0;
-  if (n >= 10) return { tag: 'P0', cls: 'hi', rcls: 'p3', title: `优先级 P0 · 最紧急（后端权重 ${n}，优先派发）` };
+  if (n >= 10) return { tag: 'P0', cls: 'p0', rcls: 'p3', title: `优先级 P0 · 最紧急（后端权重 ${n}，优先派发）` };
   if (n >= 3) return { tag: 'P1', cls: 'hi', rcls: 'p3', title: `优先级 P1 · 高（后端权重 ${n}）` };
   if (n === 2) return { tag: 'P2', cls: 'mid', rcls: 'p2', title: '优先级 P2 · 中（后端权重 2）' };
   if (n === 1) return { tag: 'P3', cls: 'lo', rcls: 'p1', title: '优先级 P3 · 低（后端权重 1）' };
@@ -955,32 +966,38 @@ function kbCardHtml(t, colName, opts) {
   const o = opts || {};
   const st = String(colName || t.status || '');
   const draggable = KB_DRAG_SOURCE.includes(st) ? '1' : '0';
-  const pm = kbPriMeta(t.priority);
-  const priHtml = `<span class="kb-pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>`;
+  const pri = Number(t.priority) || 0;
+  const pm = kbPriMeta(pri);
+  const priHtml = pri > 0 ? `<span class="kb-pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>` : '';
   const ago = kbAgo(t.created_at);
   const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
   // 来源行：细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要；
-  // 受让人不放这里 —— 它挪到发丝脚行，占原来任务 ID 的位置（ID 只留在抽屉里）。
+  // 受让人与弱指标收进发丝脚行（ID 只留在抽屉里）。
   const chips = [];
   if (o.showStatus && st) chips.push(`<span class="kb-chip st" title="CLI 状态：${esc(st)}">${esc(KB_STATUS_LABEL[st] || st)}</span>`);
   if (t.tenant) chips.push(`<span class="kb-chip" title="租户">${esc(t.tenant)}</span>`);
   const wn = t.warnings && Number(t.warnings.count);
   if (wn) chips.push(`<span class="kb-chip warn" title="有诊断告警">${wn} 项告警</span>`);
 
-  // 发丝线下的弱信息行：时间胶囊 · 受让人 · 评论数 · 子任务进度 + 右端状态点。
+  // 脚行：受让人徽标 · 评论图标计数 · 子任务迷你进度 + 右侧弱化时间。
   const foot = [];
-  const asg = kbAssigneeChip(t.assignee);
+  const asg = kbAssigneeFoot(t.assignee);
   if (asg) foot.push(asg);
   const cc = Number(t.comment_count) || 0;
-  if (cc) foot.push(`${cc} 评论`);
+  if (cc) {
+    foot.push(`<span class="kb-foot-stat" title="${cc} 条评论"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4A1.5 1.5 0 0 1 4 2.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H6.5l-3 2.5V11H4A1.5 1.5 0 0 1 2.5 9.5V4z"/></svg>${cc}</span>`);
+  }
   const pg = t.progress;
-  if (pg && Number(pg.total)) foot.push(`${Number(pg.done) || 0}/${Number(pg.total)} 子任务`);
+  if (pg && Number(pg.total)) {
+    const done = Number(pg.done) || 0, tot = Number(pg.total);
+    const pct = Math.min(100, Math.max(0, Math.round((done / tot) * 100)));
+    foot.push(`<span class="kb-foot-stat" title="子任务进度 ${done}/${tot}"><span class="kb-sub-bar" aria-hidden="true"><i style="width:${pct}%"></i></span>${done}/${tot}</span>`);
+  }
 
   // 卡面描述：优先最新执行回报（latest_summary = task_runs.summary），
   // 没跑过 worker 的任务回退到建任务时写的描述 body —— 否则新卡永远是光杆标题。
   const sum = String(t.latest_summary || t.body || '').trim();
-  // 运行中的卡：卡面直接给出「跑了多久 / 预算用掉多少」，不用点开就知道进度；
-  // 点开抽屉才是 profile 视角的完整进度（最近活动、子任务、同 profile 其它卡）。
+  // 运行中的卡：顶部 2px 绿条 + 秒表，不用点开就知道进度；
   const runHtml = st === 'running' ? kbRunStrip(t) : '';
   const dragHint = draggable === '1'
     ? '拖动：落到别的列改状态，落到上方 profile 上改派'
@@ -991,7 +1008,7 @@ function kbCardHtml(t, colName, opts) {
     ${sum ? `<div class="kb-card-sum">${esc(clip(sum, 200))}</div>` : ''}
     ${chips.length ? `<div class="kb-card-meta">${chips.join('')}</div>` : ''}
     ${runHtml}
-    <div class="kb-card-foot">${whenHtml}${foot.length ? `${whenHtml ? '<i aria-hidden="true">·</i>' : ''}${foot.join('<i aria-hidden="true">·</i>')}` : ''}<span class="kb-card-dot" aria-hidden="true"></span></div>
+    <div class="kb-card-foot">${foot.join('')}${whenHtml}</div>
   </button>`;
 }
 
@@ -1049,7 +1066,12 @@ function renderKanbanHead() {
   const o = KB.overview || {};
   // 筛到别的看板时页头要跟着显示被筛的看板，而不是 gateway 的当前看板
   const name = String(KB.filters.board || o.currentBoard || '当前看板');
-  if (nameEl) nameEl.textContent = name;
+  const boards = Array.isArray(o.boards) ? o.boards : [];
+  if (nameEl) {
+    nameEl.textContent = name;
+    // 多看板时页头直接由 #kb-board 下拉显示并切换，避免同名写两遍
+    nameEl.hidden = boards.length > 1;
+  }
   if (!statEl) return;
   let text = '';
   if (!KB.board) text = KB.busy ? '读取中…' : '';
@@ -1154,7 +1176,7 @@ function renderKanbanBody() {
              title="${g.key === 'ready' ? '新建并直接进入就绪：可能被调度器立即派发' : '新建到收集箱：派发器不会直接拉起，等自动分解补全后才会被派发'}">＋ 添加任务</button>`
         : '';
       return `<div class="kb-col${collapsed}" data-group="${esc(g.key)}" data-dot="${esc(g.dot)}" title="${esc(g.hint)}">
-        <div class="kb-col-head"><span class="kb-col-name">${esc(g.label)}</span>
+        <div class="kb-col-head"><span class="kb-col-dot" aria-hidden="true"></span><span class="kb-col-name">${esc(g.label)}</span>
           <span class="kb-col-num">${g.tasks.length}${g.tasks.length !== g.all.length ? '/' + g.all.length : ''}</span></div>
         <div class="kb-col-body">${g.tasks.length
           ? g.tasks.map((t) => kbCardHtml(t, t.status || g.statuses[0])).join('')
@@ -1405,8 +1427,16 @@ function renderRailKanban() {
 }
 
 /* ---- 任务详情抽屉 ---- */
+function kbdMoreToggle(open) {
+  const btn = $('#kbd-more'), menu = $('#kbd-menu');
+  const on = !!open;
+  if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  if (menu) menu.hidden = !on;
+}
 function closeKanbanDrawer() {
-  const d = $('#kb-drawer'), m = $('#kb-drawer-mask');
+  const d = $('#kb-drawer'), m = $('#kb-drawer-mask'), mw = $('#kbd-more-wrap');
+  kbdMoreToggle(false);
+  if (mw) mw.hidden = true;
   if (d) d.hidden = true;
   if (m) m.hidden = true;
   KB.detailEpoch += 1;
@@ -1416,6 +1446,8 @@ function closeKanbanDrawer() {
 }
 async function openKanbanTask(id, silent) {
   if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(String(id || ''))) return;
+  if (KB.dispatch.open) kbDispatchToggle(false);
+  kbdMoreToggle(false);
   const a = kbApi();
   const my = ++KB.detailEpoch;
   KB.detailId = id;
@@ -1425,7 +1457,12 @@ async function openKanbanTask(id, silent) {
   document.querySelectorAll('.kb-card.sel').forEach((el) => el.classList.remove('sel'));
   const card = document.querySelector(`.kb-card[data-kb-task="${id}"]`);
   if (card) card.classList.add('sel');
-  if (!silent) body.innerHTML = '<div class="kbd-loading">读取任务详情…</div>';
+  if (!silent) {
+    const mw = $('#kbd-more-wrap');
+    if (mw) mw.hidden = true;
+    body.scrollTop = 0;
+    body.innerHTML = '<div class="kbd-loading">读取任务详情…</div>';
+  }
   if (!a || !a.kanbanTask) { body.innerHTML = '<div class="kbd-empty">需要 Hermes 桌面端才能读取任务详情</div>'; return; }
   try {
     const r = await a.kanbanTask(id, kbParams());
@@ -1509,7 +1546,7 @@ function renderKanbanDetail(d) {
   // 与卡片一致：显示归组后的中文状态，CLI 原值留在 title 里，免得同一个 triage
   // 在卡片上叫「收集箱」、在抽屉里叫「triage」
   if (t.status) meta.push(`<span class="kb-chip st" title="CLI 状态：${esc(t.status)}">${esc(KB_STATUS_LABEL[t.status] || t.status)}</span>`);
-  if (Number(t.priority)) { const pm = kbPriMeta(t.priority); meta.push(`<span class="kb-chip pri" title="${esc(pm.title)}">${pm.tag}</span>`); }
+  if (Number(t.priority)) { const pm = kbPriMeta(t.priority); meta.push(`<span class="kb-chip pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>`); }
   if (t.assignee) meta.push(kbAssigneeChip(t.assignee));
   if (t.tenant) meta.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
   if (t.created_at) meta.push(`<span class="kb-chip">创建 ${esc(kbTime(t.created_at))}</span>`);
@@ -1517,10 +1554,9 @@ function renderKanbanDetail(d) {
 
   const jump = /^[A-Za-z0-9_-]{1,80}$/.test(String(t.session_id || ''))
     ? `<div class="kbd-section"><button class="kbd-link" type="button" data-kb-session="${esc(t.session_id)}">↗ 跳转到关联会话 ${esc(String(t.session_id).slice(0, 12))}…</button></div>` : '';
-  // 工作区：worker 实际在哪干活。scratch/dir/worktree 三种；绑了项目的任务
-  // 由 CLI 自动派生 worktree（<repo>/.worktrees/<任务id>），不绑就是一次性沙箱。
+  // 工作区：worker 实际在哪干活。scratch/dir/worktree 三种；合进一张紧凑键值表
   const WS_KIND_LABEL = {
-    scratch: '临时沙箱（scratch，完成后自动清理）',
+    scratch: '临时沙箱（scratch）',
     dir: '指定目录（dir）',
     worktree: 'git worktree（隔离副本）',
   };
@@ -1531,13 +1567,13 @@ function renderKanbanDetail(d) {
   }
   const wsRows = [
     ['类型', WS_KIND_LABEL[String(t.workspace_kind || 'scratch')] || String(t.workspace_kind || '')],
-    ['工作区路径', t.workspace_path ? String(t.workspace_path) : ''],
+    ['路径', t.workspace_path ? String(t.workspace_path) : ''],
     ['分支', t.branch_name ? String(t.branch_name) : ''],
-    ['所属项目', t.project_id ? (projMap[String(t.project_id)] || String(t.project_id)) : '（未绑定）'],
+    ['项目', t.project_id ? (projMap[String(t.project_id)] || String(t.project_id)) : '（未绑定）'],
   ].filter((r) => r[1]);
-  const wsHtml = `<div class="kbd-section"><h3>工作区</h3><ul class="kbd-list">${
-    wsRows.map((r) => `<li class="kbd-row">${esc(r[0])} <span class="kbd-val">${esc(r[1])}</span></li>`).join('')
-  }</ul></div>`;
+  const wsHtml = `<div class="kbd-section"><h3>工作区</h3><dl class="kbd-kv">${
+    wsRows.map((r) => `<div class="kbd-kv-row"><dt>${esc(r[0])}</dt><dd class="kbd-val">${esc(r[1])}</dd></div>`).join('')
+  }</dl></div>`;
   const links = d.links || {};
   const linkRows = [
     ...(links.parents || []).map((x) => `<li class="kbd-row">父任务 <button class="kbd-link" type="button" data-kb-task="${esc(x)}">${esc(x)}</button></li>`),
@@ -1552,18 +1588,13 @@ function renderKanbanDetail(d) {
   const atts = (d.attachments || []).map((x) =>
     kbdRow('附件', `${x.filename} (${Number(x.size) || 0} B)`)).join('');
   const canDelete = /^t_[A-Za-z0-9_-]{1,64}$/.test(String(t.id || ''));
+  const mw = $('#kbd-more-wrap');
+  if (mw) mw.hidden = !canDelete;
   const canSubmit = canDelete && KB_DP_SUBMITTABLE.includes(String(t.status || ''));
   const dispatchAct = canSubmit
-    ? `<div class="kbd-actions" id="kbd-actions"><button class="kb-btn kb-btn-accent" type="button" data-kb-submit="${esc(t.id)}">⚡ 提交派发</button>
-        <span>推进到 ready，等待调度器认领</span></div>` : '';
-  // 拆解此任务：CLI 只接受收集箱（triage）里的任务，别处的请求会被后端短路成 ok:false，
-  // 所以按钮也只在这里出现。它会调辅助模型（计费、最长 3 分钟），点击后还要过一次确认卡。
-  // 自动编排下调度器本来就会自己拆，这里给的是「我现在就要拆」的手动入口。
+    ? `<div class="kbd-actions" id="kbd-actions"><button class="kb-btn kb-btn-accent" type="button" data-kb-submit="${esc(t.id)}" title="推进到 ready，等待调度器认领">⚡ 提交派发</button></div>` : '';
   const curSt = String(t.status || '');
   const isTriage = curSt === 'triage';
-  // 移到（拖列之外的第二条改状态路径）：拖列只服务鼠标，这里给键盘和不爱拖拽的用户
-  // 一排直接按钮。目标列排除当前所在列；按钮值是 KB_GROUP_STATUS 的状态动词，点击
-  // 复用 kbDropToStatus —— 同态短路、running 过确认卡、写后回读抽屉，全由它统一兜底。
   const curGroup = KB_GROUPS.find((g) => g.statuses.includes(curSt));
   const moveRow = canDelete && curGroup
     ? `<div class="kbd-actions" id="kbd-actions-move"><span>移到</span>${
@@ -1573,31 +1604,25 @@ function renderKanbanDetail(d) {
         }).join('')
       }</div>`
     : '';
-  // 补规格：把收集箱里的一句随手记扩成 Goal / Approach / 验收标准，并**由 CLI 顺手
-  // 推进到待办**。与拆解同条件（都只认 triage），但语义是「先写清楚」而不是「拆开」，
-  // 所以排在拆解前面。它同样计费、同样改数据，点击后过一次确认卡。
   const specifyAct = canDelete && isTriage
     ? `<div class="kbd-actions" id="kbd-actions-specify">
-        <button class="kb-btn" type="button" data-kb-specify="${esc(t.id)}"${KB.specifyBusy ? ' disabled' : ''}>✎ 补规格</button>
-        <span class="kbd-act-note">${KB.specifyBusy ? '补规格中…最长 2 分钟'
-          : '让辅助模型把这句随手记补成 Goal / Approach / 验收标准，并推进到待办（会产生费用）'}</span>
+        <button class="kb-btn" type="button" data-kb-specify="${esc(t.id)}"${KB.specifyBusy ? ' disabled' : ''} title="让辅助模型把这句随手记补成 Goal / Approach / 验收标准，并推进到待办（会产生费用）">✎ 补规格</button>
+        <span class="kbd-act-note">${KB.specifyBusy ? '补规格中…最长 2 分钟' : ''}</span>
       </div>` : '';
-  // 估算：不改任何数据、不限状态，结果内联显示（按 taskId 缓存在 KB.estimate 里，
-  // 重开抽屉不用再花一次钱）。它是最便宜的一次调用，但仍然计费，所以也要确认。
   const estView = KB.estimate[String(t.id || '')];
   const estimateAct = canDelete
     ? `<div class="kbd-actions" id="kbd-actions-estimate">
-        <button class="kb-btn" type="button" data-kb-estimate="${esc(t.id)}"${KB.estimateBusy ? ' disabled' : ''}>⌛ 估算工作量</button>
-        <span class="kbd-act-note" id="kbd-estimate-note">${estView ? esc(kbEstimateLine(estView))
-          : (KB.estimateBusy ? '估算中…' : '按「读文件 + 工具调用 + 改代码 + 重试」估一次 token 量级（约几百 token 开销，不改任务）')}</span>
+        <button class="kb-btn" type="button" data-kb-estimate="${esc(t.id)}"${KB.estimateBusy ? ' disabled' : ''} title="按「读文件 + 工具调用 + 改代码 + 重试」估一次 token 量级（约几百 token 开销，不改任务）">⌛ 估算</button>
+        <span class="kbd-act-note" id="kbd-estimate-note">${estView ? esc(kbEstimateLine(estView)) : (KB.estimateBusy ? '估算中…' : '')}</span>
       </div>` : '';
   const decomposeAct = canDelete && isTriage
     ? `<div class="kbd-actions" id="kbd-actions-decompose">
-        <button class="kb-btn" type="button" data-kb-decompose="${esc(t.id)}"${KB.decomposeBusy ? ' disabled' : ''}>⚗ 拆解此任务</button>
-        <span class="kbd-act-note">${KB.decomposeBusy ? '拆解中…最长 3 分钟' : (KB.mode && KB.mode.mode === 'auto'
+        <button class="kb-btn" type="button" data-kb-decompose="${esc(t.id)}"${KB.decomposeBusy ? ' disabled' : ''} title="${KB.mode && KB.mode.mode === 'auto'
           ? '让辅助模型把这张卡拆成子任务图并按 profile 分派（会产生费用；自动编排本来也会拆）'
-          : '让辅助模型把这张卡拆成子任务图并按 profile 分派（会产生费用）')}</span>
+          : '让辅助模型把这张卡拆成子任务图并按 profile 分派（会产生费用）'}">⚗ 拆解</button>
+        <span class="kbd-act-note">${KB.decomposeBusy ? '拆解中…最长 3 分钟' : ''}</span>
       </div>` : '';
+  const actBar = [estimateAct, specifyAct, decomposeAct, dispatchAct].filter(Boolean).join('');
   // 改派：拖拽的等价入口（拖拽仍在，但抽屉里要有不靠鼠标的路径）。
   // done / archived 再改派没有意义，直接不显示。
   const canReassign = canDelete && !['done', 'archived'].includes(String(t.status || ''));
@@ -1607,7 +1632,7 @@ function renderKanbanDetail(d) {
           <hm-select id="kbd-assignee" class="ui-select" aria-label="改派受让人"></hm-select>
           <button class="kb-btn" type="button" data-kb-reassign="${esc(t.id)}">保存改派</button>
         </div>
-        <div class="kbd-reassign-note" id="kbd-reassign-note">受让人 = Hermes profile 名，派发时用 <code>hermes -p &lt;名字&gt;</code> 启动 worker；留空表示取消指派。</div>
+        <div class="kbd-reassign-note" id="kbd-reassign-note">受让人 = profile 名（<code>hermes -p &lt;名字&gt;</code>），留空取消指派。</div>
       </div>` : '';
   // 评论输入：追加文本、不计费、不改状态；发布仍过一次确认（与全部写操作一致）。
   const commentBox = canDelete
@@ -1621,7 +1646,7 @@ function renderKanbanDetail(d) {
       </div>` : '';
 
   body.innerHTML = `
-    <div class="kbd-id">${esc(t.id || '')}</div>
+    <div class="kbd-eyebrow"><span class="kbd-id">${esc(t.id || '')}</span><div class="kbd-meta">${meta.join('')}</div></div>
     <div class="kbd-title-row">
       <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
       ${canDelete ? `<button class="kb-btn kbd-edit-btn" type="button" data-kb-edit="${esc(t.id)}">✎ 编辑</button>` : ''}
@@ -1635,14 +1660,11 @@ function renderKanbanDetail(d) {
         <button class="kb-btn" type="button" data-kb-edit-cancel="1">取消</button>
       </div>
     </div>` : ''}
-    <div class="kbd-meta">${meta.join('')}</div>
     ${kbRunPanel(t, d)}
-    ${estimateAct}
-    ${specifyAct}
-    ${decomposeAct}
-    ${dispatchAct}
-    ${reassignAct}
+    ${actBar ? `<div class="kbd-act-bar">${actBar}</div>` : ''}
+    ${canDelete ? '<div class="kbd-danger" id="kbd-danger"></div>' : ''}
     ${moveRow}
+    ${reassignAct}
     ${wsHtml}
     ${jump}
     ${t.body ? `<div class="kbd-section"><h3>描述</h3><pre class="kbd-text">${esc(clip(t.body, 12000))}</pre></div>` : ''}
@@ -1661,8 +1683,7 @@ function renderKanbanDetail(d) {
     </div>
     ${atts ? `<div class="kbd-section"><h3>附件</h3><ul class="kbd-list">${atts}</ul></div>` : ''}
     <div class="kbd-section"><h3>最近事件</h3>
-      ${events ? `<ul class="kbd-list">${events}</ul>` : '<div class="kbd-empty">暂无事件</div>'}</div>
-    ${canDelete ? `<div class="kbd-danger" id="kbd-danger"><button class="kb-btn danger" type="button" data-kb-delete="${esc(t.id)}">删除任务</button></div>` : ''}`;
+      ${events ? `<ul class="kbd-list">${events}</ul>` : '<div class="kbd-empty">暂无事件</div>'}</div>`;
 
   // 改派下拉的候选：磁盘上真实存在的 profile 优先；当前受让人即使不在清单里也要能显示出来
   const editPri = $('#kbd-edit-priority');
@@ -2101,12 +2122,14 @@ function kbRenderCapacity() {
   }
 }
 function kbDispatchToggle(show) {
-  const panel = $('#kb-dispatch-panel');
+  const panel = $('#kb-dispatch-panel'), mask = $('#kb-dp-mask');
   const on = !!show;
+  if (on) closeKanbanDrawer();
   KB.dispatch.open = on;
   KB.dispatch.epoch += 1; // 收起时作废所有在途响应
   kbDpClearConfirm();
   if (panel) panel.hidden = !on;
+  if (mask) mask.hidden = !on;
   // 菜单项是唯一的入口（页头按钮已收进「⋯」），它的文字跟着开合状态走
   const item = document.querySelector('#kb-more-menu [data-kb-more="dispatch"]');
   if (item) {
@@ -2298,8 +2321,8 @@ function kbSyncStatusNote() {
   const ready = sel.value === 'ready';
   note.classList.toggle('warn', ready);
   note.textContent = ready
-    ? '就绪状态可能被运行中的调度器立即认领并派发给 agent 执行，请确认后再创建。'
-    : '收集箱不会被派发器直接拉起，但 gateway 的自动分解（kanban.auto_decompose，默认开启）会补全 spec、填受让人并推进到 todo→ready，随后仍会被派发。';
+    ? '就绪状态可能被调度器立即认领并启动 worker 执行，请确认后再创建。'
+    : '收集箱默认等 gateway 自动分解（kanban.auto_decompose）补全并推进，不会立刻拉起。';
 }
 /* 官方 project-dialog.tsx 的本地等价：一个弹窗四种模式
    （create / rename / add-folder / settings）+ 一个删除确认弹窗。
@@ -2906,7 +2929,7 @@ function kbToggleAdv(prefix, forceOpen) {
   const open = typeof forceOpen === 'boolean' ? forceOpen : card.hidden;
   card.hidden = !open;
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  const label = prefix === 'f' ? '高级设置（工作区 / 依赖 / 模型 / 超时）' : '高级设置（图标 / 主题色）';
+  const label = prefix === 'f' ? '更多设置（看板 / 项目 / 租户 / 工作区 / 模型）' : '高级设置（图标 / 主题色）';
   btn.textContent = (open ? '▾ ' : '▸ ') + label;
 }
 
@@ -2924,6 +2947,23 @@ function setupKanban() {
   if (modeChip) modeChip.onclick = () => { settingsCat = 'kanban'; try { toggleSettings(true); } catch {} };
   const dclose = $('#kb-drawer-close'); if (dclose) dclose.onclick = () => closeKanbanDrawer();
   const mask = $('#kb-drawer-mask'); if (mask) mask.onclick = () => closeKanbanDrawer();
+  const kbdMoreBtn = $('#kbd-more'), kbdMenu = $('#kbd-menu'), kbdDel = $('#kbd-menu-delete');
+  if (kbdMoreBtn) kbdMoreBtn.onclick = () => kbdMoreToggle(kbdMenu ? kbdMenu.hidden : true);
+  if (kbdDel) kbdDel.onclick = () => {
+    kbdMoreToggle(false);
+    const bodyEl = $('#kb-drawer-body');
+    const host = (bodyEl && bodyEl.querySelector('#kbd-danger')) || bodyEl;
+    if (KB.detailId) kbDeleteTask(KB.detailId, host);
+    if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+  if (kbdMenu) {
+    document.addEventListener('pointerdown', (e) => {
+      if (!kbdMenu || kbdMenu.hidden) return;
+      if (kbdMenu.contains(e.target)) return;
+      if (kbdMoreBtn && kbdMoreBtn.contains(e.target)) return;
+      kbdMoreToggle(false);
+    }, true);
+  }
 
   // 「⋯」菜单：新建看板 / 新建项目 / 绑定项目 / 手动派发 / 切换视图 / 显示已归档
   const moreBtn = $('#kb-more'), moreMenu = $('#kb-more-menu');
@@ -2954,6 +2994,7 @@ function setupKanban() {
 
   // 派发控制台：默认 dry-run；真派发走 opConfirm 二次确认。
   // 入口只有一个 —— 「⋯」菜单里的「手动派发控制台」，这里不再绑页头按钮。
+  const dpMask = $('#kb-dp-mask'); if (dpMask) dpMask.onclick = () => kbDispatchToggle(false);
   const dpClose = $('#kb-dp-close'); if (dpClose) dpClose.onclick = () => kbDispatchToggle(false);
   const dpPreview = $('#kb-dp-preview'); if (dpPreview) dpPreview.onclick = () => kbDispatchRun(true);
   const dpRun = $('#kb-dp-run'); if (dpRun) dpRun.onclick = () => kbDispatchConfirm();

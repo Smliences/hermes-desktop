@@ -4414,12 +4414,14 @@ window.addEventListener('keydown', (e) => {
       handled = true;
       if (pg.id === 'gateway-page') closeGatewayPage();
       else if (pg.id === 'kanban-page') {
-        // 最上层优先：新建弹窗 → 抽屉内确认卡 → 详情抽屉 → 派发确认卡 → 派发面板 → 整页
+        // 最上层优先：新建弹窗 → 抽屉内确认卡 → 抽屉更多菜单 → 详情抽屉 → 派发确认卡 → 派发面板 → 整页
         const drawerCard = document.querySelector('#kb-drawer-body .op-confirm');
         const dpCard = document.querySelector('#kb-dp-confirm .op-confirm');
         const dockCard = document.querySelector('#kb-dock-confirm .op-confirm');
+        const kbdMenu = $('#kbd-menu');
         if (!$('#kb-modal').hidden) kbModalClose();
         else if (drawerCard) drawerCard.remove();
+        else if (kbdMenu && !kbdMenu.hidden) kbdMoreToggle(false);
         else if (!$('#kb-drawer').hidden) closeKanbanDrawer();
         else if (dockCard) dockCard.remove();
         else if (dpCard) dpCard.remove();
@@ -4456,7 +4458,7 @@ function closeAllOverlays() {
 /** 轻浮层菜单的 ↑↓/Home/End 焦点导航（Esc 关闭与 Enter 激活各处已有，这里只补移动）。
  *  覆盖所有「打开即挂 tabindex/menuitem」的浮层：chip 一二级、看板 ⋯、会话/项目 ⋯、
  *  profile、插件/技能页「＋添加」菜单。菜单没开就立刻返回，零开销。 */
-const MENU_NAV_ROOTS = ['#chip-menu', '#chip-submenu', '#kb-more-menu', '#session-menu', '#pf-menu'];
+const MENU_NAV_ROOTS = ['#chip-menu', '#chip-submenu', '#kb-more-menu', '#kbd-menu', '#session-menu', '#pf-menu'];
 function openMenuRoot() {
   // 焦点已经在哪个菜单里，就留在哪个菜单（一级/二级互不打架）；否则取第一个打开的
   const ae = document.activeElement;
