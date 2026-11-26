@@ -28,7 +28,12 @@ const assert = require('assert');
 
 const mainSrc = read('main/main.js');
 const preloadSrc = read('preload/preload.js');
-const appSrc = read('renderer/app.js');
+const appSrc = [
+  'renderer/app.js',
+  'renderer/market-plugins.js',
+  'renderer/settings.js',
+  'renderer/kanban.js',
+].map(read).join('\n');
 const htmlSrc = read('renderer/index.html');
 const cssSrc = read('renderer/styles.css');
 const sessSrc = read('main/services/hermes-sessions.js');
@@ -974,7 +979,7 @@ section('3r. Kanban 看板：受控读写 + 派发、token 不出主进程、代
 const kbSrc = read('main/services/hermes-kanban.js');
 // 切片锚点用注释标题而不是某个常量名：常量重构改名时不会让整段断言静默失空
 const KB_ANCHOR = 'Kanban 看板（CLI 原生任务队列）';
-const kbAppSrc = appSrc.slice(appSrc.indexOf(KB_ANCHOR), appSrc.indexOf('setupSettings();'));
+const kbAppSrc = read('renderer/kanban.js');
 const kbCss = cssSrc.slice(cssSrc.indexOf('Kanban 看板（CLI 原生任务队列）'));
 
 t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', () => {

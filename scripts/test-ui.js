@@ -730,6 +730,103 @@ let CHROME_BIN = null;
     s13e.found && s13e.hot && s13e.bar > 85 && s13e.bar <= 100, JSON.stringify(s13e));
   await cdp.ev(`(() => { closeKanbanPage(); closeKanbanDrawer(); return 1; })()`);
 
+  /* S14 工具调用多级下拉与自动展开 / 收起 */
+  console.log('\nS14 工具调用多级下拉与自动展开 / 收起');
+  const s14a = await cdp.ev(`(() => {
+    newTab();
+    const tab = activeTab();
+    tab.items.push(
+      { kind: 'user', text: '帮我查一下配置', ts: Date.now() },
+      { kind: 'tool', id: 't1', name: 'read_file', input: { path: '/tmp/a.txt' }, state: 'running', isError: false },
+      { kind: 'tool', id: 't2', name: 'execute_command', input: { command: 'ls -la' }, state: 'running', isError: false }
+    );
+    renderChat();
+    const grp = document.querySelector('.step-group');
+    const head = grp && grp.querySelector('.step-head');
+    const body = grp && grp.querySelector('.step-body');
+    return {
+      hasGrp: !!grp,
+      open: !!grp && grp.classList.contains('open'),
+      running: !!head && head.classList.contains('running'),
+      expanded: head ? head.getAttribute('aria-expanded') : null,
+      bodyVisible: !!body && !body.classList.contains('hidden'),
+      children: body ? body.querySelectorAll('.tool-item').length : 0,
+    };
+  })()`);
+  ok('连续工具运行中自动展开，且子项落在 .step-body 内',
+    s14a.hasGrp && s14a.open && s14a.running && s14a.expanded === 'true' && s14a.bodyVisible && s14a.children === 2,
+    JSON.stringify(s14a));
+
+  const s14b = await cdp.ev(`(() => {
+    const tab = activeTab();
+    tab.items.filter((i) => i.kind === 'tool').forEach((t) => { t.state = 'done'; t.result = 'ok'; });
+    renderChat();
+    const grp = document.querySelector('.step-group');
+    const head = grp && grp.querySelector('.step-head');
+    const body = grp && grp.querySelector('.step-body');
+    return {
+      open: !!grp && grp.classList.contains('open'),
+      done: !!head && head.classList.contains('done'),
+      expanded: head ? head.getAttribute('aria-expanded') : null,
+      bodyHidden: !!body && body.classList.contains('hidden'),
+    };
+  })()`);
+  ok('工具全部成功后自动收起成一行',
+    !s14b.open && s14b.done && s14b.expanded === 'false' && s14b.bodyHidden,
+    JSON.stringify(s14b));
+
+  const s14c = await cdp.ev(`(() => {
+    document.querySelector('.step-head').click();
+    renderChat();
+    const grp = document.querySelector('.step-group');
+    return {
+      openAfterRerender: !!grp && grp.classList.contains('open'),
+      remembered: activeTab().items.find((i) => i.kind === 'tool').groupOpen === true,
+    };
+  })()`);
+  ok('用户手动点开后重绘仍保持展开态', s14c.openAfterRerender && s14c.remembered, JSON.stringify(s14c));
+
+  const s14d = await cdp.ev(`(() => {
+    newTab();
+    const tab = activeTab();
+    tab.items.push(
+      { kind: 'user', text: '跑个失败命令', ts: Date.now() },
+      { kind: 'tool', id: 'e1', name: 'read_file', input: { path: '/tmp/a' }, state: 'done', result: 'ok', isError: false },
+      { kind: 'tool', id: 'e2', name: 'execute_command', input: { command: 'false' }, state: 'done', result: 'exit 1', isError: true }
+    );
+    renderChat();
+    const grp = document.querySelector('.step-group');
+    const head = grp && grp.querySelector('.step-head');
+    return { open: !!grp && grp.classList.contains('open'), err: !!head && head.classList.contains('error') };
+  })()`);
+  ok('含失败工具时整段标红并自动展开', s14d.open && s14d.err, JSON.stringify(s14d));
+
+  /* S15 窄主区 .compact 降级与模态 inert 隔离 */
+  console.log('\nS15 窄主区 .compact 降级与模态 inert 隔离');
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 900, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  const s15a = await cdp.ev(`(() => {
+    const btn = document.querySelector('#btn-send');
+    const r = btn ? btn.getBoundingClientRect() : { width: 0, height: 0 };
+    return { compact: document.documentElement.classList.contains('compact'), sendVis: r.width > 0 && r.height > 0 };
+  })()`);
+  ok('窄窗口（#main ≤ 600px）触发 .compact 且发送键可见', s15a.compact && s15a.sendVis, JSON.stringify(s15a));
+
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  const s15b = await cdp.ev(`document.documentElement.classList.contains('compact')`);
+  ok('恢复 1440px 宽度后自动退出 .compact', s15b === false, String(s15b));
+
+  await cdp.ev(`(document.querySelector('#btn-settings').click(), 1)`);
+  await sleep(200);
+  const s15c = await cdp.ev(`({ open: !document.querySelector('#settings-page').hidden, inert: !!document.querySelector('#frame').inert })`);
+  ok('打开设置模态时背景 #frame 被 inert 隔离', s15c.open && s15c.inert, JSON.stringify(s15c));
+
+  await key(cdp, 'Escape', 27);
+  await sleep(200);
+  const s15d = await cdp.ev(`({ closed: !!document.querySelector('#settings-page').hidden, inert: !!document.querySelector('#frame').inert })`);
+  ok('Esc 关闭设置模态后解除 #frame.inert', s15d.closed && !s15d.inert, JSON.stringify(s15d));
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);
