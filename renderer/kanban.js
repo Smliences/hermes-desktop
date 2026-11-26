@@ -934,16 +934,29 @@ function kbMatch(t) {
   return [t.id, t.title, t.body, t.latest_summary, t.result, t.assignee, t.tenant]
     .some((v) => String(v || '').toLowerCase().includes(q));
 }
+/** 统一 P 级映射：后端 priority 数值越大越先派发（10/3/2/1/0），前端按工程习惯展示 P0 最紧急 → P4 普通。 */
+function kbPriMeta(raw) {
+  const n = Number(raw) || 0;
+  if (n >= 10) return { tag: 'P0', cls: 'hi', rcls: 'p3', title: `优先级 P0 · 最紧急（后端权重 ${n}，优先派发）` };
+  if (n >= 3) return { tag: 'P1', cls: 'hi', rcls: 'p3', title: `优先级 P1 · 高（后端权重 ${n}）` };
+  if (n === 2) return { tag: 'P2', cls: 'mid', rcls: 'p2', title: '优先级 P2 · 中（后端权重 2）' };
+  if (n === 1) return { tag: 'P3', cls: 'lo', rcls: 'p1', title: '优先级 P3 · 低（后端权重 1）' };
+  return { tag: 'P4', cls: 'n0', rcls: '', title: '优先级 P4 · 普通（默认权重 0）' };
+}
+const KB_PRI_OPTIONS = [
+  ['0', 'P4 · 普通（默认）'],
+  ['1', 'P3 · 低优先级'],
+  ['2', 'P2 · 中优先级'],
+  ['3', 'P1 · 高优先级'],
+  ['10', 'P0 · 最紧急'],
+];
+
 function kbCardHtml(t, colName, opts) {
   const o = opts || {};
   const st = String(colName || t.status || '');
   const draggable = KB_DRAG_SOURCE.includes(st) ? '1' : '0';
-  // 方案一（OnPoint 极简白卡）：无顶行，标题是第一视觉焦点。优先级用 P 编号
-  // 胶囊绝对定位在右上角，恒显示（P3 红 / P2 黄 / P1 绿 / P0 未设灰）。
-  // 时间做成弱胶囊收进脚行，与评论数并排，状态点收右下。
-  const pri = Number(t.priority) || 0;
-  const priCls = pri >= 3 ? 'hi' : (pri === 2 ? 'mid' : (pri === 1 ? 'lo' : 'n0'));
-  const priHtml = `<span class="kb-pri ${priCls}" title="优先级 P${pri}（数字越大越先派发，P0 = 未设）">P${pri}</span>`;
+  const pm = kbPriMeta(t.priority);
+  const priHtml = `<span class="kb-pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>`;
   const ago = kbAgo(t.created_at);
   const whenHtml = ago ? `<span class="kb-card-when" title="创建于 ${esc(kbFullTime(t.created_at))}">${esc(ago)}</span>` : '';
   // 来源行：细粒度状态 chip 只有跨组展示（网格 / 搜索结果）才需要；
@@ -1119,7 +1132,7 @@ function renderKanbanBody() {
            <p>任务由 CLI 的 hermes kanban create、agent 的 kanban_* 工具或这里的新建按钮创建；数据落在同一份 kanban.db，终端与 Dashboard 立即可见。</p>
            <button class="kb-btn primary" type="button" data-kb-new="task">＋ 新建第一个任务</button></div>`
       : shown === 0
-        ? `<div class="kb-empty-state"><h2>没有匹配的任务</h2><p>试试清空搜索、切换分组或放宽受让人筛选。</p></div>`
+        ? `<div class="kb-empty-state"><h2>没有匹配的任务</h2><p>试试清空搜索、切换分组或放宽受让人筛选。</p><button class="kb-btn" type="button" data-kb-clear-filters="1">清空筛选条件</button></div>`
         : '';
     const addCard = (!KB.status && !empty)
       ? `<div class="kb-add-row"><button class="kb-add-card" type="button" data-kb-new="task">＋ 新建任务<span>默认落在收集箱 triage · 等自动分解</span></button></div>`
@@ -1154,7 +1167,27 @@ function renderKanbanBody() {
   // 只有筛选生效时才出数字：平时任务数只在分组 chip 上出现一次
   const count = $('#kb-count');
   if (count) count.textContent = (shown !== total && total) ? `筛选出 ${shown} / ${total} 张` : '';
+  const clearBtn = $('#kb-clear-filters');
+  if (clearBtn) clearBtn.hidden = !kbHasActiveFilters();
   return { shown, total };
+}
+
+function kbHasActiveFilters() {
+  return !!(KB.status || KB.filters.q || KB.filters.assignee || KB.filters.tenant);
+}
+function kbResetFilters() {
+  const hadTenant = !!KB.filters.tenant;
+  KB.status = '';
+  KB.filters.q = '';
+  KB.filters.assignee = '';
+  KB.filters.tenant = '';
+  const q = $('#kb-search'), qc = $('#kb-search-clear');
+  if (q) q.value = '';
+  if (qc) qc.hidden = true;
+  if ($('#kb-assignee')) $('#kb-assignee').value = '';
+  if ($('#kb-tenant')) $('#kb-tenant').value = '';
+  if (hadTenant) kanbanLoad(false);
+  else renderKanban();
 }
 
 /** 打开「显示已归档」后把第 6 列带进视野：用户刚点开归档却什么都没变（那列在右侧
@@ -1252,6 +1285,7 @@ function rkbCardHtml(t) {
   // 组名已经说明了状态（待办 / 进行中），只有更细的（收集箱 / 已排期 / 待验收）才标
   const sub = RKB_SUB_STATUS.indexOf(st) >= 0 ? stLabel : '';
   const pri = Number((t && t.priority) || 0);
+  const pm = kbPriMeta(pri);
   const runStart = st === 'running' ? kbRunStart(t) : 0;
   const limit = runStart ? kbRunLimit(t) : 0;
   const sum = String((t && (t.latest_summary || t.body)) || '').trim();
@@ -1266,8 +1300,8 @@ function rkbCardHtml(t) {
     + (pct ? ` style="--rkb-p:${pct}%"` : '') + '>'
     + '<span class="rkb-card-top">'
     + `<span class="rkb-dot" data-dot="${esc(dot)}"></span>`
-    // P0 = 未设优先级，标出来只有噪音；有优先级才占位
-    + (pri > 0 ? `<span class="rkb-pri p${Math.min(3, pri)}" title="优先级 P${pri}">P${pri}</span>` : '')
+    // 默认权重(0)不占位；其余用统一 P 级（P0 最紧急）
+    + (pri > 0 ? `<span class="rkb-pri ${pm.rcls}" title="${esc(pm.title)}">${pm.tag}</span>` : '')
     + (sub ? `<span class="rkb-st">${esc(sub)}</span>` : '')
     + time
     + '</span>'
@@ -1475,7 +1509,7 @@ function renderKanbanDetail(d) {
   // 与卡片一致：显示归组后的中文状态，CLI 原值留在 title 里，免得同一个 triage
   // 在卡片上叫「收集箱」、在抽屉里叫「triage」
   if (t.status) meta.push(`<span class="kb-chip st" title="CLI 状态：${esc(t.status)}">${esc(KB_STATUS_LABEL[t.status] || t.status)}</span>`);
-  if (Number(t.priority)) meta.push(`<span class="kb-chip pri">P${Number(t.priority)}</span>`);
+  if (Number(t.priority)) { const pm = kbPriMeta(t.priority); meta.push(`<span class="kb-chip pri" title="${esc(pm.title)}">${pm.tag}</span>`); }
   if (t.assignee) meta.push(kbAssigneeChip(t.assignee));
   if (t.tenant) meta.push(`<span class="kb-chip">${esc(t.tenant)}</span>`);
   if (t.created_at) meta.push(`<span class="kb-chip">创建 ${esc(kbTime(t.created_at))}</span>`);
@@ -1588,7 +1622,19 @@ function renderKanbanDetail(d) {
 
   body.innerHTML = `
     <div class="kbd-id">${esc(t.id || '')}</div>
-    <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
+    <div class="kbd-title-row">
+      <h2 class="kbd-title">${esc(t.title || '(无标题)')}</h2>
+      ${canDelete ? `<button class="kb-btn kbd-edit-btn" type="button" data-kb-edit="${esc(t.id)}">✎ 编辑</button>` : ''}
+    </div>
+    ${canDelete ? `<div class="kbd-edit-form" id="kbd-edit-form" hidden>
+      <label class="kb-frow"><span>标题</span><input id="kbd-edit-title" type="text" maxlength="200" value="${esc(t.title || '')}" /></label>
+      <label class="kb-frow"><span>优先级</span><hm-select id="kbd-edit-priority" class="ui-select"><option value="0">P4 · 普通（默认）</option><option value="1">P3 · 低优先级</option><option value="2">P2 · 中优先级</option><option value="3">P1 · 高优先级</option><option value="10">P0 · 最紧急</option></hm-select></label>
+      <label class="kb-frow"><span>描述</span><textarea id="kbd-edit-body" rows="4" maxlength="4000">${esc(t.body || '')}</textarea></label>
+      <div class="kbd-actions">
+        <button class="kb-btn primary" type="button" data-kb-edit-save="${esc(t.id)}">保存修改</button>
+        <button class="kb-btn" type="button" data-kb-edit-cancel="1">取消</button>
+      </div>
+    </div>` : ''}
     <div class="kbd-meta">${meta.join('')}</div>
     ${kbRunPanel(t, d)}
     ${estimateAct}
@@ -1608,12 +1654,25 @@ function renderKanbanDetail(d) {
       ${commentBox}</div>
     <div class="kbd-section"><h3>运行记录 (${(d.runs || []).length})</h3>
       ${runs ? `<ul class="kbd-list">${runs}</ul>` : '<div class="kbd-empty">尚无运行记录</div>'}</div>
+    <div class="kbd-section">
+      <div class="kbd-log-head"><h3>执行日志</h3><button class="kb-btn kbd-log-btn" type="button" data-kb-log="${esc(t.id)}">查看日志</button></div>
+      <div class="kbd-empty" id="kbd-log-meta">按需读取 worker stdout/stderr 尾部输出</div>
+      <pre class="kbd-log" id="kbd-log-body" hidden></pre>
+    </div>
     ${atts ? `<div class="kbd-section"><h3>附件</h3><ul class="kbd-list">${atts}</ul></div>` : ''}
     <div class="kbd-section"><h3>最近事件</h3>
       ${events ? `<ul class="kbd-list">${events}</ul>` : '<div class="kbd-empty">暂无事件</div>'}</div>
     ${canDelete ? `<div class="kbd-danger" id="kbd-danger"><button class="kb-btn danger" type="button" data-kb-delete="${esc(t.id)}">删除任务</button></div>` : ''}`;
 
   // 改派下拉的候选：磁盘上真实存在的 profile 优先；当前受让人即使不在清单里也要能显示出来
+  const editPri = $('#kbd-edit-priority');
+  if (editPri && canDelete) {
+    const curPri = String(Number(t.priority) || 0);
+    const items = KB_PRI_OPTIONS.map(([v, l]) => ({ value: v, label: l }));
+    if (!KB_PRI_OPTIONS.some(([v]) => v === curPri)) items.push({ value: curPri, label: `${kbPriMeta(curPri).tag}（权重 ${curPri}）` });
+    if (editPri.setOptions) editPri.setOptions(items);
+    editPri.value = curPri;
+  }
   const sel = $('#kbd-assignee');
   if (sel && canReassign) {
     const cur = String(t.assignee || '');
@@ -1641,6 +1700,62 @@ function renderKanbanDetail(d) {
  *   ③ 服务层再独立校验 confirm === true，任何顺手调用都发不出请求。
  * 在途期间按钮禁用 + 全局 KB.decomposeBusy，避免连点拆两次、计两份费。
  */
+async function kbSaveTaskEdit(taskId) {
+  const id = String(taskId || '');
+  const a = kbApi();
+  if (!a || !a.kanbanUpdateTask) { toast('此页需要 Hermes 桌面端才能编辑任务', 1800); return; }
+  const titleEl = $('#kbd-edit-title'), priEl = $('#kbd-edit-priority'), bodyEl = $('#kbd-edit-body');
+  const title = titleEl ? titleEl.value.trim() : '';
+  if (!title) { toast('任务标题不能为空', 2000); if (titleEl) titleEl.focus(); return; }
+  const priRaw = priEl ? Number(priEl.value) : 0;
+  const priority = Number.isFinite(priRaw) ? Math.max(0, Math.min(100, Math.round(priRaw))) : 0;
+  const body = bodyEl ? bodyEl.value : '';
+  const saveBtn = document.querySelector('[data-kb-edit-save]');
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const r = await a.kanbanUpdateTask(id, { board: KB.filters.board || '', title, priority, body });
+    if (!r || !r.ok) {
+      toast('保存失败：' + ((r && r.error) || '未知错误'), 2800);
+      if (saveBtn && saveBtn.isConnected) saveBtn.disabled = false;
+      return;
+    }
+    toast('任务已更新', 1600);
+    await kanbanLoad(true);
+    await openKanbanTask(id, true);
+  } catch (e) {
+    toast('保存失败：' + ((e && e.message) || '未知错误'), 2800);
+    if (saveBtn && saveBtn.isConnected) saveBtn.disabled = false;
+  }
+}
+
+async function kbLoadTaskLog(taskId) {
+  const id = String(taskId || '');
+  const a = kbApi();
+  const meta = $('#kbd-log-meta'), pre = $('#kbd-log-body'), btn = document.querySelector('[data-kb-log]');
+  if (!a || !a.kanbanTaskLog) { toast('此页需要 Hermes 桌面端才能读取日志', 1800); return; }
+  if (btn) btn.disabled = true;
+  if (meta) meta.textContent = '读取日志中…';
+  try {
+    const r = await a.kanbanTaskLog(id, { board: KB.filters.board || '', tail: 32768 });
+    if (!r || !r.ok) {
+      if (meta) meta.textContent = '读取失败：' + ((r && r.error) || '未知错误');
+      return;
+    }
+    if (!r.exists || !r.content) {
+      if (meta) meta.textContent = '暂无执行日志（任务可能尚未启动过 worker）';
+      if (pre) { pre.hidden = true; pre.textContent = ''; }
+    } else {
+      if (meta) meta.textContent = `日志大小 ${r.sizeBytes} B${r.truncated ? '（已截取末尾 32 KB）' : ''}`;
+      if (pre) { pre.hidden = false; pre.textContent = r.content; }
+    }
+    if (btn && btn.isConnected) btn.textContent = '刷新日志';
+  } catch (e) {
+    if (meta) meta.textContent = '读取失败：' + ((e && e.message) || '未知错误');
+  } finally {
+    if (btn && btn.isConnected) btn.disabled = false;
+  }
+}
+
 function kbDecomposeTask(taskId, host) {
   const id = String(taskId || '');
   if (!/^t_[A-Za-z0-9_-]{1,64}$/.test(id)) return;
@@ -2571,6 +2686,9 @@ function kbModalOpen(kind, presetStatus) {
   }
   kbSyncStatusNote();
   kbSyncProjectSelects();
+  if (kind === 'task') kbSyncAdvSelects();
+  kbToggleAdv('f', false);
+  kbToggleAdv('b', false);
   const title = $('#kb-modal-title');
   const TITLES = { task: '新建任务', bind: '绑定项目', project: '新建项目', board: '新建看板',
     'project-rename': '重命名项目', 'project-add-folder': '添加文件夹',
@@ -2630,6 +2748,11 @@ function kbModalSubmit() {
   if (kind === 'task') {
     const title = ($('#kb-f-title')?.value || '').trim();
     if (!title) { kbModalErr('请填写任务标题'); return Promise.resolve(); }
+    const maxRt = Number($('#kb-f-maxrt')?.value);
+    const goalTurns = Number($('#kb-f-goal-turns')?.value);
+    const parentVal = ($('#kb-f-parents')?.value || '').trim();
+    const skillVal = ($('#kb-f-skills')?.value || '').trim();
+    const modelVal = ($('#kb-f-model')?.value || '').trim();
     payload = {
       title,
       body: $('#kb-f-body')?.value || '',
@@ -2640,6 +2763,16 @@ function kbModalSubmit() {
       board: $('#kb-f-board')?.value || KB.filters.board || '',
       // 空值 = 继承看板绑定（服务层只在非空时透传 project_id）
       projectId: $('#kb-f-project')?.value || '',
+      workspaceKind: $('#kb-f-wskind')?.value || '',
+      workspacePath: ($('#kb-f-wspath')?.value || '').trim(),
+      parents: parentVal ? [parentVal] : [],
+      skills: skillVal ? [skillVal] : [],
+      maxRuntimeSeconds: Number.isInteger(maxRt) && maxRt > 0 ? maxRt : 0,
+      goalMode: !!($('#kb-f-goal') && $('#kb-f-goal').checked),
+      goalMaxTurns: Number.isInteger(goalTurns) && goalTurns > 0 ? goalTurns : 0,
+      modelOverride: modelVal,
+      providerOverride: modelVal ? (kbModelProviders[modelVal] || '') : '',
+      reasoningEffort: $('#kb-f-effort')?.value || '',
       idempotencyKey: key,
     };
   } else if (kind === 'bind') {
@@ -2676,6 +2809,8 @@ function kbModalSubmit() {
       slug: ($('#kb-b-slug')?.value || '').trim(),
       name: ($('#kb-b-name')?.value || '').trim(),
       description: ($('#kb-b-desc')?.value || '').trim(),
+      icon: ($('#kb-b-icon')?.value || '').trim(),
+      color: ($('#kb-b-color')?.value || '').trim(),
     };
   }
   const submit = $('#kb-modal-submit');
@@ -2719,6 +2854,60 @@ function kbModalSubmit() {
       kbSyncProjectSubmit(); // 失败保留表单时按官方条件重新禁用/启用
     }
   })();
+}
+
+const kbModelProviders = {};
+function kbSyncAdvSelects() {
+  const cols = (KB.board && Array.isArray(KB.board.columns)) ? KB.board.columns : [];
+  const tasks = cols.filter((c) => c.name !== 'archived').flatMap((c) => c.tasks || []);
+  kbFillSelect('#kb-f-parents', tasks.map((t) => ({
+    value: String(t.id),
+    label: `${String(t.id).slice(0, 10)} · ${String(t.title || '').slice(0, 32)}`,
+  })), '', '无前置任务');
+
+  const fillSkills = (list) => {
+    const skillItems = [...new Set((Array.isArray(list) ? list : [])
+      .map((s) => String(s.name || s.id || '')).filter(Boolean))].sort()
+      .map((n) => ({ value: n, label: n }));
+    kbFillSelect('#kb-f-skills', skillItems, $('#kb-f-skills')?.value || '', '不限技能');
+  };
+  fillSkills(state.skills);
+  if ((!Array.isArray(state.skills) || !state.skills.length) && api && api.skillsList) {
+    api.skillsList().then((r) => {
+      if (r && r.ok && Array.isArray(r.items)) { state.skills = r.items; fillSkills(r.items); }
+    }).catch(() => {});
+  }
+
+  const rawModels = [
+    ...(Array.isArray(state.modelState?.models) ? state.modelState.models : []),
+    ...(Array.isArray(state.env?.models) ? state.env.models : []),
+  ];
+  for (const m of rawModels) {
+    if (m && m.model && m.provider) kbModelProviders[String(m.model)] = String(m.provider);
+  }
+  const rows = typeof modelRows === 'function'
+    ? modelRows(state.modelState, state.env && state.env.models, state.config && state.config.model)
+    : [];
+  const modelItems = rows.map((m) => {
+    const key = String(m.key || '');
+    const prov = kbModelProviders[key] || (m.tag && !['CLI 默认', '内置', '当前配置'].includes(m.tag) ? m.tag : '');
+    if (key && prov) kbModelProviders[key] = prov;
+    return {
+      value: key,
+      label: m.tag && m.tag !== '内置' ? `${m.name || key} (${m.tag})` : String(m.name || key),
+    };
+  }).filter((m) => m.value);
+  kbFillSelect('#kb-f-model', modelItems, '', '跟随 profile 默认');
+}
+
+function kbToggleAdv(prefix, forceOpen) {
+  const card = $(`#kb-${prefix}-adv`), btn = $(`#kb-${prefix}-adv-btn`);
+  if (!card || !btn) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : card.hidden;
+  card.hidden = !open;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  const label = prefix === 'f' ? '高级设置（工作区 / 依赖 / 模型 / 超时）' : '高级设置（图标 / 主题色）';
+  btn.textContent = (open ? '▾ ' : '▸ ') + label;
 }
 
 function setupKanban() {
@@ -2847,6 +3036,25 @@ function setupKanban() {
     renderKanbanBody();
     if (q) q.focus();
   };
+  if (q) q.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && (q.value || KB.filters.q)) {
+      e.preventDefault();
+      e.stopPropagation();
+      q.value = '';
+      KB.filters.q = '';
+      if (qclear) qclear.hidden = true;
+      renderKanbanStatusbar();
+      renderKanbanBody();
+    }
+  });
+  const clearFilters = $('#kb-clear-filters');
+  if (clearFilters) clearFilters.onclick = kbResetFilters;
+  if ($('#kb-f-adv-btn')) $('#kb-f-adv-btn').onclick = () => kbToggleAdv('f');
+  if ($('#kb-b-adv-btn')) $('#kb-b-adv-btn').onclick = () => kbToggleAdv('b');
+  const kbPage = $('#kanban-page');
+  if (kbPage) kbPage.addEventListener('click', (e) => {
+    if (e.target && e.target.closest && e.target.closest('[data-kb-clear-filters]')) kbResetFilters();
+  });
   const assignee = $('#kb-assignee');
   if (assignee) assignee.onchange = () => {
     KB.filters.assignee = assignee.value;
@@ -2905,6 +3113,18 @@ function setupKanban() {
     if (sub) { kbSubmitTask(sub.getAttribute('data-kb-submit'), sub.closest('.kbd-actions') || body); return; }
     const dec = e.target.closest && e.target.closest('[data-kb-decompose]');
     if (dec) { kbDecomposeTask(dec.getAttribute('data-kb-decompose'), dec.closest('.kbd-actions') || body); return; }
+    const edt = e.target.closest && e.target.closest('[data-kb-edit]');
+    if (edt) {
+      const form = $('#kbd-edit-form');
+      if (form) { form.hidden = !form.hidden; if (!form.hidden && $('#kbd-edit-title')) $('#kbd-edit-title').focus(); }
+      return;
+    }
+    const edtCancel = e.target.closest && e.target.closest('[data-kb-edit-cancel]');
+    if (edtCancel) { const form = $('#kbd-edit-form'); if (form) form.hidden = true; return; }
+    const edtSave = e.target.closest && e.target.closest('[data-kb-edit-save]');
+    if (edtSave) { kbSaveTaskEdit(edtSave.getAttribute('data-kb-edit-save')); return; }
+    const logBtn = e.target.closest && e.target.closest('[data-kb-log]');
+    if (logBtn) { kbLoadTaskLog(logBtn.getAttribute('data-kb-log')); return; }
     const spec = e.target.closest && e.target.closest('[data-kb-specify]');
     if (spec) { kbSpecifyTask(spec.getAttribute('data-kb-specify'), spec.closest('.kbd-actions') || body); return; }
     const est = e.target.closest && e.target.closest('[data-kb-estimate]');

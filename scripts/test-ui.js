@@ -822,10 +822,43 @@ let CHROME_BIN = null;
   const s15c = await cdp.ev(`({ open: !document.querySelector('#settings-page').hidden, inert: !!document.querySelector('#frame').inert })`);
   ok('打开设置模态时背景 #frame 被 inert 隔离', s15c.open && s15c.inert, JSON.stringify(s15c));
 
+  await cdp.ev(`({ open: !document.querySelector('#settings-page').hidden, inert: !!document.querySelector('#frame').inert })`);
   await key(cdp, 'Escape', 27);
   await sleep(200);
   const s15d = await cdp.ev(`({ closed: !!document.querySelector('#settings-page').hidden, inert: !!document.querySelector('#frame').inert })`);
   ok('Esc 关闭设置模态后解除 #frame.inert', s15d.closed && !s15d.inert, JSON.stringify(s15d));
+
+  /* S16 任务抽屉编辑（标题/优先级/描述）与执行日志 */
+  console.log('\nS16 任务抽屉编辑与执行日志');
+  await cdp.ev(`(showKanban(true), 1)`); await sleep(400);
+  await cdp.ev(`openKanbanTask('t_demo07')`); await sleep(300);
+  const s16a = await cdp.ev(`(async () => {
+    const editBtn = document.querySelector('[data-kb-edit]');
+    if (!editBtn) return { hasBtn: false };
+    editBtn.click();
+    const form = document.querySelector('#kbd-edit-form');
+    if (!form || form.hidden) return { hasBtn: true, opened: false };
+    document.querySelector('#kbd-edit-title').value = '给设置页补上快捷键冲突提示（已编辑）';
+    document.querySelector('#kbd-edit-priority').value = '3';
+    document.querySelector('#kbd-edit-body').value = '补充描述内容';
+    document.querySelector('[data-kb-edit-save]').click();
+    await new Promise((r) => setTimeout(r, 200));
+    const title = (document.querySelector('.kbd-title') || {}).textContent || '';
+    const logBtn = document.querySelector('[data-kb-log]');
+    if (logBtn) logBtn.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const logBody = document.querySelector('#kbd-log-body');
+    return {
+      hasBtn: true, opened: true, title,
+      logVisible: !!logBody && !logBody.hidden,
+      logText: logBody ? logBody.textContent : '',
+    };
+  })()`);
+  ok('抽屉内联编辑保存后标题实时更新',
+    s16a.hasBtn && s16a.opened && s16a.title.includes('已编辑'), JSON.stringify(s16a));
+  ok('抽屉可按需读取 worker 执行日志',
+    s16a.logVisible && s16a.logText.includes('worker started'), JSON.stringify(s16a));
+  await cdp.ev(`(() => { closeKanbanDrawer(); closeKanbanPage(); return 1; })()`);
 
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);

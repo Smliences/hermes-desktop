@@ -85,7 +85,8 @@ const jsIds = uniq([
 // （renderKanbanDetail 拼进 #kb-drawer-body，静态 index.html 里查不到）
 const NULL_GUARDED = new Set(['activity', 'activity-text', 'chat-title', 'kbd-assignee',
   'kbd-reassign-note', 'kbd-actions-decompose', 'kbd-actions-specify', 'kbd-actions-estimate',
-  'kbd-comment-box', 'kbd-comment-input']);
+  'kbd-comment-box', 'kbd-comment-input', 'kbd-edit-form', 'kbd-edit-title',
+  'kbd-edit-priority', 'kbd-edit-body', 'kbd-log-meta', 'kbd-log-body']);
 t(`HTML 有 ${htmlIds.length} 个 id，app.js 引用 ${jsIds.length} 个`, () => {
   assert.ok(htmlIds.length >= 100 && jsIds.length >= 80, 'id/引用数量异常，可能解析失败');
 });

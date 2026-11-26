@@ -183,6 +183,13 @@ function buildPath(op, params = {}) {
     case 'task':
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
+    case 'taskLog': {
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      const lq = new URLSearchParams(q);
+      const tail = Number.isInteger(p.tail) ? Math.max(1, Math.min(200000, p.tail)) : 32768;
+      lq.set('tail', String(tail));
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + '/log?' + lq.toString();
+    }
     case 'run':
       if (!RUN_ID_RE.test(String(p.runId || ''))) return null;
       return '/runs/' + encodeURIComponent(String(p.runId)) + suffix;
@@ -238,6 +245,10 @@ function buildWritePath(op, params = {}) {
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
     // 人工拖列改状态：与 HTTP 方法无关地复用同一端点，body 只放 status（+ 可选原因/摘要）
     case 'setStatus':
+      if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
+      return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
+    // 编辑任务（标题 / 描述 / 优先级）：复用 PATCH /tasks/{id}，body 过 cleanTaskPatch 白名单
+    case 'updateTask':
       if (!TASK_ID_RE.test(String(p.taskId || ''))) return null;
       return '/tasks/' + encodeURIComponent(String(p.taskId)) + suffix;
     case 'dispatch':
@@ -309,8 +320,55 @@ function cleanTaskInput(raw) {
     if (!PROJECT_RE.test(projectId)) return null;
     out.project_id = projectId;
   }
+  // 高级参数（对齐 CreateTaskBody）
+  const wsKind = cleanText(o.workspaceKind, 16);
+  if (wsKind && ['scratch', 'worktree', 'dir'].includes(wsKind)) out.workspace_kind = wsKind;
+  const wsPath = cleanText(o.workspacePath, 500);
+  if (wsPath) out.workspace_path = wsPath;
+  if (Array.isArray(o.parents) && o.parents.length) {
+    const valid = o.parents.map((x) => cleanText(x, 64)).filter((x) => TASK_ID_RE.test(x)).slice(0, 20);
+    if (valid.length) out.parents = valid;
+  }
+  if (Array.isArray(o.skills) && o.skills.length) {
+    const sk = o.skills.map((x) => cleanText(x, 80)).filter(Boolean).slice(0, 20);
+    if (sk.length) out.skills = sk;
+  }
+  if (Number.isInteger(o.maxRuntimeSeconds) && o.maxRuntimeSeconds > 0 && o.maxRuntimeSeconds <= 86400) {
+    out.max_runtime_seconds = o.maxRuntimeSeconds;
+  }
+  if (o.goalMode === true) out.goal_mode = true;
+  if (Number.isInteger(o.goalMaxTurns) && o.goalMaxTurns > 0 && o.goalMaxTurns <= 500) {
+    out.goal_max_turns = o.goalMaxTurns;
+  }
+  const modelOv = cleanText(o.modelOverride, 120);
+  if (modelOv) out.model_override = modelOv;
+  const provOv = cleanText(o.providerOverride, 80);
+  if (provOv) out.provider_override = provOv;
+  const effort = cleanText(o.reasoningEffort, 24);
+  if (effort && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) {
+    out.reasoning_effort = effort;
+  }
   return out;
 }
+/** 编辑任务：只允许修改 title / body / priority 三个内容字段，至少提供一项。 */
+function cleanTaskPatch(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  if (Object.prototype.hasOwnProperty.call(o, 'title')) {
+    const title = cleanText(o.title, 200);
+    if (!title) return null;
+    out.title = title;
+  }
+  if (Object.prototype.hasOwnProperty.call(o, 'body')) {
+    out.body = cleanText(o.body, MAX_TEXT);
+  }
+  if (Object.prototype.hasOwnProperty.call(o, 'priority')) {
+    if (!Number.isInteger(o.priority) || o.priority < 0 || o.priority > 100) return null;
+    out.priority = o.priority;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** 评论：body 必填（CLI 对空白串回 400 "body is required"），author 可选（缺省 CLI 落 'dashboard'）。 */
 function cleanCommentInput(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
@@ -330,8 +388,12 @@ function cleanBoardInput(raw) {
   const out = { slug };
   const name = cleanText(o.name, 80);
   const description = cleanText(o.description, 400);
+  const icon = cleanText(o.icon, 16);
+  const color = cleanText(o.color, 32);
   if (name) out.name = name;
   if (description) out.description = description;
+  if (icon) out.icon = icon;
+  if (color) out.color = color;
   return out;
 }
 
@@ -809,6 +871,25 @@ function createKanbanClient(getBackendInfo) {
       return { ok: true, generation: info().generation || 0, ...projectDetail(r.data) };
     },
 
+    /** 读取任务 worker stdout/stderr 执行日志（剥离本机路径，不透出绝对路径）。 */
+    async taskLog(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const r = await read('taskLog', { ...o, taskId: id });
+      if (!r.ok) return r;
+      const d = r.data && typeof r.data === 'object' ? r.data : {};
+      return {
+        ok: true,
+        generation: info().generation || 0,
+        taskId: id,
+        exists: bool(d.exists),
+        sizeBytes: num(d.size_bytes) || 0,
+        truncated: !!d.truncated,
+        content: str(d.content || '', 32768),
+      };
+    },
+
     /** 一次运行记录（抽屉里点「查看运行」时按需取）。 */
     async run(runId, opts = {}) {
       if (!RUN_ID_RE.test(String(runId || ''))) return { ok: false, error: '非法的运行 id' };
@@ -1060,6 +1141,19 @@ function createKanbanClient(getBackendInfo) {
       return { ok: true, generation: info().generation || 0, status, task: raw ? projectTask(raw) : null };
     },
 
+    /** 编辑任务内容（标题 / 描述 / 优先级），只走 PATCH /tasks/:id。 */
+    async updateTask(taskId, opts = {}) {
+      const id = String(taskId || '');
+      if (!TASK_ID_RE.test(id)) return { ok: false, error: '非法的任务 id' };
+      const body = cleanTaskPatch(opts);
+      if (!body) return { ok: false, error: '请填写合法的任务标题（1-200 字）或优先级（0-100）' };
+      const o = opts && typeof opts === 'object' ? opts : {};
+      const r = await write('updateTask', 'PATCH', { board: o.board, taskId: id }, body);
+      if (!r.ok) return r;
+      const raw = r.data && r.data.task;
+      return { ok: true, generation: info().generation || 0, task: raw ? projectTask(raw, { full: true }) : null };
+    },
+
     /**
      * 改派受让人 —— 「把卡片拖给某个 worker」的写入口。assignee 就是 Hermes profile
      * 名，派发时调度器用 `hermes -p <assignee>` 拉起 worker。可选同时推进到 ready
@@ -1211,7 +1305,7 @@ function createKanbanClient(getBackendInfo) {
 
 module.exports = {
   createKanbanClient, buildPath, buildWritePath, validInfo,
-  cleanTaskInput, cleanBoardInput, cleanBoardBind, cleanAssignee, clampMaxSpawn, cleanOrchestration,
+  cleanTaskInput, cleanTaskPatch, cleanBoardInput, cleanBoardBind, cleanAssignee, clampMaxSpawn, cleanOrchestration,
   projectBoard, projectDetail, projectTask, projectDispatch, projectWorkers, projectOrchestration,
   projectTree, projectTreeRow,
   COLUMNS, ALL_COLUMNS, PLUGIN_BASE, PROFILE_BASE, SUBMIT_STATUS, DISPATCH_MAX_SPAWN,

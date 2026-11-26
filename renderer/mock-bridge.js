@@ -317,6 +317,24 @@
       KB_EVT += 1;
       return { ok: true, generation: 1, status, task: t };
     },
+    async kanbanUpdateTask(taskId, opts = {}) {
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, error: '任务不存在（Demo）' };
+      if (typeof opts.title === 'string' && opts.title.trim()) t.title = opts.title.trim().slice(0, 200);
+      if (typeof opts.body === 'string') t.body = opts.body.slice(0, 4000);
+      if (Number.isInteger(opts.priority)) t.priority = Math.max(0, Math.min(100, opts.priority));
+      KB_EVT += 1;
+      return { ok: true, generation: 1, task: t };
+    },
+    async kanbanTaskLog(taskId) {
+      const t = KB_TASKS.find((x) => x.id === taskId);
+      if (!t) return { ok: false, error: '任务不存在（Demo）' };
+      const hasLog = ['running', 'done', 'review', 'blocked'].includes(t.status);
+      return {
+        ok: true, generation: 1, taskId, exists: hasLog, sizeBytes: hasLog ? 248 : 0, truncated: false,
+        content: hasLog ? `[${t.id}] worker started (profile=${t.assignee || 'default'})\n[step 1] reading repository context...\n[step 2] status=${t.status}` : '',
+      };
+    },
     async kanbanDispatch(opts = {}) {
       const dry = opts.dryRun !== false;
       const ready = KB_TASKS.filter((t) => t.status === 'ready' && t.assignee);

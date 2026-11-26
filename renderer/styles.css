@@ -2961,10 +2961,13 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
   display: inline-flex; align-items: center; gap: 6px; height: 27px; padding: 0 10px;
   border: 1px solid var(--line-2); border-radius: 99px; background: var(--canvas);
   color: var(--text-2); font: 400 11px/1 var(--sans); cursor: pointer;
-  transition: background .14s, border-color .14s;
+  transition: background .14s, border-color .14s, transform .14s, box-shadow .14s;
 }
-.kb-status-chip:hover { background: var(--fill-3); }
-.kb-status-chip.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 500; }
+.kb-status-chip:hover { background: var(--fill-3); transform: translateY(-.5px); }
+.kb-status-chip.on {
+  border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 500;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--blue) 14%, transparent);
+}
 .kb-status-chip[data-dot="yellow"] { --kb-dot: var(--yellow); }
 .kb-status-chip[data-dot="accent"] { --kb-dot: var(--accent); }
 .kb-status-chip[data-dot="green"] { --kb-dot: var(--green); }
@@ -2974,11 +2977,11 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 .kb-sc-num { color: var(--caption); font: 400 10.5px/1 var(--mono); }
 .kb-status-chip.on .kb-sc-num { color: var(--blue); }
 
-/* ---- 工具栏 ---- */
+/* ---- 工具栏：融进画布的轻盈筛选条，避免与上方 chip 产生双层框堆叠 ---- */
 .kb-toolbar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 0 0 auto;
-  margin-bottom: 10px; padding: 8px 10px;
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--fill-2);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 0 auto;
+  margin-bottom: 12px; padding: 2px 0 10px;
+  border-bottom: 1px solid var(--line); background: transparent;
 }
 .kb-field { display: inline-flex; align-items: center; gap: 6px; font: 400 11.5px/1 var(--sans); color: var(--caption); }
 .kb-field select {
@@ -2992,7 +2995,9 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
   width: 100%; height: 28px; box-sizing: border-box; padding: 0 26px 0 10px;
   border: 1px solid var(--line-2); border-radius: var(--r-sm);
   background: var(--canvas); color: var(--text); font: 400 12px/1 var(--sans);
+  transition: border-color .14s;
 }
+.kb-search-wrap input:hover { border-color: var(--text-3); }
 .kb-search-wrap input::placeholder { color: var(--caption); }
 #kb-search-clear {
   position: absolute; right: 4px; top: 4px; width: 20px; height: 20px;
@@ -3000,10 +3005,17 @@ body.dropping #composer { border-color: var(--accent); box-shadow: 0 0 0 2px col
 }
 /* 「显示已归档」已移进「⋯」菜单；视图切换同样只留在菜单里，这里不再有专属样式 */
 .kb-live { display: inline-flex; align-items: center; gap: 6px; font: 400 11px/1 var(--sans); color: var(--caption); }
-.kb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--n-400); flex: 0 0 auto; }
-.kb-live.on .kb-live-dot { background: var(--green); }
-.kb-live.err .kb-live-dot { background: var(--red); }
+.kb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--n-400); flex: 0 0 auto; transition: background .2s, box-shadow .2s; }
+.kb-live.on .kb-live-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent); }
+.kb-live.err .kb-live-dot { background: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 16%, transparent); }
 .kb-count { margin-left: auto; font: 400 11.5px/1 var(--mono); color: var(--caption); }
+.kb-clear-filters {
+  height: 24px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 99px;
+  background: var(--canvas); color: var(--text-2); font: 400 11px/1 var(--sans);
+  cursor: pointer; transition: background .14s, color .14s, border-color .14s;
+}
+.kb-clear-filters:hover { background: var(--fill-3); color: var(--text); border-color: var(--text-3); }
+.kb-clear-filters:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---- worker 投放区（拖拽派发，只在拖动时浮现） ----
    拖卡片到某个 profile chip 上 = 改派受让人；点「立即启动」才真派发一个 worker。
@@ -3155,13 +3167,24 @@ body.kb-dragging * { cursor: grabbing !important; }
    填充色，靠色阶差分层而不是靠重边框；静置无阴影，hover 才轻浮起。 */
 .kb-card {
   position: relative; display: block; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
-  padding: 9px 11px 9px 13px; border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 11px 12px 10px 14px; border: 1px solid var(--line); border-radius: var(--r-lg);
   background: var(--canvas); color: var(--text); font: 400 12px/1.5 var(--sans);
-  transition: border-color .15s, transform .15s, box-shadow .15s;
+  transition: border-color .15s, transform .15s, box-shadow .15s, background .15s;
 }
-.kb-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--elev); }
+.kb-card:hover {
+  border-color: var(--accent); transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--n-1000) 8%, transparent);
+}
 .kb-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.kb-card.sel { border-color: var(--blue); }
+.kb-card.sel {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent);
+}
+/* 运行中的卡片：左侧细琥珀色指示条 + 极淡暖底，在整列里一眼可辨 */
+.kb-card:has(.kb-run) {
+  border-left: 3px solid var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 3.5%, var(--canvas));
+}
 /* 优先级 P 编号胶囊：绝对定位右上角，标题/摘要右侧留白防压字 */
 .kb-pri {
   position: absolute; top: 8px; right: 10px; z-index: 1;
@@ -3262,13 +3285,16 @@ body.kb-dragging * { cursor: grabbing !important; }
   min-width: 200px;
 }
 .kb-col-head {
-  display: flex; align-items: center; gap: 7px; padding: 9px 11px;
+  display: flex; align-items: center; gap: 7px; padding: 11px 11px 9px;
   border-bottom: 1px solid var(--line); flex: 0 0 auto;
 }
 .kb-col-name { color: var(--text); font: 500 12.5px/1.2 var(--sans); }
-.kb-col-num { margin-left: auto; color: var(--caption); font: 400 11px/1 var(--mono); }
+.kb-col-num {
+  margin-left: auto; padding: 2px 7px; border: 1px solid var(--line); border-radius: 99px;
+  background: var(--canvas); color: var(--caption); font: 400 10.5px/1.2 var(--mono);
+}
 .kb-col-body {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin;
   padding: 8px; display: flex; flex-direction: column; gap: 8px;
 }
 /* 列尾「＋ 添加任务」：只出现在待办 / 就绪（后端只认 triage / ready） */
@@ -3321,16 +3347,37 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-drawer-mask { position: absolute; inset: 0; z-index: 8; background: color-mix(in srgb, var(--n-1000) 28%, transparent); }
 .kb-drawer {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: 9;
-  width: min(430px, 94%); display: flex; flex-direction: column;
-  background: var(--canvas); border-left: 1px solid var(--line-2); box-shadow: var(--elev);
+  width: min(440px, 94%); display: flex; flex-direction: column;
+  background: var(--canvas); border-left: 1px solid var(--line-2);
+  box-shadow: -8px 0 28px color-mix(in srgb, var(--n-1000) 12%, transparent);
+  animation: kb-drawer-in .16s cubic-bezier(.16, 1, .3, 1);
+}
+@keyframes kb-drawer-in {
+  from { opacity: 0; transform: translate3d(12px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 .kb-drawer-head {
   display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto;
-  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--fill-2);
 }
 .kb-drawer-kicker { font: 500 11.5px/1 var(--sans); color: var(--caption); letter-spacing: .04em; }
 .kb-drawer-body { flex: 1 1 auto; overflow-y: auto; padding: 16px 16px 28px; }
 .kbd-title { margin: 0 0 8px; font: 500 18px/1.4 var(--serif); color: var(--text); word-break: break-word; }
+.kbd-title-row { display: flex; align-items: flex-start; gap: 10px; }
+.kbd-title-row .kbd-title { flex: 1 1 auto; min-width: 0; }
+.kbd-edit-btn { flex: 0 0 auto; height: 26px; padding: 0 9px; font-size: 11px; }
+.kbd-edit-form {
+  display: flex; flex-direction: column; gap: 10px; margin: 10px 0 14px; padding: 11px 12px;
+  border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--fill-2);
+}
+.kbd-log-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.kbd-log-head h3 { margin: 0; }
+.kbd-log-btn { height: 24px; padding: 0 9px; font-size: 11px; }
+.kbd-log {
+  margin: 8px 0 0; padding: 10px 11px; max-height: 240px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--fill-2);
+  color: var(--text-2); font: 400 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word;
+}
 .kbd-id { font: 400 11px/1.4 var(--mono); color: var(--caption); }
 .kbd-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px; }
 .kbd-section { margin-top: 18px; }
@@ -3412,6 +3459,7 @@ body.kb-dragging * { cursor: grabbing !important; }
 @media (prefers-reduced-motion: reduce) {
   .kbd-prog-pulse { animation: none; }
   .kb-run-bar > i, .kbd-prog-bar > i { transition: none; }
+  .kb-drawer { animation: none; }
 }
 .kbd-danger { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line); }
 .kbd-danger .kb-btn { height: 28px; font-size: 11.5px; }
@@ -3497,6 +3545,26 @@ body.kb-dragging * { cursor: grabbing !important; }
 .kb-fhint-line.warn { color: var(--red); }
 .kb-fnote { color: var(--caption); font: 400 11px/1.6 var(--sans); }
 .kb-fnote.warn { color: var(--red); }
+.kb-adv-wrap { display: flex; flex-direction: column; gap: 8px; }
+.kb-adv-toggle {
+  align-self: flex-start; padding: 4px 0; border: 0; background: transparent;
+  color: var(--text-2); font: 500 11.5px/1.4 var(--sans); cursor: pointer;
+}
+.kb-adv-toggle:hover { color: var(--accent); }
+.kb-adv-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
+.kb-adv-card {
+  display: flex; flex-direction: column; gap: 10px; padding: 11px 12px;
+  border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--fill-2);
+}
+.kb-fcheck {
+  display: flex; align-items: center; gap: 7px; color: var(--text-2);
+  font: 400 11.5px/1.5 var(--sans); cursor: pointer;
+}
+.kb-fcheck input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
+.kb-fcheck code {
+  padding: 0 4px; border-radius: var(--r-xs);
+  background: var(--canvas); color: var(--text-2); font: 400 10.5px/1.4 var(--mono);
+}
 .kb-modal-foot {
   display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
   padding: 12px 16px; border-top: 1px solid var(--line);
