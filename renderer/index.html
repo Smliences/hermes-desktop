@@ -107,7 +107,7 @@
         <button class="main-ibtn" id="btn-find" title="在会话中查找 ⌘F" aria-label="在会话中查找" hidden>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.3 10.3 13.5 13.5"/></svg>
         </button>
-        <button class="main-ibtn" id="btn-rail-toggle" title="预览 / 看板面板 ⌘`">
+        <button class="main-ibtn" id="btn-rail-toggle" title="预览 / 看板面板 ⌘`" aria-label="预览 / 看板面板" aria-expanded="false">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M4.5 6.5l2.2 1.5-2.2 1.5M8.3 10h3.2"/></svg>
         </button>
       </header>
@@ -545,20 +545,20 @@
         aria-label="调整预览 / 看板面板宽度" aria-valuemin="280" aria-valuemax="760" aria-valuenow="400"
         tabindex="0" title="拖拽调整宽度 · ← / → 微调 · 双击复位 400px"></div>
       <div class="rail-head">
-        <nav class="rail-tabs" id="rail-tabs">
-          <button class="rt active" data-rail="preview">预览</button>
-          <button class="rt" data-rail="kanban">看板</button>
+        <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="右侧面板">
+          <button class="rt active" data-rail="preview" role="tab" aria-selected="true">预览<span class="rt-dot" id="rt-pv-dot" hidden aria-hidden="true"></span></button>
+          <button class="rt" data-rail="kanban" role="tab" aria-selected="false">看板</button>
         </nav>
         <span class="rail-hint" id="rail-hint"></span>
-        <button id="btn-rail-close" class="ir-btn" title="关闭">✕</button>
+        <button id="btn-rail-close" class="ir-btn" title="关闭" aria-label="关闭右侧面板">✕</button>
       </div>
 
       <div class="rail-pane" id="preview-pane">
         <div class="pv-bar">
           <button class="pv-btn" id="pv-open" title="选择本机网页 / PDF / 图片 / 文档 / 表格">打开文件</button>
           <input id="pv-path" type="text" placeholder="本地文件路径或 http(s) 地址，⏎ 加载" spellcheck="false" />
-          <button class="pv-icon" id="pv-reload" title="刷新预览">↻</button>
-          <button class="pv-icon" id="pv-external" title="在系统默认程序打开">↗</button>
+          <button class="pv-icon" id="pv-reload" title="刷新预览" aria-label="刷新预览">↻</button>
+          <button class="pv-icon" id="pv-external" title="在系统默认程序打开" aria-label="在系统默认程序打开">↗</button>
         </div>
         <div class="pv-sub">
           <label class="pv-auto"><input type="checkbox" id="pv-auto" checked /> 自动跟随 Agent 生成的文件</label>
@@ -568,6 +568,10 @@
         <div class="pv-views" id="pv-views" hidden>
           <span class="pv-kind" id="pv-kind"></span>
           <div class="pv-view-btns" id="pv-view-btns" role="tablist" aria-label="预览视图"></div>
+          <div class="pv-tools" id="pv-tools">
+            <button class="pv-tbtn" id="pv-img-zoom" type="button" title="切换适应画布 / 原始尺寸" hidden>1:1</button>
+            <button class="pv-tbtn" id="pv-copy" type="button" title="复制当前文本内容" hidden>复制</button>
+          </div>
         </div>
         <div class="pv-stage">
           <iframe id="pv-frame" title="内容预览" referrerpolicy="no-referrer"
@@ -579,7 +583,11 @@
           <div class="pv-empty" id="pv-empty">
             <div class="pv-empty-ico">◫</div>
             <div class="pv-empty-title">预览 Agent 生成的文件</div>
-            <div class="pv-empty-hint">网页 / PDF / 图片 / 文档 / 表格都会自动显示在这里，也可以点「打开文件」选择本机文件。</div>
+            <div class="pv-empty-hint">网页 / PDF / 图片 / 文档 / 表格都会自动显示在这里，也可以拖拽文件到此或点「打开文件」。</div>
+            <div class="pv-recent" id="pv-recent" hidden></div>
+          </div>
+          <div class="pv-drop" id="pv-drop" hidden aria-hidden="true">
+            <div class="pv-drop-box">松开以预览文件</div>
           </div>
         </div>
       </div>

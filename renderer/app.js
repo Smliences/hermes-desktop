@@ -1730,27 +1730,35 @@ const STEP_BRIEF = {
 };
 function stepGroupEl(list) {
   const wrap = document.createElement('div');
-  wrap.className = 'step-group';
   const running = list.some((t) => t.state === 'running');
   const failed = list.some((t) => t.isError);
   const state = running ? 'running' : failed ? 'error' : 'done';
+  wrap.className = `step-group ${state}`;
   let open = list[0].groupOpen;
   if (typeof open !== 'boolean') open = running || failed;
 
   // 摘要 = 各步动作去重（读取、编辑、运行），最多三个。
   // 用类型词而不是三态词：「已读取」这类带时态的词拼成一句话读不通，也太长。
   const verbs = [];
+  let errCount = 0;
+  let totalMs = 0;
   for (const t of list) {
     const v = STEP_BRIEF[toolMeta(t.name, t.input, 'done').kind] || '调用';
     if (!verbs.includes(v)) verbs.push(v);
+    if (t.isError) errCount++;
+    if (t.durationMs > 0) totalMs += t.durationMs;
   }
   const brief = verbs.slice(0, 3).join('、') + (verbs.length > 3 ? '等' : '');
   const headText = `${running ? '正在执行' : '执行了'} ${list.length} 步`;
+  const groupMeta = errCount > 0
+    ? `<span class="tmeta"><i class="td">${errCount} 失败</i></span>`
+    : (!running && totalMs >= 100 ? `<span class="tmeta">${(totalMs / 1000).toFixed(1)}s</span>` : '');
 
   wrap.innerHTML = `<div class="step-head ${state}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(list.map((t) => t.name).join(' · '))}">
       <span class="ticon" aria-hidden="true">${STEP_ICO}</span>
       <span class="tstate${running ? ' loading-text' : ''}">${headText}</span>
       <span class="tobj">${esc(brief)}</span>
+      ${groupMeta}
       <span class="tchev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6.5 4 4 4-4"></path></svg></span>
     </div>`;
   const body = document.createElement('div');
@@ -1809,7 +1817,7 @@ function renderItem(item, header = false, sub = false) {
     const extra = meta.extra
       ? `<span class="tmeta">${meta.extra.text ? esc(meta.extra.text)
         : `<i class="ta">+${meta.extra.add}</i><i class="td">−${meta.extra.del}</i>`}</span>`
-      : '';
+      : (!running && dur ? `<span class="tmeta tmeta-dur">${esc(dur)}</span>` : '');
     // 详情可能是空串（跑着的命令还没有输出）：那时只留详情头，不塞「暂无」占位
     const detailHTML = toolDetailHTML(item);
     el.innerHTML = `<div class="tool-row collapsible ${state}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(item.name || '')}">
@@ -3507,10 +3515,16 @@ $('#gateway-page').addEventListener('click', async (e) => {
 });
 
 /* ---------- 右侧 rail：预览 | 看板 ---------- */
-let railTab = 'preview';
+const RAIL_TAB_KEY = 'rail-tab';
+const PV_AUTO_KEY = 'pv-auto';
+const PV_RECENT_KEY = 'pv-recent';
+let railTab = (() => {
+  try { return localStorage.getItem(RAIL_TAB_KEY) === 'kanban' ? 'kanban' : 'preview'; }
+  catch { return 'preview'; }
+})();
 const pv = {
   url: '', filePath: '', label: '', kind: '', type: '', view: '', ext: '',
-  baseDir: '', text: '', textLoadedFor: '', srcdoc: '',
+  baseDir: '', text: '', textLoadedFor: '', srcdoc: '', imgActual: false,
 };
 // 只看通道是否存在：浏览器 Demo 桥也实现了预览，别用 hasNative 把它挡在门外
 const pvAvailable = () => typeof api.previewResolve === 'function';
@@ -3525,6 +3539,34 @@ const PV_VIEWS = {
   table: [['table', '表格'], ['source', '源码']],
 };
 const pvViews = (type) => PV_VIEWS[type] || [['render', '渲染']];
+const pvBaseDir = () => (activeTab() && activeTab().cwd) || pv.baseDir || undefined;
+
+/** 最近预览记录：最多保留 8 条，在空态下提供一键回切。 */
+function loadPvRecent() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(PV_RECENT_KEY) || '[]');
+    return Array.isArray(arr) ? arr.filter((x) => x && x.target).slice(0, 8) : [];
+  } catch { return []; }
+}
+function pushPvRecent(item) {
+  if (!item || !item.target) return;
+  const list = loadPvRecent().filter((x) => x.target !== item.target);
+  list.unshift({ target: item.target, label: item.label || item.target, type: item.type || '' });
+  try { localStorage.setItem(PV_RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch {}
+  renderPvRecent();
+}
+function renderPvRecent() {
+  const box = $('#pv-recent');
+  if (!box) return;
+  const list = loadPvRecent();
+  if (!list.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '<div class="pv-recent-head">最近预览</div>' + list.map((x) =>
+    `<button class="pv-recent-item" type="button" data-pv-recent="${esc(x.target)}" title="${esc(x.target)}">` +
+    `<span class="pv-recent-name">${esc(x.label)}</span>` +
+    `<span class="pv-recent-type">${esc(PV_TYPE_LABEL[x.type] || x.type || '')}</span>` +
+    `</button>`).join('');
+}
 
 /** 看板页签是否被看见。整页看板与 rail 看板共用一份 KB.board、一个轮询，
  *  谁可见谁就驱动刷新；两个都不可见时轮询彻底停掉，不空转打 REST。 */
@@ -3538,7 +3580,16 @@ function kanbanAnyVisible() {
 }
 function setRailTab(tab) {
   railTab = tab === 'kanban' ? 'kanban' : 'preview';
-  document.querySelectorAll('#rail-tabs .rt').forEach((b) => b.classList.toggle('active', b.dataset.rail === railTab));
+  try { localStorage.setItem(RAIL_TAB_KEY, railTab); } catch {}
+  document.querySelectorAll('#rail-tabs .rt').forEach((b) => {
+    const on = b.dataset.rail === railTab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  if (railTab === 'preview') {
+    const dot = $('#rt-pv-dot');
+    if (dot) dot.hidden = true;
+  }
   $('#preview-pane').hidden = railTab !== 'preview';
   $('#kanban-pane').hidden = railTab !== 'kanban';
   $('#rail-hint').textContent = railTab === 'kanban'
@@ -3556,7 +3607,11 @@ function setRailTab(tab) {
 function toggleRail(force) {
   const rail = $('#rail');
   const show = force !== undefined ? force : rail.hidden;
-  $('#btn-rail-toggle').classList.toggle('on', show);
+  const toggleBtn = $('#btn-rail-toggle');
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('on', show);
+    toggleBtn.setAttribute('aria-expanded', String(show));
+  }
   if (!show) {
     rail.hidden = true;
     if (!kanbanAnyVisible()) kanbanStopPolling();
@@ -3565,6 +3620,9 @@ function toggleRail(force) {
   }
   rail.hidden = false;
   setRailTab(railTab);
+  if (pvAvailable() && pv.kind === 'file' && pv.filePath) {
+    api.previewWatch(pv.filePath);
+  }
 }
 
 function pvState(msg, isErr) {
@@ -3614,33 +3672,58 @@ function pvDocHtml(text) {
     '.go': 'go', '.rs': 'rust', '.java': 'java', '.sql': 'sql', '.svg': 'xml', '.html': 'html' }[ext] || 'text';
   return mdCodeBlock(lang, text);
 }
-/** CSV / TSV → 表格。引号内分隔符与转义双引号都按 RFC 4180 的最小子集处理。 */
+/** CSV / TSV → 表格。支持引号内分隔符、转义双引号与引号内换行（RFC 4180）。 */
 function pvTableHtml(text) {
   const delim = String(pv.ext || '').toLowerCase() === '.tsv' ? '\t' : ',';
-  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n').filter((l) => l.length);
-  const parse = (line) => {
-    const out = []; let cur = '', quoted = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
+  const src = String(text || '').replace(/\r\n?/g, '\n');
+  const all = [];
+  let row = [], cur = '', quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quoted) {
       if (c === '"') {
-        if (quoted && line[i + 1] === '"') { cur += '"'; i++; } else quoted = !quoted;
-      } else if (!quoted && c === delim) { out.push(cur); cur = ''; }
-      else cur += c;
+        if (src[i + 1] === '"') { cur += '"'; i++; }
+        else quoted = false;
+      } else cur += c;
+    } else if (c === '"') {
+      quoted = true;
+    } else if (c === delim) {
+      row.push(cur); cur = '';
+    } else if (c === '\n') {
+      row.push(cur); cur = '';
+      if (row.length > 1 || row[0] !== '') all.push(row);
+      row = [];
+    } else {
+      cur += c;
     }
-    out.push(cur); return out;
-  };
+  }
+  if (cur !== '' || row.length) {
+    row.push(cur);
+    if (row.length > 1 || row[0] !== '') all.push(row);
+  }
+  if (!all.length) return '<div class="pv-table-note">表格为空</div>';
   const MAX = 300;
-  const all = lines.map(parse);
   const head = all[0] || [];
   const body = all.slice(1, MAX + 1);
   const note = `<div class="pv-table-note">${esc(pv.label || '表格')} · ${Math.max(0, all.length - 1)} 行 × ${head.length} 列` +
-    (all.length > MAX + 1 ? ` · 仅显示前 ${MAX} 行` : '') + '</div>';
+    (all.length > MAX + 1 ? ` · 仅显示前 ${MAX} 行` : '') + ' · 点击单元格可复制</div>';
   const th = head.map((c) => `<th>${esc(c)}</th>`).join('');
   const tr = body.map((r) => `<tr>${head.map((_, i) => {
     const c = String(r[i] == null ? '' : r[i]);
     return `<td title="${esc(c)}">${esc(c)}</td>`;
   }).join('')}</tr>`).join('');
   return note + `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+function updatePvTools() {
+  const copyBtn = $('#pv-copy');
+  const zoomBtn = $('#pv-img-zoom');
+  const isTextView = pv.view === 'source' || pv.view === 'table' || pv.type === 'doc';
+  if (copyBtn) copyBtn.hidden = !isTextView || !pv.filePath;
+  if (zoomBtn) {
+    zoomBtn.hidden = pv.type !== 'image' || !pv.url;
+    zoomBtn.classList.toggle('active', !!pv.imgActual);
+    zoomBtn.textContent = pv.imgActual ? '适应' : '1:1';
+  }
 }
 function renderPreviewViews() {
   const views = pvViews(pv.type);
@@ -3650,6 +3733,7 @@ function renderPreviewViews() {
     `aria-selected="${v === pv.view}" data-pv-view="${v}">${esc(label)}</button>`).join('');
   $('#pv-kind').textContent = PV_TYPE_LABEL[pv.type] || '预览';
   $('#pv-views').hidden = false;
+  updatePvTools();
 }
 function setPvView(view) {
   if (!pvViews(pv.type).some(([v]) => v === view)) return;
@@ -3658,6 +3742,7 @@ function setPvView(view) {
   renderPreviewContent();
 }
 async function renderPreviewContent() {
+  updatePvTools();
   // 文本视图要读原文；iframe / img 类型完全不碰内容，只给 URL
   if (pv.view === 'source' || pv.view === 'table' || pv.type === 'doc') {
     const text = await pvReadText();
@@ -3668,7 +3753,11 @@ async function renderPreviewContent() {
   }
   if (pv.type === 'image') {
     pvShow('#pv-image');
-    const img = $('#pv-img'); img.src = pv.url; img.alt = pv.label || '预览图片';
+    const box = $('#pv-image');
+    if (box) box.classList.toggle('is-actual', !!pv.imgActual);
+    const img = $('#pv-img');
+    img.alt = pv.label || '预览图片';
+    img.src = pv.url;
     return;
   }
   pvShow('#pv-frame');
@@ -3681,12 +3770,17 @@ async function setPreview(res) {
   pv.kind = res.kind; pv.type = res.type || (isFile ? 'web' : 'url');
   pv.ext = res.ext || ''; pv.baseDir = res.baseDir || pv.baseDir;
   pv.srcdoc = res.srcdoc || '';
-  pv.text = ''; pv.textLoadedFor = ''; pv.view = '';
+  pv.text = ''; pv.textLoadedFor = ''; pv.view = ''; pv.imgActual = false;
   $('#pv-path').value = isFile ? res.filePath : res.url;
   pvState(isFile ? '已加载' : '网页预览');
+  pushPvRecent({ target: isFile ? res.filePath : res.url, label: res.label, type: pv.type });
   // 用户正在 rail 里看看板时，别把页签抢回预览：内容照常备好，切回来就是最新的
   if (!railKanbanVisible()) setRailTab('preview');
-  else $('#rail-hint').textContent = '预览已更新 · 看板';
+  else {
+    $('#rail-hint').textContent = '预览已更新 · 看板';
+    const dot = $('#rt-pv-dot');
+    if (dot) dot.hidden = false;
+  }
   renderPreviewViews();
   await renderPreviewContent();
   if (!pvAvailable()) return true;
@@ -3694,7 +3788,7 @@ async function setPreview(res) {
   else await api.previewUnwatch();
   return true;
 }
-async function loadPreviewInput(raw) {
+async function loadPreviewInput(raw, baseDirOverride) {
   const v = String(raw || '').trim();
   if (!v) return;
   if (/^https?:\/\//i.test(v)) {
@@ -3706,7 +3800,7 @@ async function loadPreviewInput(raw) {
   if (!pvAvailable()) { pvState('此环境无本地预览', true); return; }
   pvState('正在打开…');
   try {
-    const res = await api.previewResolve(v, pv.baseDir || undefined);
+    const res = await api.previewResolve(v, baseDirOverride || pvBaseDir());
     await setPreview(res);
   } catch (err) { pvState('打开失败：' + String((err && err.message) || err), true); }
 }
@@ -3716,14 +3810,27 @@ async function reloadPreview() {
     loadFrame(pv.url + (pv.url.includes('?') ? '&' : '?') + '_hermes=' + Date.now(), pv.srcdoc);
   } else {
     pv.textLoadedFor = ''; // 文件可能被改写，文本视图必须重读
-    if (pv.type === 'image') { const img = $('#pv-img'); img.removeAttribute('src'); img.src = pv.url; }
-    else await renderPreviewContent();
+    if (pv.type === 'image') {
+      const img = $('#pv-img');
+      const sep = pv.url.includes('?') ? '&' : '?';
+      img.src = pv.url + sep + 't=' + Date.now();
+    } else await renderPreviewContent();
   }
   pvState('已刷新');
 }
 $('#btn-rail-toggle').onclick = () => toggleRail();
 $('#btn-rail-close').onclick = () => toggleRail(false);
 document.querySelectorAll('#rail-tabs .rt').forEach((b) => { b.onclick = () => setRailTab(b.dataset.rail); });
+$('#rail-tabs').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const tabs = Array.from(document.querySelectorAll('#rail-tabs .rt'));
+  const idx = tabs.indexOf(document.activeElement);
+  if (idx < 0) return;
+  e.preventDefault();
+  const next = tabs[(idx + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  next.focus();
+  setRailTab(next.dataset.rail);
+});
 // rail 看板：写操作一律回完整看板页（任务详情抽屉挂在整页里），这里只留新建弹窗这个全局入口
 /** 进完整看板前收起 rail：同一份 KB.board 不该并排显示两份，也把 400px 还给 5 列。 */
 function openFullKanban(status) {
@@ -3783,12 +3890,67 @@ $('#pv-view-btns').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('[data-pv-view]');
   if (b) setPvView(b.dataset.pvView);
 });
+$('#pv-copy').onclick = () => {
+  if (!pv.text) { toast('当前没有可复制的文本', 1600); return; }
+  copyText(pv.text).then(() => toast('已复制预览内容', 1400)).catch(() => toast('复制失败', 1600));
+};
+const togglePvImgZoom = () => {
+  if (pv.type !== 'image') return;
+  pv.imgActual = !pv.imgActual;
+  const box = $('#pv-image');
+  if (box) box.classList.toggle('is-actual', pv.imgActual);
+  updatePvTools();
+};
+$('#pv-img-zoom').onclick = togglePvImgZoom;
+$('#pv-img').onclick = togglePvImgZoom;
+$('#pv-img').addEventListener('load', () => {
+  const img = $('#pv-img');
+  if (pv.type === 'image' && img.naturalWidth && img.naturalHeight) {
+    pvState(`${img.naturalWidth}×${img.naturalHeight}`);
+  }
+});
+$('#pv-doc').addEventListener('click', async (e) => {
+  const a = e.target.closest && e.target.closest('a[href]');
+  if (!a) return;
+  const href = String(a.getAttribute('href') || '').trim();
+  if (!href || href.startsWith('#')) return;
+  e.preventDefault();
+  if (/^https?:\/\//i.test(href)) {
+    if (pvAvailable() && typeof api.previewOpenExternal === 'function') {
+      const r = await api.previewOpenExternal(href);
+      if (r && !r.ok) toast(r.error || '打开失败', 2200);
+    }
+    return;
+  }
+  loadPreviewInput(href, pv.baseDir || pvBaseDir());
+});
+$('#pv-table').addEventListener('click', (e) => {
+  const td = e.target.closest && e.target.closest('tbody td');
+  if (!td) return;
+  const val = td.textContent || '';
+  copyText(val).then(() => toast('已复制单元格内容', 1200)).catch(() => toast('复制失败', 1400));
+});
+$('#pv-recent').addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('[data-pv-recent]');
+  if (btn) loadPreviewInput(btn.dataset.pvRecent);
+});
+(() => {
+  try {
+    const savedAuto = localStorage.getItem(PV_AUTO_KEY);
+    if (savedAuto === '0' || savedAuto === 'false') $('#pv-auto').checked = false;
+  } catch {}
+  $('#pv-auto').addEventListener('change', () => {
+    try { localStorage.setItem(PV_AUTO_KEY, $('#pv-auto').checked ? '1' : '0'); } catch {}
+  });
+  renderPvRecent();
+})();
 $('#pv-open').onclick = async () => {
   if (!pvAvailable()) { toast('此环境无法读取本地文件', 2000); return; }
   const r = await api.previewPick();
   if (r && r.ok) await setPreview(r);
   else if (r && !r.canceled) pvState(r.error || '选择失败', true);
 };
+$('#pv-path').addEventListener('focus', (e) => { e.target.select(); });
 $('#pv-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadPreviewInput(e.target.value); } });
 $('#pv-reload').onclick = reloadPreview;
 $('#pv-external').onclick = async () => {
@@ -3798,6 +3960,40 @@ $('#pv-external').onclick = async () => {
   const r = await api.previewOpenExternal(target);
   if (r && !r.ok) toast(r.error || '打开失败', 2400);
 };
+(() => {
+  const pane = $('#preview-pane');
+  const drop = $('#pv-drop');
+  if (!pane || !drop) return;
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  pane.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth += 1;
+    drop.hidden = false;
+  });
+  pane.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  pane.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) drop.hidden = true;
+  });
+  pane.addEventListener('drop', (e) => {
+    dragDepth = 0;
+    drop.hidden = true;
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!file) return;
+    const filePath = typeof api.pathForFile === 'function' ? api.pathForFile(file) : (file.path || '');
+    if (!filePath) { pvState('此环境无法读取拖入的本地路径', true); return; }
+    loadPreviewInput(filePath);
+  });
+})();
 let pvReloadTimer = null;
 if (hasNative && api.onPreviewChanged) {
   api.onPreviewChanged(({ filePath }) => {
@@ -3868,7 +4064,7 @@ async function maybeAutoPreview(evt) {
   if (!paths.length) return;
   for (const p of paths.slice(0, 3)) {
     let res;
-    try { res = await api.previewResolve(p, pv.baseDir || undefined); } catch { continue; }
+    try { res = await api.previewResolve(p, pvBaseDir()); } catch { continue; }
     if (!res.ok) continue;
     if (res.filePath === pv.filePath && Date.now() - pvAutoAt < 1200) continue;
     pvAutoAt = Date.now();
