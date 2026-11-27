@@ -297,6 +297,30 @@ async function run() {
     assert.strictEqual(typeof market.checkUpdates, 'function');
     assert.strictEqual(typeof market.action, 'function');
   });
+  await t('插件市场命中磁盘缓存后毫秒返回并支持本地关键词过滤', async () => {
+    const dataDir = profile.dataDir();
+    const prof = profile.current();
+    const cacheFile = path.join(dataDir, 'market-plugins-catalog.json');
+    const items = [
+      { id: 'alpha-plug', name: 'alpha-plug', description: 'Slack bridge', source: 'Hermes 精选目录', category: 'chat', maintainer: 'core' },
+      { id: 'beta-plug', name: 'beta-plug', description: 'GitHub helper', source: 'Hermes 精选目录', category: 'dev', maintainer: 'community' },
+    ];
+    fs.writeFileSync(cacheFile, JSON.stringify({ profile: prof, at: Date.now(), items }));
+    try {
+      const rAll = await market.search('plugins', '');
+      assert.strictEqual(rAll.ok, true);
+      assert.strictEqual(rAll.cached, true);
+      assert.strictEqual(rAll.stale, false);
+      assert.strictEqual(rAll.items.length, 2);
+      const rHit = await market.search('plugins', 'slack');
+      assert.strictEqual(rHit.ok, true);
+      assert.strictEqual(rHit.cached, true);
+      assert.strictEqual(rHit.items.length, 1);
+      assert.strictEqual(rHit.items[0].id, 'alpha-plug');
+    } finally {
+      try { fs.unlinkSync(cacheFile); } catch {}
+    }
+  });
 
   section('8. 模型状态只读解析（CLI 默认 ≠ models.json 列表）');
   const hermesConfig = loaded['hermes-config.js'];

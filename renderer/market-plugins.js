@@ -630,7 +630,7 @@ async function mkSearch(q, { force = false } = {}) {
   mkStatus(mk.kind === 'skills' ? '正在搜索在线技能源…（首次可能 10–30 秒）' : '正在读取插件目录…', 'busy');
   renderMarket();
   let r;
-  try { r = await mkApi().marketSearch(mk.kind, q, { limit: 60, source: mk.source }); }
+  try { r = await mkApi().marketSearch(mk.kind, q, { limit: 60, source: mk.source, force: !!force }); }
   catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
   mk.busy = false; mk.skeleton = false;
   if (!r || !r.ok) {
@@ -639,7 +639,8 @@ async function mkSearch(q, { force = false } = {}) {
   } else {
     mk.items = r.items || []; mk.ms = r.ms || 0;
     mkCache.set(key, { items: mk.items, ms: mk.ms });
-    mkStatus(`${mk.items.length} 条结果 · ${mk.ms}ms`, '');
+    const cacheTag = r.cached ? (r.stale ? ' · 缓存（后台同步中）' : ' · 缓存') : '';
+    mkStatus(`${mk.items.length} 条结果${cacheTag} · ${mk.ms}ms`, '');
   }
   renderMarket();
 }
@@ -784,6 +785,10 @@ if (hasNative && api.onMarketProgress) {
   api.onMarketProgress(({ phase, text }) => {
     if ($('#market-page').hidden) return;
     if (phase === 'start' || phase === 'busy') mkStatus(text, 'busy');
+    if (phase === 'catalog-updated' && mk.kind === 'plugins' && !mk.busy) {
+      for (const k of [...mkCache.keys()]) { if (k.startsWith('plugins||')) mkCache.delete(k); }
+      mkSearch(mk.query);
+    }
   });
 }
 // 插件 / 技能列表的后台刷新完成：重取一次（主进程内存已是最新，毫秒返回），

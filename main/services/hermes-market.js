@@ -12,6 +12,7 @@
  * 传参（不经 shell），不会变成额外 CLI 选项或命令注入。
  */
 const { spawn } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const hermesPlugins = require('./hermes-plugins');
@@ -26,9 +27,18 @@ const SOURCES = new Set(['all', 'official', 'skills-sh', 'well-known', 'github',
 const OPS = new Set(['install', 'uninstall', 'update', 'inspect']);
 const WRITE_OPS = new Set(['install', 'uninstall', 'update']);
 const REF_RE = /^[0-9a-f]{40}$/i;
+const PLUGIN_TTL = 30 * 60 * 1000;
+const PLUGIN_HARD_TTL = 30 * 24 * 60 * 60 * 1000;
+const PLUGIN_CACHE_FILE = 'market-plugins-catalog.json';
+const SKILL_TTL = 5 * 60 * 1000;
+const SKILL_CACHE_MAX = 30;
 
 let _queue = Promise.resolve();
 let _emit = null;
+let _pluginCatalog = null;      // { profile, items, at }
+let _pluginInflight = null;     // { profile, promise }
+let _diskTriedProfile = null;
+const _skillCache = new Map();  // key -> { items, at }
 const setEmitter = (fn) => { _emit = typeof fn === 'function' ? fn : null; };
 const progress = (phase, text) => { if (_emit) { try { _emit({ phase, text }); } catch {} } };
 
@@ -70,15 +80,89 @@ function run(args, timeout) {
 }
 
 /** 串行排队：同一时间只跑一条 CLI 命令，避免并发写坏 config.yaml。 */
-function enqueue(label, job) {
+function enqueue(label, job, { quiet = false } = {}) {
   const runJob = _queue.then(async () => {
-    progress('start', label);
+    if (!quiet) progress('start', label);
     try { return await job(); }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
-    finally { progress('done', label); }
+    finally { if (!quiet) progress('done', label); }
   });
   _queue = runJob.then(() => {}, () => {});
   return runJob;
+}
+
+function pluginCachePath() {
+  const dir = profile.dataDir();
+  return dir ? path.join(dir, PLUGIN_CACHE_FILE) : '';
+}
+
+function readPluginDisk(prof) {
+  if (_pluginCatalog && _pluginCatalog.profile === prof) return _pluginCatalog;
+  if (_diskTriedProfile === prof) return null;
+  _diskTriedProfile = prof;
+  const file = pluginCachePath();
+  if (!file) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!raw || raw.profile !== prof) return null;
+    if (!Array.isArray(raw.items) || !raw.items.length) return null;
+    const at = Number(raw.at) || 0;
+    if (!at || Date.now() - at > PLUGIN_HARD_TTL) return null;
+    _pluginCatalog = { profile: prof, items: raw.items, at };
+    return _pluginCatalog;
+  } catch { return null; }
+}
+
+function writePluginDisk(prof, items, at) {
+  const file = pluginCachePath();
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ profile: prof, at, items }));
+    fs.renameSync(tmp, file);
+  } catch {}
+}
+
+function filterPluginItems(items, q) {
+  if (!q) return items.map((it) => ({ ...it }));
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return items.filter((it) => {
+    const hay = `${it.id} ${it.name} ${it.description} ${it.category} ${it.maintainer} ${it.source}`.toLowerCase();
+    return tokens.every((tk) => hay.includes(tk));
+  }).map((it) => ({ ...it }));
+}
+
+function attachInstalled(items, installed) {
+  return items.map((it) => {
+    const short = it.id.split('/').pop();
+    return { ...it, installed: installed.has(it.id) || installed.has(it.name) || installed.has(short) };
+  });
+}
+
+function refreshPluginCatalog(prof, { background = false } = {}) {
+  if (_pluginInflight && _pluginInflight.profile === prof) return _pluginInflight.promise;
+  const args = ['plugins', 'search', '--json'];
+  const promise = enqueue('正在读取插件目录…', async () => {
+    const r = await run(args, 60000);
+    if (r.timedOut) return { ok: false, error: '命令超时，网络可能不可达；可复制命令到终端重试', args };
+    if (r.code !== 0) return { ok: false, error: digest(r, 400) || `hermes 退出码 ${r.code}`, args };
+    let items;
+    try {
+      items = normalizePlugins(JSON.parse(r.stdout));
+    } catch {
+      return { ok: false, error: 'CLI 输出不是合法 JSON：' + digest(r, 240), args };
+    }
+    const at = Date.now();
+    _pluginCatalog = { profile: prof, items, at };
+    writePluginDisk(prof, items, at);
+    if (background) progress('catalog-updated', '插件目录已后台更新');
+    return { ok: true, items, at, args };
+  }, { quiet: background }).finally(() => {
+    if (_pluginInflight && _pluginInflight.promise === promise) _pluginInflight = null;
+  });
+  _pluginInflight = { profile: prof, promise };
+  return promise;
 }
 
 function safeId(v) {
@@ -135,7 +219,7 @@ function normalizeSkills(arr) {
   })).filter((x) => x.id);
 }
 
-/** 搜索 / 浏览市场；query 为空时插件返回完整目录、技能返回官方精选。 */
+/** 搜索 / 浏览市场；插件走内存/磁盘缓存 + 本地过滤 + 后台刷新，技能走短时内存缓存。 */
 async function search(kind, query, opts = {}) {
   if (kind !== 'plugins' && kind !== 'skills') return { ok: false, error: '未知市场类型' };
   const q = String(query == null ? '' : query).trim().slice(0, 120);
@@ -144,26 +228,56 @@ async function search(kind, query, opts = {}) {
     return { ok: false, error: '搜索词包含非法字符' };
   }
   const t0 = Date.now();
-  const args = kind === 'plugins'
-    ? ['plugins', 'search', ...(q ? [q] : []), '--json']
-    : ['skills', 'search', q, '--json', '--limit', String(Math.min(Math.max(+opts.limit || 30, 1), 100)),
-       ...(SOURCES.has(opts.source) && opts.source !== 'all' ? ['--source', opts.source] : [])];
-  return enqueue(kind === 'plugins' ? '正在读取插件目录…' : `正在搜索「${q || '全部技能'}」…`, async () => {
-    const [r, installed] = await Promise.all([run(args, kind === 'plugins' ? 60000 : 90000), installedNames(kind)]);
+  const prof = profile.current();
+  const force = !!opts.force;
+
+  if (kind === 'plugins') {
+    const args = ['plugins', 'search', ...(q ? [q] : []), '--json'];
+    const cached = !force ? readPluginDisk(prof) : null;
+    if (cached) {
+      const installed = await installedNames('plugins');
+      const items = attachInstalled(filterPluginItems(cached.items, q), installed);
+      const stale = Date.now() - cached.at > PLUGIN_TTL;
+      if (stale) refreshPluginCatalog(prof, { background: true });
+      return { ok: true, kind, query: q, items, ms: Date.now() - t0, cached: true, stale, args };
+    }
+    const [r, installed] = await Promise.all([refreshPluginCatalog(prof, { background: false }), installedNames('plugins')]);
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || '读取插件目录失败', args };
+    const items = attachInstalled(filterPluginItems(r.items, q), installed);
+    return { ok: true, kind, query: q, items, ms: Date.now() - t0, cached: false, stale: false, args };
+  }
+
+  const limit = String(Math.min(Math.max(+opts.limit || 30, 1), 100));
+  const source = SOURCES.has(opts.source) && opts.source !== 'all' ? opts.source : 'all';
+  const skillKey = `${prof}||${source}||${limit}||${q}`;
+  if (!force && _skillCache.has(skillKey)) {
+    const entry = _skillCache.get(skillKey);
+    if (Date.now() - entry.at < SKILL_TTL) {
+      const installed = await installedNames('skills');
+      const items = attachInstalled(entry.items.map((it) => ({ ...it })), installed);
+      return { ok: true, kind, query: q, items, ms: Date.now() - t0, cached: true, args: ['skills', 'search', q, '--json'] };
+    }
+    _skillCache.delete(skillKey);
+  }
+  const args = ['skills', 'search', q, '--json', '--limit', limit,
+    ...(source !== 'all' ? ['--source', source] : [])];
+  return enqueue(`正在搜索「${q || '全部技能'}」…`, async () => {
+    const [r, installed] = await Promise.all([run(args, 90000), installedNames('skills')]);
     if (r.timedOut) return { ok: false, error: '命令超时，网络可能不可达；可复制命令到终端重试', args };
     if (r.code !== 0) return { ok: false, error: digest(r, 400) || `hermes 退出码 ${r.code}`, args };
-    let items;
+    let rawItems;
     try {
-      const j = JSON.parse(r.stdout);
-      items = kind === 'plugins' ? normalizePlugins(j) : normalizeSkills(j);
+      rawItems = normalizeSkills(JSON.parse(r.stdout));
     } catch (e) {
       return { ok: false, error: 'CLI 输出不是合法 JSON：' + digest(r, 240), args };
     }
-    items.forEach((it) => {
-      const short = it.id.split('/').pop();
-      it.installed = installed.has(it.id) || installed.has(it.name) || installed.has(short);
-    });
-    return { ok: true, kind, query: q, items, ms: Date.now() - t0, args };
+    if (_skillCache.size >= SKILL_CACHE_MAX) {
+      const firstKey = _skillCache.keys().next().value;
+      if (firstKey !== undefined) _skillCache.delete(firstKey);
+    }
+    _skillCache.set(skillKey, { items: rawItems, at: Date.now() });
+    const items = attachInstalled(rawItems, installed);
+    return { ok: true, kind, query: q, items, ms: Date.now() - t0, cached: false, args };
   });
 }
 
