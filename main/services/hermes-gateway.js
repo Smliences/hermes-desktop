@@ -15,8 +15,9 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const profile = require('./hermes-profile');
+const { resolveHermesBin } = require('./hermes-bin');
 const curHome = () => profile.home();
-const HERMES_BIN = process.env.HERMES_BIN || path.join(os.homedir(), '.local/bin/hermes');
+const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
 
 const PLATFORMS = [
   { key: 'telegram', label: 'Telegram', ico: '📱', group: 'common', env: ['TELEGRAM_BOT_TOKEN'], setup: 'hermes gateway setup' },
@@ -46,17 +47,25 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-/** 只取 .env 的键名，绝不读取/返回值 */
+/** 只取 .env 的非空键名，绝不读取/返回值 */
 function envKeySet() {
   const keys = new Set();
   try {
     for (const line of fs.readFileSync(path.join(curHome(), '.env'), 'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
-      if (m) keys.add(m[1]);
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!m) continue;
+      let val = m[2].trim();
+      if (val.startsWith('#')) continue;
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1).trim();
+      } else {
+        val = val.replace(/\s+#.*$/, '').trim();
+      }
+      if (val) keys.add(m[1]);
     }
   } catch {}
   // 进程环境里显式设置的平台凭证也算（键名可能不在 .env 文件里）
-  for (const p of PLATFORMS) for (const k of p.env) if (process.env[k]) keys.add(k);
+  for (const p of PLATFORMS) for (const k of p.env) if (String(process.env[k] || '').trim()) keys.add(k);
   return keys;
 }
 
@@ -154,7 +163,11 @@ function overview() {
     },
     platforms,
     profiles: profileNames().map(profileInfo),
-    configuredCount: platforms.filter((p) => p.hasCredentials || p.declared).length,
+    configuredCount: platforms.filter((p) => (
+      p.env.length > 0
+        ? (p.presentEnv.length === p.env.length && (!p.declared || p.enabled))
+        : (p.declared && p.enabled)
+    )).length,
     envFile: path.join(curHome(), '.env'),
     configFile: path.join(curHome(), 'config.yaml'),
   };

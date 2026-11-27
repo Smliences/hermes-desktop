@@ -317,7 +317,7 @@
         <div class="pp-head">
           <div class="pp-head-main">
             <h1 class="pp-title">消息平台接入</h1>
-            <div class="pp-sub">把 Hermes 接到 Telegram、微信、飞书等平台 · 凭证只保存在本机 <code>~/.hermes/.env</code></div>
+            <div class="pp-sub">把 Hermes 接到 Telegram、微信、飞书等平台 · 凭证只保存在本机 <code id="gw-sub-env">~/.hermes/.env</code></div>
           </div>
           <button class="pp-icon-btn" id="gw-refresh" title="刷新状态">↻</button>
           <button class="pp-add" id="gw-open-config" title="打开 config.yaml">打开配置文件</button>
@@ -331,11 +331,14 @@
             <div class="gw-hero-meta" id="gw-service-meta"></div>
           </div>
           <div class="gw-hero-actions">
+            <button class="gw-btn" id="gw-cli-status" data-act="cli-status" title="执行 hermes gateway status">CLI 状态</button>
             <button class="gw-btn" data-act="start">启动</button>
             <button class="gw-btn" data-act="stop">停止</button>
             <button class="gw-btn" data-act="restart">重启</button>
           </div>
         </div>
+        <div id="gw-confirm" hidden></div>
+        <pre class="gw-cli-out" id="gw-cli-out" hidden></pre>
 
         <div class="gw-stats" id="gw-stats"></div>
 
@@ -350,7 +353,7 @@
         <div class="gw-profiles" id="gw-profiles"></div>
         <div class="gw-profiles-note">每个 profile 是独立实例（各自的会话库、插件、技能与配置）。用侧栏品牌行右侧的下拉或「设置 → Profile」即可切换；切换只改桌面端自己的选择，不写入 <code>~/.hermes</code>，终端 CLI 的 sticky 默认不受影响。</div>
         <div class="gw-footnote">
-          配置方式：在 <code>~/.hermes/.env</code> 填入对应凭证，或在 config.yaml 的 <code>platforms.*</code> 段声明；
+          配置方式：在 <code id="gw-foot-env">~/.hermes/.env</code> 填入对应凭证，或在 config.yaml 的 <code>platforms.*</code> 段声明；
           交互式向导请在终端运行 <code>hermes gateway setup</code>。本页只读取凭证的<strong>键名</strong>，不读取或显示任何凭证值。
         </div>
       </section>

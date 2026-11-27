@@ -836,16 +836,24 @@ function renderGatewayPage() {
     });
   }
 
+  const cur = (d.profiles || []).find((p) => p.current);
+  const homeLabel = (d.hermesHome && String(d.hermesHome))
+    || (cur && cur.name && cur.name !== 'default' ? `~/.hermes/profiles/${cur.name}` : '~/.hermes');
+  const envLabel = (d.envFile && String(d.envFile)) || `${homeLabel}/.env`;
+  const subEnv = $('#gw-sub-env'); if (subEnv) subEnv.textContent = envLabel;
+  const footEnv = $('#gw-foot-env'); if (footEnv) footEnv.textContent = envLabel;
+
   const stats = $('#gw-stats');
   if (stats) {
     const ps = d.platforms || [];
-    const configured = ps.filter((p) => p.hasCredentials || p.declared).length;
-    const cur = (d.profiles || []).find((p) => p.current);
+    const configured = typeof d.configuredCount === 'number'
+      ? d.configuredCount
+      : ps.filter((p) => gwStatusOf(p).cls === 'ok').length;
     stats.innerHTML = [
       [`${configured} / ${ps.length}`, '已配置平台'],
       [cur ? cur.name : 'default', '当前 Profile'],
       [(d.service && d.service.sessionStore) || '—', '会话库状态'],
-      ['~/.hermes', '配置目录'],
+      [homeLabel, '配置目录'],
     ].map(([v, k]) => `<div class="gw-stat"><b>${esc(String(v))}</b><span>${esc(k)}</span></div>`).join('');
   }
 
@@ -878,8 +886,9 @@ function renderGatewayPage() {
 
 function gwCardHtml(p) {
   const st = gwStatusOf(p);
+  const envPath = (gwData && gwData.envFile) || '~/.hermes/.env';
   const envHtml = p.env.length
-    ? `<div class="gw-env-label">所需凭证（写入 ~/.hermes/.env）</div><div class="gw-env-keys">${p.env.map((k) =>
+    ? `<div class="gw-env-label">所需凭证（写入 ${esc(envPath)}）</div><div class="gw-env-keys">${p.env.map((k) =>
         `<code class="${p.presentEnv.indexOf(k) >= 0 ? 'present' : ''}">${esc(k)}</code>`).join('')}</div>`
     : '<div class="gw-env-label">无需额外凭证，由 Gateway 内置提供</div>';
   return `<div class="gw-card" data-key="${esc(p.key)}">
@@ -907,17 +916,68 @@ function gwCopy(text) {
   ta.remove(); return ok;
 }
 
-async function gwRunAction(op) {
-  const label = { start: '启动', stop: '停止', restart: '重启' }[op];
-  if (!window.confirm(`${label} Gateway 后台服务？\n\n会执行 hermes gateway ${op}，影响所有消息平台的收发。`)) return;
+function gwShowCliOut(text, isErr) {
+  const pre = $('#gw-cli-out');
+  if (!pre) return;
+  const body = String(text || '').trim();
+  if (!body) { pre.hidden = true; pre.textContent = ''; return; }
+  pre.hidden = false;
+  pre.classList.toggle('err', !!isErr);
+  pre.textContent = body;
+}
+async function gwCheckCliStatus() {
+  const btn = $('#gw-cli-status');
   const api = window.hermesAPI;
-  if (!api || !api.gwAction) { toast('需要在桌面端运行', 2200); return; }
-  toast(`正在${label} Gateway…`, 2000);
+  if (!api || !api.gwCliStatus) { toast('此页需要在 Hermes 桌面端运行', 2000); return; }
+  if (btn) btn.disabled = true;
+  gwShowCliOut('正在执行 hermes gateway status…', false);
   try {
-    const r = await api.gwAction(op);
-    if (r && r.ok) { gwData = r.overview || gwData; renderGatewayPage(); toast(`Gateway 已${label}`, 2200); }
-    else toast(`${label}失败：${(r && (r.error || r.output)) || '未知错误'}`, 4200);
-  } catch (e) { toast(`${label}失败：${e.message}`, 3200); }
+    const r = await api.gwCliStatus();
+    if (r && r.ok) gwShowCliOut(r.text || '（无输出）', false);
+    else gwShowCliOut((r && (r.text || r.error)) || '读取 CLI 状态失败', true);
+  } catch (e) {
+    gwShowCliOut((e && e.message) || '读取 CLI 状态失败', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+function gwRunAction(op) {
+  const label = { start: '启动', stop: '停止', restart: '重启' }[op];
+  const host = $('#gw-confirm');
+  if (!host) return;
+  host.hidden = false;
+  host.innerHTML = `<div class="op-confirm" role="alertdialog" aria-label="确认操作">
+    <div class="op-confirm-title">${esc(label)} Gateway 后台服务？</div>
+    <code class="op-confirm-cmd">hermes gateway ${esc(op)}</code>
+    <div class="op-confirm-note">会影响所有消息平台的收发。</div>
+    <div class="op-confirm-btns">
+      <button class="kb-btn primary" type="button" data-gw-go="1">确认${esc(label)}</button>
+      <button class="kb-btn" type="button" data-gw-cancel="1">取消</button>
+    </div>
+  </div>`;
+  host.querySelector('[data-gw-cancel]').onclick = () => { host.hidden = true; host.innerHTML = ''; };
+  host.querySelector('[data-gw-go]').onclick = async () => {
+    host.hidden = true; host.innerHTML = '';
+    const api = window.hermesAPI;
+    if (!api || !api.gwAction) { toast('需要在桌面端运行', 2200); return; }
+    toast(`正在${label} Gateway…`, 2000);
+    try {
+      const r = await api.gwAction(op);
+      if (r && r.ok) {
+        gwData = r.overview || gwData;
+        renderGatewayPage();
+        gwShowCliOut(r.output || '', false);
+        toast(`Gateway 已${label}`, 2200);
+      } else {
+        const errTxt = (r && (r.output || r.error)) || '未知错误';
+        gwShowCliOut(errTxt, true);
+        toast(`${label}失败，详见上方输出`, 3600);
+      }
+    } catch (e) {
+      gwShowCliOut(e.message, true);
+      toast(`${label}失败：${e.message}`, 3200);
+    }
+  };
 }
 
 $('#gw-refresh').onclick = () => loadGatewayOverview();
@@ -931,6 +991,7 @@ $('#gw-search-clear').onclick = () => { $('#gw-search').value = ''; renderGatewa
 $('#gateway-page').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const act = b.dataset.act;
+  if (act === 'cli-status') return gwCheckCliStatus();
   if (act === 'start' || act === 'stop' || act === 'restart') return gwRunAction(act);
   if (act === 'copy-setup') {
     const cmd = b.dataset.cmd || 'hermes gateway setup';

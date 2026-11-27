@@ -1520,6 +1520,15 @@ body.rail-resizing iframe { pointer-events: none; }
 /* ══════════ 消息平台接入页 ══════════ */
 #gateway-page { padding: 52px 32px 48px; }
 #gateway-page .pp-head { max-width: 980px; }
+.gw-cli-out {
+  max-width: 980px; margin: 0 0 14px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--fill-2); color: var(--text-2);
+  font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow: auto;
+}
+.gw-cli-out.err { border-color: var(--red); color: var(--red); }
+#gw-confirm { max-width: 980px; margin: 0 0 14px; }
 #gateway-page .pp-sub code, .gw-footnote code {
   font: 400 10.5px/1.4 var(--mono); background: var(--fill-2);
   border-radius: var(--r-xs); padding: 2px 5px; color: var(--text-2);

@@ -525,4 +525,4 @@
 - [x] **设置页深层功能**：Cron 常用调度预设与格式校验（清理无效 `doctor` 调用）；模型提供商明示只读并支持快捷打开配置文件；看板拖拽边缘滚动（`renderer/settings.js`、`renderer/kanban-board.js`）
 - [x] **架构拆分与去 `zoom`**：移除 `#sidebar`/`#iconrail` `zoom: 1.1` 并升级 `#sb-resize`；渐进拆分 `core/utils.js` 与 `chat/markdown.js`；改造 `test-contracts.js` 支持子目录聚合（完整拆分其余模块与 CSS 去重可按需继续迭代）
 - [x] **遗留资产清债**：清理废弃 `node-pty` / `fix-pty-perm.js` / `asarUnpack`；补齐 `mock-bridge.js` 接口桩
-- [ ] **【解冻后储备】Gateway 页改良**：支持多 Profile 配置路径、修正 `.env` 空值与已配置统计、接入 `gwCliStatus()` 与内联排错输出、`resolveHermesBin()` 统一探测
+- [x] **【解冻后储备】Gateway 页改良**：支持多 Profile 配置路径、修正 `.env` 空值与已配置统计、接入 `gwCliStatus()` 与内联排错输出、`resolveHermesBin()` 统一探测
