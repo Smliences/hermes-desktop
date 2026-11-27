@@ -1005,6 +1005,57 @@ let CHROME_BIN = null;
   ok('快捷键帮助页包含「看板」分组', s17Help.includes('看板'), JSON.stringify(s17Help));
   await cdp.ev(`(() => { toggleHelp(false); localStorage.removeItem('kb-prefs'); return 1; })()`);
 
+  /* S18 富文本高亮/折叠 + 预览历史/清空 + 运行中消息排队 */
+  console.log('\nS18 富文本高亮折叠、预览历史与消息排队');
+  const s18Md = await cdp.ev(`(() => {
+    const longCode = Array.from({ length: 35 }, (_, i) => 'const x' + i + ' = ' + i + ';').join('\\n');
+    const html = renderMarkdown('\`\`\`js\\n' + longCode + '\\n\`\`\`\\n\\n| A | B |\\n| --- | --- |\\n| 1 | 2 |');
+    const box = document.createElement('div');
+    box.innerHTML = html;
+    document.querySelector('#chat').appendChild(box);
+    const codeEl = box.querySelector('.md-code');
+    const foldBtn = box.querySelector('.md-code-fold');
+    const hasKw = !!box.querySelector('.hl-kw');
+    const collapsedBefore = !!codeEl && codeEl.classList.contains('collapsed');
+    if (foldBtn) foldBtn.click();
+    const collapsedAfter = !!codeEl && codeEl.classList.contains('collapsed');
+    const tblBtns = [...box.querySelectorAll('.md-table-copy')].map((b) => b.dataset.fmt);
+    box.remove();
+    return { hasKw, collapsedBefore, collapsedAfter, tblBtns };
+  })()`);
+  ok('超 30 行代码块默认折叠、支持语法高亮与展开/收起切换', s18Md.hasKw && s18Md.collapsedBefore && !s18Md.collapsedAfter, JSON.stringify(s18Md));
+  ok('GFM 表格渲染 Markdown 与 CSV 复制按钮', s18Md.tblBtns.includes('md') && s18Md.tblBtns.includes('csv'), JSON.stringify(s18Md.tblBtns));
+
+  await cdp.ev(`(async () => { toggleRail(true); setRailTab('preview'); await loadPreviewInput('/tmp/demo/report.md'); await loadPreviewInput('/tmp/demo/data.csv'); })()`);
+  await sleep(300);
+  const s18Pv1 = await cdp.ev(`({ path: document.querySelector('#pv-path').value, backDis: document.querySelector('#pv-back').disabled, fwdDis: document.querySelector('#pv-fwd').disabled })`);
+  await cdp.ev(`document.querySelector('#pv-back').click()`); await sleep(250);
+  const s18PvBack = await cdp.ev(`({ path: document.querySelector('#pv-path').value, fwdDis: document.querySelector('#pv-fwd').disabled })`);
+  await cdp.ev(`document.querySelector('#pv-fwd').click()`); await sleep(250);
+  const s18PvFwd = await cdp.ev(`({ path: document.querySelector('#pv-path').value })`);
+  await cdp.ev(`document.querySelector('#pv-clear').click()`); await sleep(200);
+  const s18PvClr = await cdp.ev(`({ path: document.querySelector('#pv-path').value, emptyVisible: !document.querySelector('#pv-empty').hidden })`);
+  ok('预览栏支持后退 / 前进历史导航与清空重置',
+    s18Pv1.path.endsWith('data.csv') && !s18Pv1.backDis && s18Pv1.fwdDis &&
+    s18PvBack.path.endsWith('report.md') && !s18PvBack.fwdDis &&
+    s18PvFwd.path.endsWith('data.csv') &&
+    s18PvClr.path === '' && s18PvClr.emptyVisible,
+    JSON.stringify({ s18Pv1, s18PvBack, s18PvFwd, s18PvClr }));
+
+  const s18Queue = await cdp.ev(`(() => {
+    const tab = activeTab();
+    const prevRun = tab.running;
+    tab.running = true;
+    tab.queued = [];
+    send('排队消息测试');
+    const len = tab.queued.length;
+    const first = tab.queued[0] && tab.queued[0].text;
+    tab.queued = [];
+    tab.running = prevRun;
+    return { len, first };
+  })()`);
+  ok('回合运行中发送消息自动进入 tab.queued 排队', s18Queue.len === 1 && s18Queue.first === '排队消息测试', JSON.stringify(s18Queue));
+
   cdp.close(); srv.close();
   const fails = results.filter((r) => !r.pass);
   console.log(`\nUI 冒烟：${results.length - fails.length} 通过 / ${fails.length} 失败${fails.length ? '（截图在 /tmp/hermes-ui-*.png）' : ''}`);
