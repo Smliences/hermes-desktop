@@ -2,7 +2,9 @@
 
 连接本机 **hermes CLI**（Nous Research Hermes Agent）的 Electron 桌面客户端。
 
-视觉语言为 Claude Code 风格的暖纸色系（Anthropic 暖中性 + 陶土橘强调、发丝描边、衬线标题）；功能对齐 hermes 官方桌面版核心场景：常驻后端流式对话、工具调用可视化、会话管理、多 profile、插件/技能与市场、右侧预览 / 看板双页签。
+视觉语言采用**暖纸色系 + 极简墨黑 / 石墨灰**设计（发丝描边、衬线大标题、双主题自适应）；功能覆盖常驻后端流式对话、工具调用可视化、会话与项目管理、多 Profile 切换、插件/技能与市场、右侧「预览 / 看板」双页签，以及桌面悬浮球与迷你聊天小窗。
+
+> **目录导航**：[快速开始](#快速开始) · [总体架构](#一总体架构) · [五条数据通道](#二五条数据通道) · [Profile 模型](#三profile-模型) · [功能现状](#四功能现状) · [设计系统](#五设计系统) · [安全设计](#六安全设计) · [测试](#七测试) · [打包与部署](#八打包与部署) · [已知边界](#九已知边界)
 
 ## 快速开始
 
@@ -204,15 +206,16 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 | 设置页：定时任务（任务列表 / 调度器状态 / 运行历史 / 暂停·恢复·立即运行·移除 / 新建恒为暂停） | ✅ |
 | 看板：CLI 原生任务队列（统计条 + 9 状态筛选 + 分组卡片网格 / 经典列视图双布局、卡片详情抽屉、看板/受让人/租户/搜索筛选、`session_id` 跳会话、`latest_event_id` 轮询、空状态引导） | ✅（另支持**新建任务 / 新建看板 / 删除任务 / 提交派发 / 拖拽卡片指派给指定 worker 并可选立即启动 / 试运行预览 / 手动派发一次 / 活跃 worker / 拆解此任务（调辅助模型拆成子任务图，仅收集箱、二次确认、最长 3 分钟）** / **补规格**（specify，Goal·Approach·验收标准四段化并推进 todo） / **估算工作量**（S/M/L + token 量级，按 taskId 缓存） / **发布评论**（追加文本、不计费）；批量操作、终止 worker 仍留给 CLI / Dashboard） |
 | 项目 / 工作空间（对齐官方 `project-dialog`）：侧栏「新建项目」「打开文件夹为项目」、项目行 ⋯ 菜单（重命名 / **项目设置** / 添加文件夹 / 设为活动 / 在访达中显示 / 复制路径 / **删除项目**） | ✅（**项目设置**弹窗：名称 / 描述 / 文件夹增删 /「设为主」，保存时按快照算差量，只写改过的部分；**删除项目**走官方 `projects.delete` RPC，确认弹窗里可勾选「同时把磁盘上的文件夹移到废纸篓」（`shell.trashItem`，可恢复；服务端先 `projects.get` 核对路径都属于该项目，失败则保留项目记录），默认只移除项目记录、不动磁盘文件 / git 仓库 / 工作树；删完刷新侧栏树，落在该项目里的 `tab.cwd` 自动回落默认目录；一个弹窗五模式 create / rename / add-folder / settings / delete；弹窗在 `#frame` 外的全局浮层，从聊天 / 设置页直接打开**不跳看板页**，与命令面板共用 `frame.inert` 背景隔离；文件夹行带「＋ 新建文件夹…」（在首个文件夹下建一层，父目录不存在/重名/含斜杠都拒绝），原生面板也可新建目录；输入区「权限」胶囊右侧有项目下拉（自绘 `hm-select`，候选 = 侧栏显式项目，选中即把项目根写进 `tab.cwd`，已开始的会话另开项目页签；**列表末尾恒有一行「＋ 新建项目…」动作行**——它不参与取值、不勾选、只派发 `select-action`，点了就地开新建项目弹窗，当前项目的 `tab.cwd` 不变、下拉也不吞焦点）；侧栏项目分组可折叠（点项目名收/开，状态记在 localStorage；展开后首屏 5 条、「再显示」每次 +50，空项目显示「暂无会话」，「＋」会先展开目标分组），项目头带底色 + 颜色圆点，与时间分隔条在视觉上分成两层；项目之外的会话按 **今天 / 昨天 / 其他会话** 分桶（`last_active || started_at`，凌晨 4 点滚夜），每条分隔条可折叠、折叠后显示条数（`sb-date-open` 存布尔）；会话标题按官方 `sessionTitle` 兜底（标题 → 首条消息预览 → 未命名会话，退化成会话 id 的标题不当标题用）；原生目录选择可多选、首条标「主」、选完按目录名自动命名；名称 + ≥1 文件夹才可提交；创建带 `--use` 设为活动、想法写 `IDEA.md` 且不覆盖、建完回到项目根开新会话；失败保留表单可重试） |
-| 小球模式：黄灯 / ⌘M / ⌘⇧M / 命令面板 `/orb` 把窗口收成桌面一颗可拖动的球，**点球弹出迷你聊天窗**（380×520），在球旁边就能接着聊 | ✅（`main/orb.js` 球 + `main/orb-chat.js` 迷你窗，主窗口只 `hide()` 不改几何；小窗与主窗口共用同一个 chat tab；球面体积感 / 单信号状态系统 / 球窗连接闭环 / 无障碍播报；`main/orb-access.js` 全局快捷键 + 球右键菜单里的双模式开关（菜单栏托盘已移除）、连接轨按回合呼吸、开窗即聚焦输入框） |
+| 小球模式：黄灯 / ⌘M / ⌘⇧M / 命令面板 `/orb` 把窗口收成桌面一颗可拖动的球，**点球弹出迷你聊天窗**（380×520），在球旁边就能接着聊 | ✅（`main/orb.js` 84×84 透明球窗 + `main/orb-chat.js` 豆包风格迷你窗，主窗口只 `hide()` 不改几何；小窗支持顶部居中胶囊按项目折叠切换/新建会话与切 Profile、底部输入卡直接切换模型，与主窗口共用同一个 chat tab；`main/orb-access.js` 全局快捷键 + 球右键菜单开关） |
 
 ### 小球模式（收起成桌面小圆球）＋ 迷你聊天窗
 
 - 触发：黄灯最小化 / `⌘M` / `⌘⇧M` / 命令面板 `/orb`。
-- **点球 → 弹出迷你聊天窗**（380×520，贴着球摆：球在右半屏就开在左侧）；再点球 / Esc / ⌘W / 右上角 × 收起。**不恢复主窗口**。
+- **点球 → 弹出迷你聊天窗**（380×520，贴着球摆：球在右半屏就开在左侧）；再点球 / Esc / ⌘W / 顶部左侧 `—` 收起。**不恢复主窗口**。
+- **豆包风格迷你窗交互**：无分割线极简顶栏 + 居中会话胶囊（点开可按显式项目折叠选择历史会话、分组查看「其他会话」、点击「+ 新建」原地开新会话或切换 Profile）+ 右上角「在主窗口中打开」；底部为悬浮圆角输入卡，左下角支持直接点击切换当前模型，右下角为圆形发送/停止按钮。
 - 小窗里发消息、看流式回复、停止回合、当场批准危险操作，都和主窗口**同一个会话**：主窗口只是 `hide()`，渲染层与 `tab.items` 还活着；小窗发出的用户消息会回灌给主窗口（`orb:user-message`），所以回主窗看到的是完整对话，不会「只有回答、没有提问」。
 - 小窗右上角 ⤢ = 在 Hermes 主窗口中打开（`restore()→show()`，尺寸/位置/滚动位置原样不动）；球右键「打开 Hermes 窗口」同效。
-- 球是**独立 BrowserWindow**（68×68，透明、无边框、`skipTaskbar`、`pop-up-menu` 层级 + 跨空间可见），小窗同样是独立透明窗口（可拖拽改尺寸 320–560 × 400–780）。
+- 球是**独立 BrowserWindow**（84×84，四周留足 16px 缓冲区避免外投影与呼吸光晕被裁成方形底座，`roundedCorners: false`、透明、无边框、`skipTaskbar`、`pop-up-menu` 层级 + 跨空间可见），小窗同样是独立透明窗口（可拖拽改尺寸 320–560 × 400–780）。
 - **球面与状态系统**：球体用两层径向渐变 + 顶部镜面高光 + 底部环境反光做出体积感（不是纯色圆盘）。每个状态**只有一个主视觉信号**，避免 52px 里堆噪点：idle 静息、busy 一圈琥珀旋转弧（不叠状态点）、approval 右上角珊瑚数字徽标（不叠状态点）、offline 右下角暗红点。状态由主进程按「在途回合数 / 待审批数 / `backendInfo().state`」推导，5s 低频对齐一次；`starting/idle` 不报红。
 - **球 ↔ 小窗的连接闭环**：小窗展开时球亮一圈细琥珀内环、H 字标提亮，`aria-pressed` 与状态播报同步更新；小窗按实时方位在朝球那一侧显示一条短连接轨，球拖到另一侧时自动换边。不论从点球、Esc、×、拖球还是 ⤢ 收起，主进程都会回推球态，内环不会残留。**回合进行中连接轨会呼吸**（透明度 + 纵向伸缩 1.9s），状态只认主进程下发的 `running`（`orbchat:state` / `bootstrap` / `sync`），渲染层不根据本地事件自造状态机；`prefers-reduced-motion` 下停转但保留一条完整可读的静态轨。
 - **球的 Profile 下拉**：球底部 hover 时浮出一枚细箭头（也可右键或键盘 `↓`），弹出「切换 Profile」与「最近会话」两组。每个 profile 都有二级菜单列出最近 5 个会话，第 6 个起收进「更多会话」；菜单数据由主进程只读各 profile 的 `state.db` 拼装（路径经 `validName` / `exists` 白名单化），球窗口的 preload 一行未动，拿不到任何绝对路径或 token。点会话会展开主窗口；若会话属于别的 profile，复用渲染层既有 `doSwitchProfile()` 链路（重启后端 + reload），重载后由一次性 `sessionStorage` 意图补上打开动作，不在球里另造状态机。
@@ -229,10 +232,10 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 
 ## 五、设计系统
 
-- 亮色 `--canvas #FAF9F5` / `--sidebar-fill #F5F4EE` / `--text #141413`；深色暖炭 `#1A1A18`。强调色陶土系，实心按钮前景用 `--on-blue`（亮色白字、深色深字）。
+- 亮色 `--canvas #FAF9F5` / `--sidebar-fill #F5F4EE` / `--text #141413`；深色暖炭 `#1A1A18`。强调体系采用极简墨黑与石墨灰（`--blue: #242422` / 深色 `#e8e5dc`，`--accent: #525049` / 深色 `#a6a297`），实心按钮前景用 `--on-blue`（亮色白字、深色深字）；仅警告、权限开启状态与卡住提示保留琥珀色 `--yellow`。
 - **所有文本色在 canvas / sidebar / fill-2 上均 ≥ 4.5:1（WCAG AA）**，装饰色 ≥ 3:1；四级文字色阶 `--text` / `--text-2` / `--text-3` / `--caption` 在两主题都拉开层级。全局 `:focus-visible` 焦点环、`prefers-reduced-motion` 支持。
 - 圆角 3/6/8/10/12，靠 1px 发丝描边分层，极轻阴影；大标题与字标用衬线，正文系统 sans，代码等宽。**唯一例外是输入卡**：`--r-2xl: 20px` + 两层柔影（1px 贴地 + 26px 大范围极淡），只给 `#composer` 用。
-- **输入区按 dsh 桌面版改版（2026-11-11）**：左侧圆形 `+` 附件键（纯图标，必带 `aria-label`）＋「完全权限 / 审批模式」胶囊（`aria-pressed`，开关不是菜单，所以不加下拉箭头）；右侧模型 chip 用 `⌄`；发送键两态 —— 空输入是 `--blue-soft` 淡底 + 强调色箭头，敲了字才落成实心 `#ad4c2a` + 白箭头（`syncSendState()` 挂在 `autoGrow()` 上，草稿恢复 / 回车历史 / 发送清空都会跟着更新）。占位文案「发消息或创建任务，/ 调用指令，@ 文件或对话」有两处（HTML 初值 + `syncComposerState` 的运行态分支），改一处不算改完。
+- **输入区与落地页（2026-11-27 改版）**：工具栏全部按钮统一为 28px 无边框胶囊（左侧圆形 `+` 附件键＋「完全权限 / 审批模式」＋项目下拉，右侧模型 chip `⌄`）；发送键两态 —— 空输入是 `--fill-2` 柔底，敲了字才落成实心墨黑 `--blue` + `--on-blue` 箭头（`syncSendState()` 挂在 `autoGrow()` 上，草稿恢复 / 回车历史 / 发送清空都会跟着更新）；新会话落地页为 4 格快捷指令卡（窄主区自动折叠为 2×2）。占位文案「发消息或创建任务，/ 调用指令，@ 文件或对话」有两处（HTML 初值 + `syncComposerState` 的运行态分支），改一处不算改完。
 - **底部用量带**：`↻ N 轮 M 步`（助手回合数 / 工具调用数，实时算）· `▤ 总量 tok · 缓存命中 x%`（输入输出拆分进 title）· **上下文圆环 + 百分比**。圆环是 16px 的 SVG（r=8、`stroke-dasharray:50.27` 与 JS 的 `CTX_RING_C` 同值、`rotate(-90deg)` 从 12 点起顺时针、端点圆角），底环用 `color-mix(--text-3 22%)` 而不是固定浅色，深色主题下自动变亮；>80% 转成告警色。**没有横向进度条**——它和文字并排像一根多余的分隔线。`#st-ctx` 的 title 保留 `已用/上限` 明细，无用量时整组 `hidden`（`display:inline-flex` 会盖掉 `[hidden]`，所以有一条显式 `display:none`）。会话 id 只显示前 8 位。
 - **消息底部信息行**：与 dsh 一致**整行常显**（不依赖悬停）—— 16px 描边图标（复制 / 用户消息的重试）+ 「圆柱图标 + 用量 N tok」（**不套胶囊描边**）+ `HH:MM` 时间（完整到秒在 title 里），整个 `.msg-foot-row` 用 `absolute` 贴在本条消息底边下方 6px、零布局影响，消息自己的 `margin-bottom: 34px` 让出通道。悬停只把图标提亮到 `--text-2`，位置与宽度不变（否则数字会左右跳）；**不做点赞 / 倒赞**（用户 2026-11-11 明确不要）。单条用量：实时回合取「会话累计值的差」（`tab.usageBase`）；**CLI 的 `messages.token_count` 实测整列为 NULL**，历史消息退回按字符估算（汉字 1.3 字/token、其余 3.8 字符/token）并标 `≈`，title 注明估算口径。
 - **几何度量是用户多轮定稿的**（侧栏缩放与拖拽宽度、图标对齐、页面引导按钮坐标），改视觉只碰颜色 / 圆角 / 描边 / 阴影 / 字体 / 状态反馈，不要改布局尺寸。**品牌行 logo 是例外**：2026-11-11 按反馈左移到与下方菜单图标左沿持平（`.sb-menu` 10px + `.sb-item` 10px = 20px），切换 Profile 的胶囊从 `position:absolute; right:-14px` 改成 `margin-left:auto` 的常规 flex 项并放宽名字限宽；侧栏收窄时优先压缩字标，胶囊永远完整可见、不再被 `overflow:hidden` 裁成 `defa…`。
@@ -249,7 +252,7 @@ profile 会连磁盘缓存一起删除，避免读到操作前的旧列表。**�
 - MCP 添加只放行 https 与本机 http，`stdio --args` 等交互式流程不开放；定时任务新建恒带 `--paused`，暂停/恢复/立即运行/移除均需二次确认卡；两者写操作后回读 CLI 列表确认终态，回读失败只给 warning 不谎称失败。
 - 看板 REST 客户端读固定 GET、写只有十条路径白名单（body 逐字段清洗、幂等键、默认 triage、绝不动 current 指针），严格 id 与受让人正则 + loopback 端口校验；会话 token 不进 preload / renderer / DOM，任务行与派发结果按字段白名单投影，工作区绝对路径、认领锁、worker PID 一律不透出。删除任务、提交派发、拖拽确认、真派发、拆解、补规格、估算、发布评论都需二次确认；新建弹窗打开时看板主体（含投放区）被局部 `inert` 隔离。派发 `dry_run` 缺省 true、并发上限 8（对齐 CLI 默认）、串行锁；拖拽派发额外先预演确认队首，不匹配时零写入。计费端点只有三条且全部收紧：`POST /tasks/:id/decompose`（200s）、`POST /tasks/:id/specify`（150s）、`POST /tasks/:id/estimate`（90s）——服务层一律要求入参 `confirm === true`（缺省拒绝，请求都不发）、失败不自动重试、全局同时只允许一次在途；拆解与补规格只对 triage 任务有意义，估算不改数据但同样计费。其余会改 CLI 编排配置或再引入 LLM 计费的端点（裸 `/estimate`、`/tasks/bulk`、`/links`、`/reclaim`、终止 worker、`/orchestration` 直写）仍然一个都不接。删除任务、提交派发、拖拽确认、真派发、拆解、补规格、估算都需二次确认。
 - 日志落 `userData/logs/app.log`，单行 JSON、2MB 轮转，写入前对 token / api_key / password / Bearer / WS URL 脱敏。
-- **小球与迷你聊天窗与主窗口同等级沙箱**：各自独立 preload —— `preload/orb-preload.js` 只暴露 `drag / dragEnd / click / restore / menu / onStatus`，`preload/orb-chat-preload.js` 只暴露 `bootstrap / send / abort / approve / expand / close / draft` 与六个订阅；通道分别限定 `orb:` / `orbchat:` 前缀。`transparent + alwaysOnTop` 不影响 `sandbox: true` 与 `contextIsolation: true`，两个窗口都拿不到 token、CLI、看板、终端、文件接口。IPC 只接受本窗口 `webContents` 的 sender，球的位置写入前收进 `workArea`；小窗只推五条固定事件（`PUSHABLE` 白名单），草稿与会话上下文都只存主进程内存、不落盘。
+- **小球与迷你聊天窗与主窗口同等级沙箱**：各自独立 preload —— `preload/orb-preload.js` 只暴露 `drag / dragEnd / click / restore / menu / onStatus`，`preload/orb-chat-preload.js` 只暴露 `bootstrap / listSessions / selectSession / listModels / setModel / send / abort / approve / expand / close / draft` 与六个订阅；通道分别限定 `orb:` / `orbchat:` 前缀。`transparent + alwaysOnTop` 不影响 `sandbox: true` 与 `contextIsolation: true`，两个窗口都拿不到 token、CLI、看板、终端、文件接口。IPC 只接受本窗口 `webContents` 的 sender，球的位置写入前收进 `workArea`；小窗只推六条固定事件（`PUSHABLE` 白名单），草稿与会话上下文都只存主进程内存、不落盘。
 - **全局快捷键只在主进程**：`main/orb-access.js` 不注册任何 IPC、不暴露 `contextBridge`，两个小窗的 preload 暴露面一行未动；`main/orb-prefs.js` 是纯 fs 模块（可在零依赖单测里跑），只写 `userData/orb-prefs.json`。模式与快捷键开关都走主进程的菜单回调，renderer 拿不到 `globalShortcut` 能力；菜单栏 `Tray` 自 2026-11-11 起整体移除，`main.js` 里也查不到 `new Tray` / `setContextMenu`。
 - **CDP 调试口不再是后门**：仅 `HERMES_CDP_PORT` 显式环境变量开启，打包版还需 `HERMES_ALLOW_CDP=1` 或 `--dev`；旧实现只要 `/tmp/hermes_cdp_port` 存在即开放（`/tmp` 全局可写）。
 - 单实例锁避免多开拉起多个 serve 后端 / 并发写坏 config.yaml；`will-quit` 统一 dispose watcher / 后端 / 预览。
