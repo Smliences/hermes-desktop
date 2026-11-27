@@ -137,12 +137,15 @@ function nodeOf(it) {
 
   if (it.kind === 'tool') {
     row.className = 'oc-msg is-tool' + (it.state === 'running' ? '' : it.isError ? ' is-error' : ' is-done');
+    const body = document.createElement('div');
+    body.className = 'oc-body';
     const dot = document.createElement('span');
     dot.className = 'oc-tool-dot';
     const label = document.createElement('span');
     label.textContent = (it.name || '工具') + (it.state === 'running' ? ' · 运行中' : '');
-    row.appendChild(dot);
-    row.appendChild(label);
+    body.appendChild(dot);
+    body.appendChild(label);
+    row.appendChild(body);
     return row;
   }
 
@@ -167,6 +170,20 @@ function nodeOf(it) {
   if (!it.text && !it.done) body.appendChild(typingNode());
   else renderText(body, it.text);
   row.appendChild(body);
+  if (it.done && it.text) {
+    const cp = document.createElement('button');
+    cp.type = 'button';
+    cp.className = 'oc-copy';
+    cp.title = '复制回复';
+    cp.textContent = '复制';
+    cp.addEventListener('click', () => {
+      navigator.clipboard.writeText(String(it.text || '')).then(() => {
+        cp.textContent = '已复制';
+        setTimeout(() => { cp.textContent = '复制'; }, 1200);
+      }).catch(() => {});
+    });
+    row.appendChild(cp);
+  }
   return row;
 }
 
@@ -285,6 +302,12 @@ function onEvent(evt) {
       if (evt.model) { S.model = evt.model; syncMeta(); }
       break;
     }
+    case 'error': {
+      S.running = false;
+      pushItem({ kind: 'error', text: String(evt.text || '出错了') });
+      setStatus('');
+      break;
+    }
     case 'result': {
       const last = lastAi();
       if (last && !last.done) {
@@ -370,6 +393,15 @@ els.input.addEventListener('input', () => {
   saveDraft();
 });
 
+function handleEscape() {
+  if (S.running) {
+    stop();
+    setStatus('已停止（再按 Esc 收起）', true);
+  } else {
+    api.close();
+  }
+}
+
 els.input.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -379,7 +411,7 @@ els.input.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopPropagation();
-    api.close();
+    handleEscape();
   }
 });
 
@@ -389,7 +421,7 @@ document.getElementById('oc-close').addEventListener('click', () => api.close())
 document.getElementById('oc-expand').addEventListener('click', () => api.expand());
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { event.preventDefault(); api.close(); }
+  if (event.key === 'Escape') { event.preventDefault(); handleEscape(); }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'w') { event.preventDefault(); api.close(); }
 });
 
@@ -416,10 +448,12 @@ api.onApprovalResolved((p) => {
 
 api.onState((p) => {
   if (!p) return;
+  if (p.side) applySide(p.side);
+  if (p.fontSize) applyFontSize(p.fontSize);
   if (typeof p.running === 'boolean') { S.running = p.running; applyTurnState(p.running); }
   if (S.running) {
     setStatus('');
-  } else {
+  } else if (typeof p.running === 'boolean') {
     const last = lastAi();
     if (last && !last.done) last.done = true;
     setStatus('');
@@ -430,6 +464,10 @@ api.onState((p) => {
 /** 主进程按球与面板的实时坐标算方位：面板被拖到球的另一侧时要跟着翻 */
 function applySide(side) {
   document.body.dataset.side = side === 'left' ? 'left' : 'right';
+}
+function applyFontSize(fs) {
+  const n = Number(fs);
+  if (Number.isFinite(n) && n >= 11 && n <= 20) document.body.style.fontSize = `${n}px`;
 }
 
 /** 主进程每次「点球 / ⌥⇧H」把面板亮出来都会发这条：光标直接落进输入框，
@@ -445,6 +483,7 @@ api.onFocus(() => {
 api.onSync((p) => {
   if (!p) return;
   if (p.side) applySide(p.side);
+  if (p.fontSize) applyFontSize(p.fontSize);
   if (p.theme) S.theme = p.theme;
   if (p.title) S.title = p.title;
   if (p.model) S.model = p.model;
@@ -457,8 +496,23 @@ api.onSync((p) => {
     S.tabId = p.tabId || S.tabId;
     S.sessionId = p.sessionId || null;
   }
+  mergeApprovals(p.approvals);
   bump();
 });
+
+function mergeApprovals(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  for (const req of list) {
+    if (!req || !req.requestId) continue;
+    if (S.items.some((x) => x.kind === 'approval' && x.requestId === req.requestId)) continue;
+    S.items.push({
+      kind: 'approval',
+      requestId: req.requestId,
+      tool: req.tool || '工具调用',
+      command: req.command || '',
+    });
+  }
+}
 
 /** 把主窗快照铺进面板：最后一条助手消息在回合未结束时保持 done=false，
  *  这样紧接着到达的 delta 会续写同一条，而不是另起一段。 */
@@ -476,6 +530,7 @@ function hydrate(messages, running) {
     const b = await api.bootstrap();
     if (b) {
       applySide(b.side);
+      if (b.fontSize) applyFontSize(b.fontSize);
       S.tabId = b.tabId || '';
       S.sessionId = b.sessionId || null;
       S.title = b.title || '新会话';
@@ -484,6 +539,7 @@ function hydrate(messages, running) {
       S.running = !!b.running;
       applyTurnState(S.running);
       hydrate(b.messages, S.running);
+      mergeApprovals(b.approvals);
       if (b.draft) els.input.value = b.draft;
     }
   } catch (err) {

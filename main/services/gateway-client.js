@@ -94,8 +94,17 @@ class GatewayConnection {
 
   _startHeartbeat() {
     this._stopHeartbeat();
+    this._hbFails = 0;
     this.heartbeat = setInterval(() => {
-      this.rpc('ping', {}, 10000).catch(() => {});
+      this.rpc('ping', {}, 10000).then(() => {
+        this._hbFails = 0;
+      }).catch(() => {
+        this._hbFails += 1;
+        if (this._hbFails >= 2 && this.ws && !this.closed) {
+          this._hbFails = 0;
+          try { this.ws.terminate ? this.ws.terminate() : this.ws.close(); } catch { /* ignore */ }
+        }
+      });
     }, HEARTBEAT_INTERVAL_MS);
     if (this.heartbeat.unref) this.heartbeat.unref();
   }

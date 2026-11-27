@@ -2,156 +2,6 @@
 /* ═══════════ Hermes Desktop Client — renderer 主逻辑（dsh web 风格） ═══════════ */
 /* global hermesAPI */
 
-/* ---------- 工具函数 ---------- */
-const $ = (sel) => document.querySelector(sel);
-// 单引号一并转义：所有 innerHTML 属性插值都经过这里，避免属性上下文逃逸
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-/** IPC 返回值形态归一化：主进程异常时返回 {ok:false} 而非数组，旧的 .map 会白屏。 */
-const arr = (v) => (Array.isArray(v) ? v : []);
-/** 超长工具输出 / 代码截断，避免一次 innerHTML 卡死渲染进程。 */
-const clip = (s, n = 20000) => {
-  const t = String(s == null ? '' : s);
-  return t.length > n ? `${t.slice(0, n)}\n…（已截断，共 ${t.length} 字符）` : t;
-};
-const safeStringify = (v) => { try { return JSON.stringify(v, null, 2) || ''; } catch { return String(v); } };
-const safeGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
-const safeSet = (k, v) => { try { localStorage.setItem(k, v); return true; } catch { return false; } };
-const fmtTokens = (n) => {
-  const v = Number(n) || 0;
-  if (v >= 1000000) return (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'M';
-  if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
-  return String(Math.round(v));
-};
-const uid = () => Math.random().toString(36).slice(2, 10);
-/** 独立 live region：只播状态变化，不随聊天流全量重建而重播整段对话。 */
-function a11y(msg) {
-  const el = $('#a11y-status'); if (!el) return;
-  el.textContent = '';
-  setTimeout(() => { el.textContent = String(msg); }, 20);
-}
-function toast(msg, ms = 2200) {
-  const t = $('#toast'); if (!t) return;
-  t.textContent = msg; t.hidden = false;
-  a11y(msg);
-  clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, ms);
-}
-
-/* 轻量 Markdown（流式安全：先转义再渲染） */
-/** 行内 Markdown：输入为纯文本，输出为安全 HTML（图片 URL 限 http/https/data:image）。 */
-function renderInline(s) {
-  const imgs = [];
-  let t = String(s).replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, (_, alt, url) => {
-    imgs.push(`<img class="md-img" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" />`);
-    return `\u0000I${imgs.length - 1}\u0000`;
-  });
-  t = esc(t)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  return t.replace(/\u0000I(\d+)\u0000/g, (_, i) => imgs[Number(i)] || '');
-}
-/** 代码块：语言标签 + 行数 + 复制按钮，长行横向滚动不折行。 */
-function mdCodeBlock(lang, code) {
-  const body = String(code).replace(/\n$/, '');
-  const n = body.split('\n').length;
-  return `<div class="md-code"><div class="md-code-head">` +
-    `<span class="md-code-lang">${esc(lang || 'text')}</span><span class="md-code-lines">${n} 行</span>` +
-    `<span class="md-code-hint" aria-hidden="true">⇆ 可横向滚动</span>` +
-    `<button class="md-code-copy" type="button" title="复制代码">复制</button></div>` +
-    `<pre><code>${esc(body)}</code></pre></div>`;
-}
-/** GFM 表格：第二行必须是分隔行（含 - 与 |），否则原样返回。 */
-function mdTable(raw) {
-  const rows = String(raw).trim().split('\n').map((l) => l.trim()).filter(Boolean);
-  if (rows.length < 2) return raw;
-  if (!/^[\s|:-]+$/.test(rows[1]) || !rows[1].includes('-') || !rows[1].includes('|')) return raw;
-  const cells = (l) => {
-    let s = l.trim();
-    if (s.startsWith('|')) s = s.slice(1);
-    if (s.endsWith('|')) s = s.slice(0, -1);
-    return s.split('|').map((x) => x.trim());
-  };
-  const head = cells(rows[0]);
-  const aligns = cells(rows[1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left'));
-  const al = (i) => aligns[i] || 'left';
-  const th = head.map((c, i) => `<th style="text-align:${al(i)}">${renderInline(c)}</th>`).join('');
-  const tr = rows.slice(2).map((r) => `<tr>${cells(r).map((c, i) => `<td style="text-align:${al(i)}">${renderInline(c)}</td>`).join('')}</tr>`).join('');
-  return `<div class="md-table-wrap"><table class="md-table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
-}
-function renderMarkdown(src) {
-  const blocks = [];
-  const stash = (html) => { blocks.push(html); return `\u0000B${blocks.length - 1}\u0000`; };
-  let text = String(src || '');
-  // 围栏代码块（含未闭合的流式片段）
-  text = text.replace(/^```([\w+#.-]*)[ \t]*\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => stash(mdCodeBlock(lang, code)));
-  text = text.replace(/^```([\w+#.-]*)[ \t]*\n([\s\S]*)$/gm, (_, lang, code) => stash(mdCodeBlock(lang, code)));
-  // hermes 回复尾部的 <details> 统计块 → 原生折叠组件
-  text = text.replace(/<details>[\s\S]*?<\/details>/gi, (m) => {
-    const sm = m.match(/<summary>([\s\S]*?)<\/summary>/i);
-    const body = m.replace(/<summary>[\s\S]*?<\/summary>/i, '').replace(/<\/?details[^>]*>/gi, '');
-    const sum = (sm ? sm[1] : '详情').replace(/<[^>]*>/g, '').trim();
-    return stash(`<details class="md-details"><summary>${esc(sum || '详情')}</summary><div class="md-details-body">${esc(body.trim().replace(/<[^>]*>/g, ''))}</div></details>`);
-  });
-  // 表格块（连续以 | 开头/结尾的行）
-  text = text.replace(/(?:^\|[^\n]*\|[ \t]*$\n?){2,}/gm, (m) => {
-    const html = mdTable(m);
-    return html === m ? m : stash(html);
-  });
-
-  const out = [];
-  let para = [], quote = [], list = null;
-  const flushPara = () => { if (para.length) { out.push('<p>' + para.map(renderInline).join('<br>') + '</p>'); para = []; } };
-  const flushQuote = () => { if (quote.length) { out.push('<blockquote>' + quote.map(renderInline).join('<br>') + '</blockquote>'); quote = []; } };
-  const flushList = () => {
-    if (!list) return;
-    out.push(`<${list.tag}>` + list.items.map((x) => `<li>${renderInline(x)}</li>`).join('') + `</${list.tag}>`);
-    list = null;
-  };
-  const flushAll = () => { flushPara(); flushQuote(); flushList(); };
-  for (const raw of text.split('\n')) {
-    const line = raw.replace(/\s+$/, '');
-    const ph = line.match(/^\u0000B(\d+)\u0000$/);
-    if (ph) { flushAll(); out.push(blocks[Number(ph[1])] || ''); continue; }
-    if (!line.trim()) { flushAll(); continue; }
-    const h = line.match(/^(#{1,3})\s+(.+)$/);
-    if (h) { flushAll(); out.push(`<h${h[1].length}>${renderInline(h[2])}</h${h[1].length}>`); continue; }
-    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flushAll(); out.push('<hr>'); continue; }
-    const q = line.match(/^>\s?(.+)$/);
-    if (q) { flushPara(); flushList(); quote.push(q[1]); continue; }
-    flushQuote();
-    const ul = line.match(/^\s*[-*]\s+(.+)$/);
-    if (ul) { flushPara(); if (!list || list.tag !== 'ul') { flushList(); list = { tag: 'ul', items: [] }; } list.items.push(ul[1]); continue; }
-    const ol = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (ol) { flushPara(); if (!list || list.tag !== 'ol') { flushList(); list = { tag: 'ol', items: [] }; } list.items.push(ol[1]); continue; }
-    flushList(); para.push(line);
-  }
-  flushAll();
-  return out.join('');
-}
-/** 代码块复制按钮：全局委托，renderChat 重建 DOM 后依然有效。 */
-document.addEventListener('click', async (e) => {
-  const btn = e.target.closest && e.target.closest('.md-code-copy');
-  if (!btn) return;
-  const pre = btn.closest('.md-code') && btn.closest('.md-code').querySelector('pre');
-  if (!pre) return;
-  try {
-    await navigator.clipboard.writeText(pre.innerText);
-    btn.textContent = '已复制';
-    setTimeout(() => { btn.textContent = '复制'; }, 1400);
-  } catch { toast('复制失败，请手动选择代码', 1800); }
-});
-/** 图片加载失败 → 换成轻量链接占位，避免出现整条破图灰带（error 不冒泡，需 capture）。 */
-document.addEventListener('error', (e) => {
-  const img = e.target;
-  if (!img || img.tagName !== 'IMG' || !img.classList || !img.classList.contains('md-img')) return;
-  const a = document.createElement('a');
-  a.className = 'md-img-fallback';
-  a.href = img.src; a.target = '_blank'; a.rel = 'noopener';
-  a.textContent = '▧ ' + (img.alt || '图片') + '（无法预览，点击打开）';
-  if (img.parentNode) img.parentNode.replaceChild(a, img);
-}, true);
-
 /* ══════════ 工具行 ══════════
    直接照搬运 WorkBuddy 的 single-line-tool-header：一行五段
      [图标 14px] [状态词] [对象] [次要信息] [箭头 16px]
@@ -231,9 +81,10 @@ function toolExtra(name, input) {
   if (Array.isArray(input.edits) && input.edits.length) return { text: `${input.edits.length} 处修改` };
   const o = input.old_string, n = input.new_string;
   if (typeof o === 'string' && typeof n === 'string') {
-    const b = o ? o.split('\n').length : 0;
-    const a = n ? n.split('\n').length : 0;
-    return { add: Math.max(0, a - b), del: Math.max(0, b - a) };
+    const rows = lineDiff(o, n);
+    let add = 0, del = 0;
+    for (const r of rows) { if (r.t === '+') add++; else if (r.t === '-') del++; }
+    return { add, del };
   }
   return null;
 }
@@ -279,7 +130,8 @@ function toolDiffHTML(oldText, newText) {
   const shown = rows.length > CAP ? rows.slice(0, CAP) : rows;
   const body = shown.map((r) => {
     const cls = r.t === '+' ? 'add' : r.t === '-' ? 'del' : 'same';
-    return `<div class="dv-row ${cls}"><span class="dv-g"></span><span class="dv-t">${esc(r.s) || '&nbsp;'}</span></div>`;
+    const glyph = r.t === '+' ? '+' : r.t === '-' ? '−' : '';
+    return `<div class="dv-row ${cls}"><span class="dv-g">${glyph}</span><span class="dv-t">${esc(r.s) || '&nbsp;'}</span></div>`;
   }).join('');
   const more = rows.length > CAP
     ? `<div class="dv-more">还有 ${rows.length - CAP} 行未显示</div>` : '';
@@ -313,7 +165,11 @@ function toolDetailHTML(item) {
   const sec = (label, body) =>
     `<div class="detail-section"><div class="detail-label">${esc(label)}</div>${body}</div>`;
 
-  if (isCmd) return toolStdoutHTML(item);
+  if (isCmd) {
+    const cmd = input && typeof input === 'object' ? String(input.command || input.cmd || input.script || '') : '';
+    const cmdHtml = cmd.trim() ? sec('命令', `<pre class="detail-content">${esc(clip(cmd, 8000))}</pre>`) : '';
+    return cmdHtml + toolStdoutHTML(item);
+  }
 
   let html = '';
   if (isEdit && input && typeof input === 'object') {
@@ -426,7 +282,7 @@ const state = {
   turnTab: new Map(),
   invalidTurns: new Set(),   // 已中止回合的 turnId：延迟到达的事件直接丢弃
   env: null, config: { model: '', reasoning: 'none', yolo: false },
-  sessions: [], sendHistory: [], histIdx: -1,
+  sessions: [], sendHistory: [], histIdx: -1, histDraft: '', histBrowsing: false,
   projectsTree: [],         // 侧栏项目树投影（/api/profiles/projects/tree，降级为 []）
   projectsTreeOk: false,    // 树请求是否成功；后端冷启慢于首屏时由 ensureSidebarTree 重试
   booted: false,            // 会话列表是否已成功落地过一次（false = 首屏骨架 + 后端启动提示）
@@ -451,9 +307,12 @@ function setActiveTab(id, silent) {
   if (inp && inp._draftTimer) { clearTimeout(inp._draftTimer); inp._draftTimer = null; }
   if (prev && prev.id !== id && typeof saveDraftFor === 'function') saveDraftFor(prev);
   state.activeTabId = id; state.view = 'chat';
+  const _cur = state.tabs.find((x) => x.id === id);
+  if (_cur) _cur.unread = false;
   closeSubpages();
   document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   renderTabs(); renderChat(); renderSessions(); updateStatus();
+  if (typeof renderAttach === 'function') renderAttach();
   syncComposerProject(); // 项目下拉按当前页签的 cwd 回填
   if (typeof restoreDraftFor === 'function') restoreDraftFor(state.tabs.find((x) => x.id === id));
   if (!silent && hasNative) api.tabState(id).then((st) => {
@@ -519,8 +378,23 @@ async function refreshSessions(search = '') {
     if (seq !== sessionsSeq) return;
     const hitMap = new Map(hits.filter((h) => h && h.id).map((h) => [h.id, h]));
     const ql = q.toLowerCase();
-    state.sessions = all
-      .map((s) => ({ ...s, snippet: (hitMap.get(s.id) || {}).snippet || '', fulltext: hitMap.has(s.id) }))
+    const merged = all.map((s) => ({ ...s, snippet: (hitMap.get(s.id) || {}).snippet || '', fulltext: hitMap.has(s.id) }));
+    if (q && hits.length) {
+      const seen = new Set(all.map((s) => s.id));
+      for (const h of hits) {
+        if (!h || !h.id || seen.has(h.id)) continue;
+        seen.add(h.id);
+        merged.push({
+          id: h.id,
+          title: h.title || h.id,
+          started_at: h.started_at || 0,
+          ended_at: h.ended_at || 0,
+          snippet: h.snippet || '',
+          fulltext: true,
+        });
+      }
+    }
+    state.sessions = merged
       .filter((s) => !q || sessionLabel(s).toLowerCase().includes(ql) || String(s.id).toLowerCase().includes(ql) || s.fulltext)
       .slice(0, 80);
     // 后端冷启（CLI 常要 5~12s）会晚于首屏：树请求失败时保留上一次的分组，不把侧栏刷空，
@@ -829,13 +703,22 @@ function sessionItemEl(s, { query = '', snippet = '' } = {}) {
   const tab = activeTab();
   const li = document.createElement('li');
   if (tab && s.id === tab.sessionId) li.classList.add('active');
-  const dt = s.started_at ? new Date(s.started_at * 1000) : null;
+  const openTab = state.tabs.find((t) => t.sessionId === s.id);
+  let dotHtml = '';
+  if (openTab) {
+    const hasAp = openTab.items.some((i) => i.kind === 'approval' && !i.choice);
+    if (hasAp) dotHtml = '<span class="s-dot approval" title="等待确认危险操作">!</span>';
+    else if (openTab.running) dotHtml = '<span class="s-dot running" title="后台生成中"></span>';
+    else if (openTab.unread && (!tab || openTab.id !== tab.id)) dotHtml = '<span class="s-dot unread" title="后台已完成"></span>';
+  }
+  const rawTs = s.last_active || s.ended_at || s.started_at;
+  const dt = rawTs ? new Date(rawTs * 1000) : null;
   const when = dt ? `${dt.getMonth() + 1}/${dt.getDate()}` : '';
   // 键盘可达：列表项与 ⋯ 入口原本都是纯 li/span，鼠标以外完全无法操作
   li.setAttribute('role', 'option');
   li.setAttribute('tabindex', '0');
   li.setAttribute('aria-selected', tab && s.id === tab.sessionId ? 'true' : 'false');
-  li.innerHTML = `<span class="s-main"><span class="s-title">${hlMark(sessionLabel(s), query)}</span>` +
+  li.innerHTML = `${dotHtml}<span class="s-main"><span class="s-title">${hlMark(sessionLabel(s), query)}</span>` +
     (snippet ? `<span class="s-snippet">${hlMark(snippet, query)}</span>` : '') + `</span>` +
     `<span class="s-actions" role="button" tabindex="0" aria-label="会话操作" title="会话操作">⋯</span>` +
     `<span class="s-meta">${s.pinned ? '⌁ ' : ''}${when}</span>`;
@@ -1306,6 +1189,7 @@ function openSessionMenu(s, anchor) {
   m.innerHTML = `<button data-act="rename">✎ 重命名</button>
     <button data-act="pin">${s.pinned ? '⤓ 取消置顶' : '⤒ 置顶会话'}</button>
     <button data-act="move">⇢ 移到项目…</button>
+    <button data-act="to-task">📋 转为看板任务</button>
     <div class="sess-menu-sep"></div>
     <button data-act="export" data-fmt="md">↧ 导出 Markdown</button>
     <button data-act="export" data-fmt="html">↧ 导出 HTML</button>
@@ -1341,6 +1225,15 @@ function openSessionMenu(s, anchor) {
     // 二级页替换当前菜单内容，不关闭浮层；返回时按原锚点重开一级。
     // stopPropagation 必须加：重绘后 document 的关闭监听器已认不出这个按钮是菜单内的。
     if (act === 'move') { e.stopPropagation(); openMoveToProjectMenu(s, () => openSessionMenu(s, anchor)); return; }
+    if (act === 'to-task') {
+      closeSessionMenu();
+      const title = String(s.title || s.display_name || '').trim() || `会话 ${String(s.id || '').slice(0, 8)}`;
+      const body = `来源会话：${s.id}${s.model ? `\n模型：${s.model}` : ''}${s.cwd ? `\n工作目录：${s.cwd}` : ''}`;
+      if (typeof kbModalOpen === 'function') {
+        kbModalOpen('task', { title, body, sessionId: s.id });
+      }
+      return;
+    }
     if (act === 'export') {
       const fmt = b.dataset.fmt;
       closeSessionMenu();
@@ -1429,6 +1322,12 @@ function closeSubpages() {
 
 async function openSession(sessionId) {
   closeSubpages();
+  const existing = state.tabs.find((t) => t.sessionId === sessionId);
+  if (existing) {
+    state.view = 'chat';
+    setActiveTab(existing.id);
+    return;
+  }
   const cur = activeTab();
   // loading 标记阻止连点两次复用同一个空 tab，导致两份历史互相覆盖
   const tab = (cur && !cur.running && !cur.loading && cur.items.length === 0)
@@ -1448,6 +1347,7 @@ async function openSession(sessionId) {
     // 历史消息没有 turnMs（CLI 只存消息时间），用「本条助手消息 - 上一条用户消息」的时间差还原，
     // 这样 dsh 那句「已完成，用时 N 秒」在历史会话里也能显示，而不是只剩一个「已完成」。
     let lastUserTs = 0;
+    const tcInputMap = new Map();
     for (const m of hist) {
       // messages.timestamp 是 REAL 秒（如 1794146522.21），Date.parse 对它返回 NaN
       const tv = Number(m.timestamp);
@@ -1457,14 +1357,29 @@ async function openSession(sessionId) {
         const f = parseFailure(m.displayMetadata, m.content);
         tab.items.push({ kind: 'error', text: f.error, failure: f, ts });
       }
-      else if (m.role === 'assistant' && m.content) {
-        // 只接受 0.5s ~ 1h 的差值，防止跨会话 / 跨天的时间戳算出荒谬耗时
-        const d = ts - lastUserTs;
-        const turnMs = (lastUserTs > 0 && d >= 500 && d < 3600000) ? d : 0;
-        tab.items.push({ kind: 'assistant', text: m.content, done: true, ts, tokens: Number(m.tokens) || 0, turnMs });
+      else if (m.role === 'assistant') {
+        if (m.reasoningContent) {
+          tab.items.push({ kind: 'thinking', text: m.reasoningContent, open: false, ts });
+        }
+        if (Array.isArray(m.toolCalls)) {
+          for (const tc of m.toolCalls) {
+            if (!tc || !tc.id) continue;
+            let args = tc.function && tc.function.arguments != null ? tc.function.arguments : tc.arguments;
+            if (typeof args === 'string') { try { args = JSON.parse(args); } catch {} }
+            tcInputMap.set(String(tc.id), args || null);
+          }
+        }
+        if (m.content) {
+          // 只接受 0.5s ~ 1h 的差值，防止跨会话 / 跨天的时间戳算出荒谬耗时
+          const d = ts - lastUserTs;
+          const turnMs = (lastUserTs > 0 && d >= 500 && d < 3600000) ? d : 0;
+          tab.items.push({ kind: 'assistant', text: m.content, done: true, ts, tokens: Number(m.tokens) || 0, turnMs });
+        }
       }
       else if (m.role === 'tool' && m.toolName) {
-        tab.items.push({ kind: 'tool', name: m.toolName, input: null, output: m.content, state: 'ok', done: true, ts });
+        const parsedIn = (m.toolCallId && tcInputMap.has(String(m.toolCallId))) ? tcInputMap.get(String(m.toolCallId)) : null;
+        const looksErr = /^(?:error:|traceback|failed|{"error")/i.test(String(m.content || '').trim());
+        tab.items.push({ kind: 'tool', name: m.toolName, input: parsedIn, output: m.content, state: 'ok', isError: looksErr, done: true, ts });
       }
     }
     // 官方 sessionTitle 同序：首条用户消息 → 列表里的标题/预览 → 未命名会话。
@@ -1485,6 +1400,7 @@ async function openSession(sessionId) {
     }
   } catch {}
   renderTabs(); renderChat(); renderSessions(); updateStatus();
+  if (typeof renderAttach === 'function') renderAttach();
 }
 
 /* ---------- 渲染：聊天流 / 轨迹 ---------- */
@@ -1532,9 +1448,30 @@ $('#landing').addEventListener('click', (e) => {
 function renderChat() {
   const tab = activeTab(); const chat = $('#chat');
   if (!tab) { chat.innerHTML = ''; return; }
-  const items = state.view === 'trace' ? tab.items.filter((i) => i.kind === 'tool' || i.kind === 'error') : tab.items;
-  const showHeads = state.view !== 'trace';
+  const isTrace = state.view === 'trace';
+  const traceItems = isTrace ? tab.items.filter((i) => ['user', 'thinking', 'tool', 'approval', 'command', 'error'].includes(i.kind)) : tab.items;
+  const hasTraceSteps = isTrace && traceItems.some((i) => ['tool', 'approval', 'command', 'error'].includes(i.kind));
+  const items = traceItems;
+  const showHeads = !isTrace;
   chat.innerHTML = '';
+  if (isTrace && !hasTraceSteps) {
+    const empty = document.createElement('div');
+    empty.className = 'trace-empty';
+    empty.innerHTML = '<div class="te-title">当前会话暂无工具调用或斜杠记录</div><div class="te-sub">当 Agent 调用工具、执行命令或触发审批时，这里会按提问轮次展示完整轨迹。</div><button type="button" class="btn" id="trace-back-chat">回到对话</button>';
+    chat.appendChild(empty);
+    const backBtn = empty.querySelector('#trace-back-chat');
+    if (backBtn) backBtn.onclick = () => {
+      state.view = 'chat';
+      document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
+      renderChat();
+    };
+    $('#landing').hidden = true;
+    $('#main').classList.remove('empty');
+    const findBtn = $('#btn-find');
+    if (findBtn) findBtn.hidden = true;
+    syncComposerState();
+    return;
+  }
   // WB 式结构：每轮响应块（紧随用户消息）仅首个元素带「头像+名字」头，其余流式内容顶格
   const turnHeadEl = () => {
     const d = document.createElement('div');
@@ -1603,7 +1540,7 @@ function renderChat() {
       prevKind = it.kind; i++;
     }
   }
-  flushTurnFoot();
+  if (!tab.running) flushTurnFoot();
   if (tab.running && tab.showTyping) {
     chat.appendChild(typingIndicator(tab, showHeads && prevKind === 'user'));
   }
@@ -1649,7 +1586,9 @@ function publishOrbContext() {
         sessionId: tab.sessionId || null,
         title: tab.title || '新会话',
         model: tab.model || (state.config && state.config.model) || '',
+        cwd: tab.cwd || undefined,
         theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
+        fontSize: (state.config && state.config.fontSize) || undefined,
         messages,
       });
     } catch { /* 退出中：主进程已不可达 */ }
@@ -1710,6 +1649,7 @@ function msgActionBar(item, canRetry) {
     <span class="msg-actions" role="group" aria-label="消息操作">
       <button type="button" class="msg-act" data-msg-act="copy" title="复制这条消息" aria-label="复制">${MSG_ICO_COPY}</button>
       ${canRetry ? `<button type="button" class="msg-act" data-msg-act="retry" title="用这条提问重新发起一轮" aria-label="重试">${MSG_ICO_RETRY}</button>` : ''}
+      <button type="button" class="msg-act" data-msg-act="to-task" title="转为看板任务" aria-label="转为看板任务">⊞</button>
     </span>
     ${usage}
     ${item.ts ? `<time class="msg-ts" title="发送于 ${esc(fmtTime(item.ts))}">${esc(fmtTime(item.ts).slice(0, 5))}</time>` : ''}
@@ -1820,6 +1760,10 @@ function renderItem(item, header = false, sub = false) {
       : (!running && dur ? `<span class="tmeta tmeta-dur">${esc(dur)}</span>` : '');
     // 详情可能是空串（跑着的命令还没有输出）：那时只留详情头，不塞「暂无」占位
     const detailHTML = toolDetailHTML(item);
+    const pvPath = extractPreviewPaths(JSON.stringify(item.input || {})).pop() || '';
+    const pvBtn = pvPath
+      ? `<button class="tdh-pv-btn" type="button" data-pv-open="${esc(pvPath)}" title="在右侧预览此文件">在右侧预览</button>`
+      : '';
     el.innerHTML = `<div class="tool-row collapsible ${state}" role="button" tabindex="0" aria-expanded="${open}" title="${esc(item.name || '')}">
         <span class="ticon" aria-hidden="true">${meta.icon}</span>
         <span class="tstate${running ? ' loading-text' : ''}">${esc(meta.label)}</span>
@@ -1829,6 +1773,7 @@ function renderItem(item, header = false, sub = false) {
       <div class="tool-detail card-content${open ? '' : ' hidden'}">
         <div class="tool-detail-head">
           <span class="tdh-name">${esc(item.name || '工具')}</span>
+          ${pvBtn}
           <span class="tdh-state ${state}">${running ? '执行中' : item.isError ? '失败' : '完成'}${dur ? ' · ' + dur : ''}</span>
         </div>
         ${detailHTML || (running ? '' : '<div class="detail-section"><div class="detail-label">详情</div><pre class="detail-content">暂无</pre></div>')}
@@ -1840,6 +1785,7 @@ function renderItem(item, header = false, sub = false) {
     const toggle = () => {
       open = !open;
       item.open = open;       // 点过就固化成用户的选择，之后不再被状态派生改写
+      item.userToggled = true;
       el.classList.toggle('open', open);
       body.classList.toggle('hidden', !open);
       row.setAttribute('aria-expanded', String(open));
@@ -1892,11 +1838,36 @@ function renderItem(item, header = false, sub = false) {
   el._item = item; // 事件委托据此取回数据，避免用易失效的数组下标
   return el;
 }
+/** 同步「↓ 回到底部」悬浮胶囊显隐与运行态脉冲圆点。 */
+function syncScrollBottomBtn() {
+  const btn = $('#scroll-bottom-btn');
+  const sc = $('#chat-scroll');
+  if (!btn || !sc) return;
+  const show = !!sc._userScrolledAway && sc.scrollHeight > sc.clientHeight + 24;
+  btn.hidden = !show;
+  const tab = activeTab();
+  btn.classList.toggle('is-running', !!(tab && tab.running));
+}
+{
+  const sc = $('#chat-scroll');
+  if (sc) {
+    sc.addEventListener('scroll', () => {
+      const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 48;
+      sc._userScrolledAway = !atBottom;
+      syncScrollBottomBtn();
+    }, { passive: true });
+  }
+  const sbb = $('#scroll-bottom-btn');
+  if (sbb) sbb.addEventListener('click', () => scrollBottom(true));
+}
 /** 只在用户本来就贴着底部时自动跟随；查看历史时保留当前锚点。 */
 function scrollBottom(force = false) {
   const sc = $('#chat-scroll');
-  if (!force && sc._userScrolledAway) return;
+  if (!sc) return;
+  if (!force && sc._userScrolledAway) { syncScrollBottomBtn(); return; }
+  sc._userScrolledAway = false;
   sc.scrollTop = sc.scrollHeight;
+  syncScrollBottomBtn();
 }
 /** 「响应中」指示器：WB 式纯状态行（本轮首个块带轮次头） */
 function typingIndicator(tab, header = false) {
@@ -1988,15 +1959,23 @@ function routeEvent(evt, explicitTabId) {
     tab.deltas += 1;
     tab.showTyping = false; tab.activity = '生成中…';
     if (visible && state.view === 'chat') {
-      const chat = $('#chat');
-      chat.querySelector('.typing-msg')?.remove();
-      const node = renderItem(last);
-      const existing = chat.lastElementChild;
-      if (existing && existing.className === 'msg msg-assistant') chat.replaceChild(node, existing);
-      else chat.appendChild(node);
-      scrollBottom();
+      if (!tab._rafText) {
+        tab._rafText = requestAnimationFrame(() => {
+          tab._rafText = 0;
+          if (tab.id !== state.activeTabId || state.view !== 'chat') return;
+          const chat = $('#chat');
+          chat.querySelector('.typing-msg')?.remove();
+          const curLast = [...tab.items].reverse().find((i) => i.kind === 'assistant');
+          if (!curLast) return;
+          const node = renderItem(curLast);
+          const existing = [...chat.children].reverse().find((n) => n._item === curLast && n.classList.contains('msg-assistant'));
+          if (existing) chat.replaceChild(node, existing);
+          else chat.appendChild(node);
+          scrollBottom();
+        });
+      }
     }
-    liveActivity(tab);
+    if (visible) liveActivity(tab);
   } else if (evt.type === 'thinking_wait') {
     // v0.23.0 的 thinking.delta 是「等待提示」（颜文字 spinner / provider 等待），不是推理。
     // 它只喂底部状态行；颜文字那类连状态行都不进，避免把占位文案伪装成思考内容。
@@ -2034,18 +2013,21 @@ function routeEvent(evt, explicitTabId) {
     const label = tm.obj ? `${tm.label} ${tm.obj}` : tm.label;
     // 不给 open：展开与否交给渲染层按状态派生（跑着 / 失败才自动展开，成功收起），
     // 用户点过之后 item.open 才写成布尔值，此后以用户的选择为准。
-    tab.items.push({ kind: 'tool', name: evt.name, input: evt.input || null, state: 'running', ts: Date.now() });
+    tab.items.push({ kind: 'tool', name: evt.name, toolCallId: evt.tool_call_id || '', input: evt.input || null, state: 'running', ts: Date.now() });
     tab.showTyping = true; tab.activity = label;
     if (visible) { renderChat(); setActivity(label); syncActivityBar(); }
     // 自动跟随只在工具跑完之后做：此刻文件还没写出来，先 resolve 只会拿到旧内容或失败。
   } else if (evt.type === 'tool_result') {
-    const item = [...tab.items].reverse().find((i) => i.kind === 'tool' && i.name === evt.name && i.state === 'running');
+    const item = (evt.tool_call_id
+      ? [...tab.items].reverse().find((i) => i.kind === 'tool' && i.toolCallId === evt.tool_call_id && i.state === 'running')
+      : null)
+      || [...tab.items].reverse().find((i) => i.kind === 'tool' && i.name === evt.name && i.state === 'running');
     if (item) {
       item.output = evt.output ?? ''; item.isError = !!evt.is_error;
       item.durationMs = evt.duration_ms || 0; item.state = 'done'; item.done = true;
       tab.showTyping = true; tab.activity = '生成中…';
       if (visible) renderChat();
-      maybeAutoPreview({
+      if (visible) maybeAutoPreview({
         name: item.name, input: item.input, output: evt.output,
         preview: evt.preview, isError: !!evt.is_error,
       }).catch(() => {});
@@ -2073,6 +2055,7 @@ function routeEvent(evt, explicitTabId) {
     } else if (evt.text && tab.deltas === 0) tab.items.push({ kind: 'assistant', text: evt.text, done: true });
     for (const i of tab.items) if (i.kind === 'tool' && i.state === 'running') { i.state = 'done'; i.isError = true; i.output = i.output || '（回合结束，无结果回传）'; }
     tab.running = false; tab.showTyping = false;
+    if (!visible) tab.unread = true;
     applyAutoCollapse(tab);
     if (evt.exit_code !== 0 && evt.error) {
       const f = parseFailure('', String(evt.error));
@@ -2118,14 +2101,20 @@ function pathOfFile(file) {
   } catch {}
   return file.path || '';
 }
+function tabAttachments(tab = activeTab()) {
+  if (!tab) return [];
+  if (!Array.isArray(tab.attachments)) tab.attachments = [];
+  return tab.attachments;
+}
 function addAttachments(paths) {
+  const list = tabAttachments();
   let added = 0, skipped = 0;
   for (const raw of paths) {
     const p = String(raw || '').trim();
     if (!p) continue;
-    if (state.attachments.length >= ATTACH_MAX) { skipped += 1; continue; }
-    if (state.attachments.some((a) => a.path === p)) { skipped += 1; continue; }
-    state.attachments.push({
+    if (list.length >= ATTACH_MAX) { skipped += 1; continue; }
+    if (list.some((a) => a.path === p)) { skipped += 1; continue; }
+    list.push({
       path: p, name: p.split('/').pop() || p, kind: attachKindOf(p),
     });
     added += 1;
@@ -2136,7 +2125,9 @@ function addAttachments(paths) {
   else if (added) toast(`已附加 ${added} 个文件（下一回合生效）`, 1800);
 }
 function removeAttachment(p) {
-  state.attachments = state.attachments.filter((a) => a.path !== p);
+  const tab = activeTab();
+  if (!tab) return;
+  tab.attachments = tabAttachments(tab).filter((a) => a.path !== p);
   renderAttach();
 }
 
@@ -2145,8 +2136,17 @@ function removeAttachment(p) {
  *  而真正提交给 agent 的是改写后的 prompt。两者不同就分开传。 */
 async function send(text, displayText) {
   const tab = activeTab();
-  if (!tab || tab.running) return;
+  if (!tab) return;
   text = text.trim(); if (!text) return;
+  if (tab.running) {
+    if (displayText) return;
+    if (!Array.isArray(tab.queued)) tab.queued = [];
+    if (tab.queued.length >= 5) { toast('发送队列已满（最多 5 条）', 2000); return; }
+    tab.queued.push({ text });
+    $('#input').value = ''; autoGrow(); updateCount(); slashClose();
+    toast(`已加入发送队列（待发 ${tab.queued.length} 条）`, 1800);
+    return;
+  }
   /* 斜杠命令兜底：菜单被 Esc 关掉、或敲的是别名时，Enter 绝不能把 `/compact` 当正文
      发给模型 —— 那正是「命令不能用」的样子。精确匹配（含别名）就跑命令；目录已就绪
      但确实没这条，也交给 CLI 回答（它会回「Unknown command /x — nothing was sent.」）。
@@ -2171,9 +2171,14 @@ async function send(text, displayText) {
     }
   }
   const shown = String(displayText || text).trim() || text;
+  if (state.view === 'trace') {
+    state.view = 'chat';
+    document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
+  }
+  const atts = tabAttachments(tab);
   slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
-  state.sendHistory.push(shown); state.histIdx = state.sendHistory.length;
-  tab.items.push({ kind: 'user', text: shown, ts: Date.now(), files: state.attachments.map((a) => a.name) });
+  state.sendHistory.push(shown); state.histIdx = state.sendHistory.length; state.histDraft = ''; state.histBrowsing = false;
+  tab.items.push({ kind: 'user', text: shown, ts: Date.now(), files: atts.map((a) => a.name) });
   // 取消在途草稿定时器：否则发送后它仍会以「清空后的输入框」再写一次草稿归属
   if ($('#input')._draftTimer) { clearTimeout($('#input')._draftTimer); $('#input')._draftTimer = null; }
   // 立即清空输入框（乐观发送）；放在 await 之后会吞掉用户在这段时间里新敲的内容
@@ -2193,9 +2198,9 @@ async function send(text, displayText) {
     // 项目内新建的页签带着项目根：首轮 session.create 以此为 cwd，CLI 按
     // git 仓库根把会话归属到项目（每轮都传无害，resume 不再使用它）
     cwd: tab.cwd || undefined,
-    attachments: state.attachments.length ? state.attachments.map((a) => a.path) : undefined,
+    attachments: atts.length ? atts.map((a) => a.path) : undefined,
   };
-  state.attachments = []; renderAttach();
+  tab.attachments = []; renderAttach();
   if (hasNative) {
     try {
       const st = await api.send(payload);
@@ -2203,6 +2208,7 @@ async function send(text, displayText) {
     } catch (e) {
       tab.items.push({ kind: 'error', text: (e && e.message) || String(e) });
       tab.running = false; tab.showTyping = false;
+    if (!visible) tab.unread = true;
       renderChat(); syncActivityBar(); syncComposerState(); setActivity('空闲');
     }
   } else {
@@ -2242,6 +2248,10 @@ function handleClose({ tabId, summary }) {
   }
   refreshSessions($('#session-search').value.trim());
   if (tab.sessionId && hasNative) api.sessionStats(tab.sessionId).then(() => updateStatus()).catch(() => {});
+  if (!s.aborted && visible && Array.isArray(tab.queued) && tab.queued.length) {
+    const next = tab.queued.shift();
+    if (next && next.text) setTimeout(() => send(next.text), 60);
+  }
 }
 
 /* ---------- 状态条 ---------- */
@@ -2325,7 +2335,9 @@ function updateStatus() {
       const arcEl = $('#ctx-ring-arc');
       if (arcEl) arcEl.style.strokeDashoffset = (CTX_RING_C * (1 - pct / 100)).toFixed(2);
       ctxEl.classList.toggle('hot', pct > 80);
-      ctxEl.title = label;
+      ctxEl.title = pct >= 80 ? `${label} · 点击执行 /compress 压缩上下文` : label;
+      ctxEl.style.cursor = pct >= 80 ? 'pointer' : '';
+      ctxEl.onclick = pct >= 80 ? () => send('/compress') : null;
     }
   } else {
     resetUsageUI();
@@ -2344,9 +2356,10 @@ function renderAttach() {
   const box = $('#attach-list');
   if (!box) return;
   box.textContent = '';
-  if (!state.attachments.length) { box.hidden = true; return; }
+  const list = tabAttachments();
+  if (!list.length) { box.hidden = true; return; }
   box.hidden = false;
-  for (const a of state.attachments) {
+  for (const a of list) {
     const item = document.createElement('span');
     item.className = 'attach-item';
     item.setAttribute('role', 'listitem');
@@ -2379,6 +2392,7 @@ function autoGrow() {
   syncSendState();
 }
 $('#input').addEventListener('input', () => {
+  state.histBrowsing = false;
   autoGrow(); updateCount();
   slashSync(); // / 起手弹内联指令菜单；非 / 起手自动收起
   clearTimeout($('#input')._draftTimer);
@@ -2388,12 +2402,31 @@ $('#input').addEventListener('keydown', (e) => {
   // 指令菜单开着时：↑↓/Home/End 移行、Enter 执行高亮行（拦在发送之前）
   if (slashNav(e)) return;
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send($('#input').value); }
-  else if (e.key === 'ArrowUp' && !$('#input').value && state.sendHistory.length) {
-    e.preventDefault(); state.histIdx = Math.max(0, state.histIdx - 1);
-    $('#input').value = state.sendHistory[state.histIdx] || ''; autoGrow();
-  } else if (e.key === 'ArrowDown' && state.sendHistory.length) {
-    e.preventDefault(); state.histIdx = Math.min(state.sendHistory.length, state.histIdx + 1);
-    $('#input').value = state.sendHistory[state.histIdx] || ''; autoGrow();
+  else if (e.key === 'ArrowUp' && state.sendHistory.length) {
+    const inp = $('#input');
+    const atTop = !inp.value || (inp.selectionStart === 0 && inp.selectionEnd === 0);
+    if (state.histBrowsing || atTop) {
+      e.preventDefault();
+      if (!state.histBrowsing) {
+        state.histDraft = inp.value;
+        state.histIdx = state.sendHistory.length;
+        state.histBrowsing = true;
+      }
+      state.histIdx = Math.max(0, state.histIdx - 1);
+      inp.value = state.sendHistory[state.histIdx] || '';
+      autoGrow(); updateCount();
+    }
+  } else if (e.key === 'ArrowDown' && state.histBrowsing && state.sendHistory.length) {
+    e.preventDefault();
+    const inp = $('#input');
+    state.histIdx = Math.min(state.sendHistory.length, state.histIdx + 1);
+    if (state.histIdx >= state.sendHistory.length) {
+      inp.value = state.histDraft || '';
+      state.histBrowsing = false;
+    } else {
+      inp.value = state.sendHistory[state.histIdx] || '';
+    }
+    autoGrow(); updateCount();
   }
 });
 $('#btn-send').onclick = () => send($('#input').value);
@@ -2466,7 +2499,6 @@ function syncSidebar() {
   $('#frame').classList.toggle('sb-open', open);
   // 侧栏收起时：左上角（红绿灯右侧）出现「展开侧栏 + 新会话」
   $('#btn-expand').hidden = open;
-  $('#btn-new-lead').hidden = open;
   $('#btn-expand').setAttribute('aria-expanded', String(open));
   // 透明/零宽的一栏仍会被 Tab 聚焦，用 inert + aria-hidden 彻底移出交互树
   sb.inert = !open; ir.inert = open;
@@ -2500,9 +2532,6 @@ function setSidebar(open, opts = {}) {
 function toggleSidebar() { setSidebar(!sidebarOpen()); }
 $('#btn-sidebar-collapse').onclick = () => setSidebar(false);
 $('#btn-expand').onclick = () => setSidebar(true);
-$('#btn-new-lead').onclick = newSessionAction;
-$('#sb-new').onclick = newSessionAction;
-$('#sb-search-btn').onclick = () => { $('#session-search').focus(); };
 $('#btn-sessions').onclick = () => { setSidebar(true); $('#session-search').focus(); };
 // 收起态点击图标栏品牌 logo 展开侧栏（参考页 brand 行为），键盘同样可达
 {
@@ -2517,10 +2546,6 @@ $('#btn-sessions').onclick = () => { setSidebar(true); $('#session-search').focu
 {
   const sbStorage = $('#sb-storage-btn');
   if (sbStorage) sbStorage.onclick = (e) => { e.stopPropagation(); toggleStoragePop(); };
-  // 分组标题里的两个入口：原先是 12px 的 unicode 符号（⌕ / ⛁），几乎看不清，
-  // 已换成内联 SVG + 20×20 点击区。<button> 原生可聚焦，不再补 role/tabindex。
-  const sbSearch = $('#sb-quick-search');
-  if (sbSearch) sbSearch.onclick = () => { setSidebar(true); $('#session-search').focus(); };
 }
 // 点击空白处收起会话菜单 / 空间浮层
 document.addEventListener('click', (e) => {
@@ -2638,38 +2663,49 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// 侧栏右缘横向拖拽调宽（zoom 1.1：屏幕位移 ÷1.1 = 布局 px；宽度记忆到 localStorage）
+// 侧栏右缘横向拖拽调宽（PointerEvents + setPointerCapture；宽度记忆到 localStorage）
 (function () {
   const handle = $('#sb-resize'), sidebar = $('#sidebar');
-  const MIN = 240, MAX = 520;
+  const MIN = 260, MAX = 560, DEF = 317;
   // 只写 --sb-w，不再写 inline width（否则会盖掉 .collapsed 的 width:0）
   const setW = (w) => sidebar.style.setProperty('--sb-w', w + 'px');
-  const getW = () => parseFloat(sidebar.style.getPropertyValue('--sb-w')) || 288;
+  const getW = () => parseFloat(sidebar.style.getPropertyValue('--sb-w')) || DEF;
   try {
     const saved = parseFloat(localStorage.getItem('sb-width'));
     if (saved >= MIN && saved <= MAX) setW(saved);
   } catch {}
-  let startX = 0, startW = 0;
-  handle.addEventListener('mousedown', (e) => {
-    if (sidebar.classList.contains('collapsed')) return;
+  let startX = 0, startW = 0, activeId = null;
+  const finish = () => {
+    if (!document.body.classList.contains('resizing')) return;
+    document.body.classList.remove('resizing');
+    if (activeId !== null) { try { handle.releasePointerCapture(activeId); } catch {} activeId = null; }
+    try { localStorage.setItem('sb-width', String(Math.round(getW()))); } catch {}
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || sidebar.classList.contains('collapsed')) return;
     startX = e.clientX;
     startW = getW();
+    activeId = e.pointerId;
+    try { handle.setPointerCapture(activeId); } catch {}
     document.body.classList.add('resizing');
     e.preventDefault();
   });
-  window.addEventListener('mousemove', (e) => {
+  handle.addEventListener('pointermove', (e) => {
     if (!document.body.classList.contains('resizing')) return;
-    setW(Math.min(MAX, Math.max(MIN, startW + (e.clientX - startX) / 1.1)));
+    setW(Math.min(MAX, Math.max(MIN, startW + (e.clientX - startX))));
   });
-  window.addEventListener('mouseup', () => {
-    if (!document.body.classList.contains('resizing')) return;
-    document.body.classList.remove('resizing');
-    try { localStorage.setItem('sb-width', String(Math.round(getW()))); } catch {}
-  });
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
 })();
 
-// 附件（文件选择 + 拖放）：图片走多模态、PDF 走解析、其余按文件引用，统一交主进程附加
+// 附件（文件选择 + 粘贴 + 拖放）：图片走多模态、PDF 走解析、其余按文件引用，统一交主进程附加
 $('#btn-attach').onclick = () => $('#file-input').click();
+$('#input').addEventListener('paste', (e) => {
+  const files = e.clipboardData && e.clipboardData.files ? Array.from(e.clipboardData.files) : [];
+  if (!files.length) return;
+  const paths = files.map(pathOfFile).filter(Boolean);
+  if (paths.length) { e.preventDefault(); addAttachments(paths); }
+});
 $('#file-input').addEventListener('change', (e) => {
   const files = Array.from(e.target.files || []);
   const paths = files.map(pathOfFile).filter(Boolean);
@@ -3766,14 +3802,22 @@ async function renderPreviewContent() {
 async function setPreview(res) {
   if (!res || !res.ok) { pvState((res && res.error) || '加载失败', true); return false; }
   const isFile = res.kind === 'file';
+  const target = isFile ? res.filePath : res.url;
+  if (!pvHistory.navigating && target && pvHistory.stack[pvHistory.idx] !== target) {
+    pvHistory.stack = pvHistory.stack.slice(0, pvHistory.idx + 1);
+    pvHistory.stack.push(target);
+    if (pvHistory.stack.length > 30) pvHistory.stack.shift();
+    pvHistory.idx = pvHistory.stack.length - 1;
+  }
   pv.url = res.url; pv.filePath = res.filePath || ''; pv.label = res.label || '';
   pv.kind = res.kind; pv.type = res.type || (isFile ? 'web' : 'url');
   pv.ext = res.ext || ''; pv.baseDir = res.baseDir || pv.baseDir;
   pv.srcdoc = res.srcdoc || '';
   pv.text = ''; pv.textLoadedFor = ''; pv.view = ''; pv.imgActual = false;
-  $('#pv-path').value = isFile ? res.filePath : res.url;
-  pvState(isFile ? '已加载' : '网页预览');
-  pushPvRecent({ target: isFile ? res.filePath : res.url, label: res.label, type: pv.type });
+  $('#pv-path').value = target;
+  pvState(isFile ? (pv.type === 'web' ? '已加载（沙箱模式）' : '已加载') : '网页预览');
+  updatePvNavBtns();
+  pushPvRecent({ target, label: res.label, type: pv.type });
   // 用户正在 rail 里看看板时，别把页签抢回预览：内容照常备好，切回来就是最新的
   if (!railKanbanVisible()) setRailTab('preview');
   else {
@@ -3952,6 +3996,38 @@ $('#pv-open').onclick = async () => {
 };
 $('#pv-path').addEventListener('focus', (e) => { e.target.select(); });
 $('#pv-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadPreviewInput(e.target.value); } });
+const pvHistory = { stack: [], idx: -1, navigating: false };
+function updatePvNavBtns() {
+  const b = $('#pv-back'), f = $('#pv-fwd'), c = $('#pv-clear');
+  if (b) b.disabled = pvHistory.idx <= 0;
+  if (f) f.disabled = pvHistory.idx < 0 || pvHistory.idx >= pvHistory.stack.length - 1;
+  if (c) c.disabled = !pv.url && !pv.filePath;
+}
+async function goPvHistory(delta) {
+  const nextIdx = pvHistory.idx + delta;
+  if (nextIdx < 0 || nextIdx >= pvHistory.stack.length) return;
+  pvHistory.idx = nextIdx;
+  pvHistory.navigating = true;
+  try { await loadPreviewInput(pvHistory.stack[nextIdx]); }
+  finally { pvHistory.navigating = false; updatePvNavBtns(); }
+}
+async function clearPreview() {
+  pv.url = ''; pv.filePath = ''; pv.label = ''; pv.kind = ''; pv.type = '';
+  pv.ext = ''; pv.srcdoc = ''; pv.text = ''; pv.textLoadedFor = ''; pv.view = ''; pv.imgActual = false;
+  $('#pv-path').value = '';
+  const f = $('#pv-frame'); if (f) { f.removeAttribute('srcdoc'); f.src = 'about:blank'; }
+  for (const s of ['#pv-frame', '#pv-image', '#pv-doc', '#pv-table', '#pv-raw']) {
+    const el = $(s); if (el) el.hidden = true;
+  }
+  $('#pv-views').hidden = true;
+  $('#pv-empty').hidden = false;
+  pvState('尚未加载');
+  updatePvNavBtns();
+  if (pvAvailable()) await api.previewUnwatch();
+}
+$('#pv-back').onclick = () => goPvHistory(-1);
+$('#pv-fwd').onclick = () => goPvHistory(1);
+$('#pv-clear').onclick = clearPreview;
 $('#pv-reload').onclick = reloadPreview;
 $('#pv-external').onclick = async () => {
   const target = pv.filePath || pv.url || $('#pv-path').value.trim();
@@ -3969,16 +4045,19 @@ $('#pv-external').onclick = async () => {
   pane.addEventListener('dragenter', (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
+    e.stopPropagation();
     dragDepth += 1;
     drop.hidden = false;
   });
   pane.addEventListener('dragover', (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
   });
   pane.addEventListener('dragleave', (e) => {
     if (!hasFiles(e)) return;
+    e.stopPropagation();
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) drop.hidden = true;
   });
@@ -3987,6 +4066,7 @@ $('#pv-external').onclick = async () => {
     drop.hidden = true;
     if (!hasFiles(e)) return;
     e.preventDefault();
+    e.stopPropagation();
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return;
     const filePath = typeof api.pathForFile === 'function' ? api.pathForFile(file) : (file.path || '');
@@ -4108,7 +4188,9 @@ function findCollect(query) {
       const v = n.nodeValue;
       if (!v || !v.trim()) return NodeFilter.FILTER_REJECT;
       const p = n.parentElement;
-      if (p && p.closest('script, style, .sr-only')) return NodeFilter.FILTER_REJECT;
+      if (p && p.closest('script, style, .sr-only, .hidden, [hidden]')) return NodeFilter.FILTER_REJECT;
+      const det = p && p.closest('details:not([open])');
+      if (det && !p.closest('summary')) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
@@ -4197,8 +4279,6 @@ function findClose() {
   bar.hidden = true;
   findReset();
   FIND_STATE.query = '';
-  const sc = $('#chat-scroll');
-  if (sc) sc.scrollTop = FIND_STATE.scrollTop;  // 关闭后回到打开前的位置
   const input = $('#find-input');
   if (input) input.value = '';
   const btn = $('#btn-find');
@@ -4392,26 +4472,26 @@ window.addEventListener('keydown', (e) => {
   }
   if (combo === '?' && !typing) { e.preventDefault(); toggleHelp(true); return; }
   if (e.key === 'Escape') {
-    // 最上层是拖动：先撤拖动，不顺手关整页、也不中断回合
+    // 严格单层命中即 return 栈：最上层优先，每次 Esc 只关最顶层一个
     if (KbDrag.on || KbDrag.armed) { kbDragReset(); return; }
-    // 其次是看板的「⋯」菜单：它挂在页头，层级高于弹窗，只收它自己
+    if (closeAllOverlays()) return;
     const kbMoreMenu = $('#kb-more-menu');
     if (kbMoreMenu && !kbMoreMenu.hidden) { kbMoreToggle(false); return; }
-    // 新建弹窗在 #frame 之外，从聊天 / 设置页直接打开时也要优先收它；
-    // 旧链只在 kanban-page 可见时检查弹窗，非看板页下 Esc 会漏掉。
     const kbModalEl = $('#kb-modal');
     if (kbModalEl && !kbModalEl.hidden) { kbModalClose(); return; }
     // 统一按「最上层优先」收起：全部浮层关完后，若仍在生成则中断本回合
-    let handled = false;
-    // 查找条在最上层：先关它，不要顺手把下面的页面一起收掉
-    if (FIND_STATE.open) { findClose(); handled = true; }
-    if (!$('#help-modal').hidden) { toggleHelp(false); handled = true; }
-    if (!$('#palette').hidden) { togglePalette(false); handled = true; }
-    if (!$('#settings-page').hidden) { toggleSettings(false); handled = true; }
-    // 消息平台页有独立开关，toggleSubpage 对它直接 return —— 走专用关闭函数
-    document.querySelectorAll('.subpage').forEach((pg) => {
-      if (pg.hidden) return;
-      handled = true;
+    if (FIND_STATE.open) { findClose(); return; }
+    if (!$('#help-modal').hidden) { toggleHelp(false); return; }
+    if (!$('#palette').hidden) { togglePalette(false); return; }
+    if (!$('#settings-page').hidden) { toggleSettings(false); return; }
+    const mkPage = $('#market-page');
+    if (mkPage && !mkPage.hidden) {
+      if (typeof closeMarket === 'function') closeMarket();
+      else mkPage.hidden = true;
+      return;
+    }
+    for (const pg of document.querySelectorAll('.subpage')) {
+      if (pg.hidden) continue;
       if (pg.id === 'gateway-page') closeGatewayPage();
       else if (pg.id === 'kanban-page') {
         // 最上层优先：新建弹窗 → 抽屉内确认卡 → 抽屉更多菜单 → 详情抽屉 → 派发确认卡 → 派发面板 → 整页
@@ -4428,9 +4508,9 @@ window.addEventListener('keydown', (e) => {
         else if (!$('#kb-dispatch-panel').hidden) kbDispatchToggle(false);
         else closeKanbanPage();
       } else toggleSubpage(pg, false);
-    });
-    if (closeAllOverlays()) handled = true;
-    if (!handled && activeTab() && activeTab().running) {
+      return;
+    }
+    if (activeTab() && activeTab().running) {
       e.preventDefault();
       $('#btn-stop').click(); // Escape 中断生成（Claude Code 行为）
     }
@@ -4443,7 +4523,7 @@ window.addEventListener('keydown', (e) => {
 /** Escape 统一收起所有轻浮层；返回是否确实关掉了东西（决定要不要中断生成）。 */
 function closeAllOverlays() {
   let closed = false;
-  ['#pf-menu', '#session-menu', '#storage-pop', '#chip-menu'].forEach((sel) => {
+  ['#pf-menu', '#session-menu', '#storage-pop', '#chip-menu', '#chip-submenu'].forEach((sel) => {
     const el = $(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   });
@@ -4566,7 +4646,7 @@ function invalidateTurn(tab) {
 function applyAutoCollapse(tab) {
   if (!tab || SettingsStore.get('autoCollapse', true) === false) return;
   for (const i of tab.items) {
-    if (i.kind === 'tool' && i.state === 'done' && !i.isError) i.open = false;
+    if (i.kind === 'tool' && i.state === 'done' && !i.isError && !i.userToggled) i.open = false;
     if (i.kind === 'thinking' && (i.text || '').length > 300) i.open = false;
   }
 }
@@ -4683,6 +4763,48 @@ $('#chat').addEventListener('click', (e) => {
     }
     return;
   }
+  const foldBtn = t.closest && t.closest('.md-code-fold');
+  if (foldBtn) {
+    const box = foldBtn.closest('.md-code');
+    if (box) {
+      const collapsed = box.classList.toggle('collapsed');
+      const lines = (box.querySelector('.md-code-lines') && box.querySelector('.md-code-lines').textContent) || '';
+      foldBtn.textContent = collapsed ? `展开全部 (${lines})` : '收起代码';
+    }
+    return;
+  }
+  const tblCopy = t.closest && t.closest('.md-table-copy');
+  if (tblCopy) {
+    const wrap = tblCopy.closest('.md-table-wrap');
+    const tbl = wrap && wrap.querySelector('table');
+    if (tbl) {
+      const rows = Array.from(tbl.querySelectorAll('tr')).map((tr) =>
+        Array.from(tr.children).map((c) => String(c.textContent || '').trim()));
+      if (rows.length) {
+        const fmt = tblCopy.dataset.fmt;
+        const out = fmt === 'csv'
+          ? rows.map((r) => r.map((v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(',')).join('\n')
+          : [
+              '| ' + rows[0].join(' | ') + ' |',
+              '| ' + rows[0].map(() => '---').join(' | ') + ' |',
+              ...rows.slice(1).map((r) => '| ' + r.join(' | ') + ' |'),
+            ].join('\n');
+        copyText(out).then(() => toast(fmt === 'csv' ? '已复制 CSV' : '已复制 Markdown 表格', 1400)).catch(() => toast('复制失败'));
+      }
+    }
+    return;
+  }
+  const pvOpen = t.closest && t.closest('[data-pv-open]');
+  if (pvOpen) {
+    e.stopPropagation();
+    const target = pvOpen.dataset.pvOpen;
+    if (target) {
+      toggleRail(true);
+      setRailTab('preview');
+      loadPreviewInput(target);
+    }
+    return;
+  }
   const act = t.closest && t.closest('[data-msg-act]');
   if (act) {
     // 助手脚注已经不在 .msg 里了（挪到了整轮末尾），兜一层从脚注行自己取回数据
@@ -4693,15 +4815,18 @@ $('#chat').addEventListener('click', (e) => {
     if (act.dataset.msgAct === 'copy') {
       copyText(item.text || item.output || '').then(() => toast('已复制该消息', 1200)).catch(() => toast('复制失败'));
     } else if (act.dataset.msgAct === 'retry') retryFrom(item);
+    else if (act.dataset.msgAct === 'to-task' && typeof kbModalOpen === 'function') {
+      const tab = activeTab();
+      const raw = String(item.text || item.output || '').trim();
+      const firstLine = (raw.split('\n')[0] || '对话转任务').replace(/^#+\s*/, '').slice(0, 80);
+      kbModalOpen('task', {
+        title: firstLine,
+        body: raw,
+        sessionId: (tab && tab.sessionId) || '',
+        projectId: (tab && tab.sessionId && typeof sessionProjectId === 'function') ? sessionProjectId(tab.sessionId) : '',
+      });
+    }
     return;
-  }
-  const cp = t.closest && t.closest('.md-code-copy');
-  if (cp) {
-    const box = cp.closest('.md-code'); const code = box && box.querySelector('pre code');
-    copyText(code ? code.textContent : '').then(() => {
-      const old = cp.textContent; cp.textContent = '已复制';
-      setTimeout(() => { cp.textContent = old; }, 1200);
-    }).catch(() => toast('复制失败'));
   }
 });
 
@@ -4719,7 +4844,14 @@ function onApprovalRequest(req) {
     tool: r.tool || '工具调用', command: r.command || '', risk: r.risk || '',
   };
   tab.items.push(item);
-  renderChat(); scrollBottom(true);
+  if (tab.id === state.activeTabId) {
+    renderChat(); scrollBottom(true);
+  } else {
+    toast(`后台会话「${tab.title || '会话'}」需要确认危险操作`, 12000, {
+      actionLabel: '立即查看并处理',
+      onClick: () => { state.view = 'chat'; setActiveTab(tab.id); scrollBottom(true); },
+    });
+  }
   a11y('需要确认危险操作');
   // 主进程 25s 后自动拒绝，这里提前收口，避免卡片永久停在「待确认」
   setTimeout(() => { if (!item.choice) resolveApproval(item, 'deny', true); }, 24000);
@@ -4731,7 +4863,7 @@ function resolveApproval(item, choice, silent) {
   if (hasNative && api.approvalRespond) {
     Promise.resolve(api.approvalRespond({ requestId: item.requestId, choice, tabId: item.tabId })).catch(() => {});
   }
-  renderChat();
+  if (item.tabId === state.activeTabId) renderChat();
   if (!silent) toast(choice === 'deny' ? '已拒绝该操作' : '已允许该操作', 1500);
 }
 
@@ -4749,6 +4881,14 @@ function applySettings() {
   document.documentElement.classList.toggle('compact-steps', s.stepDetail === '简洁');
   // 主题变了迷你聊天窗也要跟着变（它自己读不到主窗口的 localStorage）
   publishOrbContext();
+}
+if (window.matchMedia) {
+  const _mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+  if (_mqDark && typeof _mqDark.addEventListener === 'function') {
+    _mqDark.addEventListener('change', () => {
+      if (settingsRead().theme === 'system') applySettings();
+    });
+  }
 }
 
 
@@ -4780,7 +4920,11 @@ async function init() {
       const tab = state.tabs.find((t) => t.id === tabId);
       if (!tab) return;
       tab.items.push({ kind: 'user', text: String(text), ts: Date.now(), fromOrb: true });
-      if (tab.id === state.activeTabId) renderChat();
+      tab.running = true;
+      tab.showTyping = true;
+      tab.activity = '思考中…';
+      if (tab.title === '新会话') tab.title = String(text).slice(0, 24);
+      if (tab.id === state.activeTabId) { renderChat(); syncActivityBar(); syncComposerState(); }
       renderTabs();
     });
     // 小窗里点了「允许 / 拒绝」：主窗口那张卡立刻收口，
@@ -4810,6 +4954,19 @@ async function init() {
           it.choice = choice === 'deny' ? 'deny' : 'approve';
           if (tab.id === state.activeTabId) renderChat();
         }
+      }
+    });
+    if (api.onMenuAction) api.onMenuAction((act) => {
+      if (act === 'settings') toggleSettings(true);
+      else if (act === 'new-session') newSessionAction();
+      else if (act === 'kanban' && typeof openKanbanPage === 'function') openKanbanPage();
+    });
+    if (api.onFocusTab) api.onFocusTab((tabId) => {
+      if (tabId && state.tabs.some((t) => t.id === tabId)) {
+        closeSubpages();
+        state.view = 'chat';
+        setActiveTab(tabId);
+        scrollBottom(true);
       }
     });
     // 菜单「消息平台」是整页入口，不再被 serve 状态文字覆盖

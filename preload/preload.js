@@ -152,4 +152,6 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   onMarketProgress: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('market:progress', h); return () => ipcRenderer.removeListener('market:progress', h); },
   // 插件/技能列表后台刷新完成（p = { kind:'plugins'|'skills', at, count }）
   onCatalogUpdated: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('catalog:updated', h); return () => ipcRenderer.removeListener('catalog:updated', h); },
+  onMenuAction: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('app:menu-action', h); return () => ipcRenderer.removeListener('app:menu-action', h); },
+  onFocusTab: (fn) => { const h = (_e, p) => fn(p); ipcRenderer.on('app:focus-tab', h); return () => ipcRenderer.removeListener('app:focus-tab', h); },
 });

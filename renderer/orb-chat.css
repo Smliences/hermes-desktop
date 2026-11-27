@@ -248,7 +248,14 @@ body[data-running="true"] .oc-rail {
 }
 
 /* 助手 / 工具 / 错误：左侧顶格文字，不加气泡 */
-.oc-msg.is-ai { justify-content: flex-start; }
+.oc-msg.is-ai { flex-direction: column; align-items: flex-start; gap: 4px; }
+.oc-copy {
+  opacity: 0; border: 0; background: transparent; color: var(--text-3);
+  font: 11px/1.2 var(--sans); padding: 2px 6px; border-radius: 4px; cursor: pointer;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.oc-msg.is-ai:hover .oc-copy, .oc-copy:focus-visible { opacity: 1; }
+.oc-copy:hover { background: var(--fill-2); color: var(--text); }
 .oc-msg.is-ai .oc-body {
   max-width: 100%;
   color: var(--text);

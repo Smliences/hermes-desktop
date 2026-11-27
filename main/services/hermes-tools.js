@@ -221,24 +221,29 @@ async function listTools({ force = false, revalidate = false } = {}) {
 async function setTool(name, enabled) {
   const n = String(name || '');
   if (!NAME_RE.test(n)) return { ok: false, error: '非法工具名' };
-  const argv = ['tools', enabled ? 'enable' : 'disable', n];
-  const r = await exec(argv);
-  if (!r.ok) {
-    log.warn('tools', 'toggle failed', { name: n, enabled: !!enabled, error: log.redact(r.error || '') });
-    return { ok: false, error: r.error || '操作失败' };
-  }
-  // 回读必须真跑 CLI：缓存里是开关之前的状态
-  const after = await readListRaw();
-  if (!after.ok) return { ok: false, error: after.error };
-  const c = commit(after.sections, after.otherPlatforms);
-  const hit = c.sections.flatMap((s) => s.items).find((i) => i.name === n);
-  if (!hit) return { ok: false, error: '工具不存在：' + n, sections: c.sections };
-  log.info('tools', 'toggled', { name: n, enabled: hit.enabled });
-  // CLI 说成功但状态没变（例如 MCP server 未连接）时如实反馈
-  if (hit.enabled !== !!enabled) {
-    return { ok: false, error: 'CLI 未改变该工具状态（可能依赖未就绪）', name: n, enabled: hit.enabled, sections: c.sections };
-  }
-  return { ok: true, name: n, enabled: hit.enabled, sections: c.sections };
+  const run = async () => {
+    const argv = ['tools', enabled ? 'enable' : 'disable', n];
+    const r = await exec(argv);
+    if (!r.ok) {
+      log.warn('tools', 'toggle failed', { name: n, enabled: !!enabled, error: log.redact(r.error || '') });
+      return { ok: false, error: r.error || '操作失败' };
+    }
+    // 回读必须真跑 CLI：缓存里是开关之前的状态
+    const after = await readListRaw();
+    if (!after.ok) return { ok: false, error: after.error };
+    const c = commit(after.sections, after.otherPlatforms);
+    const hit = c.sections.flatMap((s) => s.items).find((i) => i.name === n);
+    if (!hit) return { ok: false, error: '工具不存在：' + n, sections: c.sections };
+    log.info('tools', 'toggled', { name: n, enabled: hit.enabled });
+    // CLI 说成功但状态没变（例如 MCP server 未连接）时如实反馈
+    if (hit.enabled !== !!enabled) {
+      return { ok: false, error: 'CLI 未改变该工具状态（可能依赖未就绪）', name: n, enabled: hit.enabled, sections: c.sections };
+    }
+    return { ok: true, name: n, enabled: hit.enabled, sections: c.sections };
+  };
+  const job = queue.then(run, run);
+  queue = job.catch(() => {});
+  return job;
 }
 
 module.exports = {

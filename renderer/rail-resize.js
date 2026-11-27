@@ -17,6 +17,13 @@
 
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const readW = () => parseFloat(rail.style.getPropertyValue('--rail-w')) || RAIL_DEFAULT;
+  const readPrefW = () => {
+    try {
+      const v = parseFloat(localStorage.getItem(KEY));
+      if (Number.isFinite(v) && v >= RAIL_MIN && v <= RAIL_MAX) return v;
+    } catch {}
+    return RAIL_DEFAULT;
+  };
 
   /** 上限随窗口实时变化：可用宽度 = rail + main（这样不必换算侧栏的 zoom 1.1）。
    *  panel 隐藏时量不到尺寸，退回绝对上限，避免启动时把用户偏好砍掉。 */
@@ -101,7 +108,7 @@
   function revalidate() {
     if (drag) return;
     lim = limits();
-    setW(readW(), false);
+    setW(readPrefW(), false);
   }
   window.addEventListener('resize', revalidate);
   if (typeof MutationObserver !== 'undefined') {

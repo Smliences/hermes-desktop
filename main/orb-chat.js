@@ -41,6 +41,7 @@ function createOrbChat(opts) {
   let win = null;
   let loaded = false;
   let draft = '';
+  let savedSize = null;
   /** 上次「自动贴球」时球的屏幕坐标：用户手动拖过小窗之后，
    *  只要球没动就尊重用户摆的位置，别每次点开都把人拖回来。 */
   let placedAnchor = null;
@@ -117,7 +118,7 @@ function createOrbChat(opts) {
   function ensureWindow() {
     if (win && !win.isDestroyed()) return win;
     win = new BrowserWindow({
-      width: W, height: H,
+      width: (savedSize && savedSize.width) || W, height: (savedSize && savedSize.height) || H,
       show: false, frame: false, transparent: true, backgroundColor: '#00000000',
       resizable: true, minWidth: 320, minHeight: 400, maxWidth: 560, maxHeight: 780,
       hasShadow: true, roundedCorners: true, skipTaskbar: true,
@@ -139,10 +140,20 @@ function createOrbChat(opts) {
       // 首帧就是在 open() 里亮出来的（那时还没 loaded，focus 推不进去）：这里补一次
       if (win.isVisible()) push('orbchat:focus', {});
     });
+    win.on('moved', () => { push('orbchat:state', { side: sideOfBall() }); });
+    win.on('resized', () => {
+      if (!win || win.isDestroyed()) return;
+      const [w, h] = win.getSize();
+      savedSize = { width: w, height: h };
+      push('orbchat:state', { side: sideOfBall() });
+    });
     win.on('closed', () => { win = null; loaded = false; });
     win.loadFile(path.join(__dirname, '..', 'renderer', 'orb-chat.html'));
     return win;
   }
+
+  const onDisplayRemoved = () => { clampIntoView(); };
+  try { screen.on('display-removed', onDisplayRemoved); } catch {}
 
   /* ---- IPC（校验 sender：只有这个面板能调） ---- */
   const own = (event) => !!win && !win.isDestroyed() && event.sender === win.webContents;
@@ -229,6 +240,7 @@ function createOrbChat(opts) {
   function pushSync() { return push('orbchat:sync', context()); }
 
   function destroy() {
+    try { screen.removeListener('display-removed', onDisplayRemoved); } catch {}
     for (const ch of ['orbchat:bootstrap', 'orbchat:send', 'orbchat:abort', 'orbchat:approve']) {
       try { ipcMain.removeHandler(ch); } catch { /* ignore */ }
     }

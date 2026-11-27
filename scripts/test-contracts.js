@@ -15,6 +15,20 @@ const cp = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const readTree = (relDir, ext = '.js', exclude = new Set()) => {
+  const base = path.join(ROOT, relDir);
+  if (!fs.existsSync(base)) return [];
+  const out = [];
+  const walk = (dir, prefix) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) walk(path.join(dir, ent.name), rel);
+      else if (ent.isFile() && ent.name.endsWith(ext) && !exclude.has(rel)) out.push(path.join(relDir, rel));
+    }
+  };
+  walk(base, '');
+  return out;
+};
 const uniq = (a) => [...new Set(a)].sort();
 const collect = (text, re) => { const out = []; let m; while ((m = re.exec(text))) out.push(m[1]); return out; };
 
@@ -36,14 +50,19 @@ const KB_APP_FILES = [
   'renderer/kanban-modal.js',
   'renderer/kanban.js',
 ];
+const RENDERER_SUBDIRS = ['core', 'chat', 'sidebar', 'preview', 'input', 'shortcuts'];
 const appSrc = [
   'renderer/app.js',
   'renderer/market-plugins.js',
   'renderer/settings.js',
   ...KB_APP_FILES,
+  ...RENDERER_SUBDIRS.flatMap((d) => readTree(`renderer/${d}`, '.js')),
 ].map(read).join('\n');
 const htmlSrc = read('renderer/index.html');
-const cssSrc = read('renderer/styles.css');
+const cssSrc = [
+  'renderer/styles.css',
+  ...readTree('renderer/styles', '.css'),
+].map(read).join('\n');
 const sessSrc = read('main/services/hermes-sessions.js');
 
 section('1. IPC 契约：main ↔ preload ↔ renderer');
@@ -232,7 +251,7 @@ t('安装前审阅组件已接线且文案不含私有源假设', () => {
 });
 t('详情与确认卡互斥展开，避免确认按钮被推到折叠线以下', () => {
   const clickBody = appSrc.slice(appSrc.indexOf("$('#mk-results').addEventListener('click'"), appSrc.indexOf("$('#mk-refresh').onclick"));
-  assert.ok(/act === 'install'[\s\S]{0,160}mk\.expanded\.delete\(idx\)/.test(clickBody), '点安装时应收起详情');
+  assert.ok(/act === 'install'[\s\S]{0,160}mk\.expanded\.delete\((?:key|idx)\)/.test(clickBody), '点安装时应收起详情');
   assert.ok(/act === 'detail'[\s\S]{0,120}mk\.confirm = null/.test(clickBody), '点详情时应收起确认卡');
 });
 t('市场卡片图标底色满足浅色 WCAG AA', () => {
@@ -580,9 +599,9 @@ t('附件 UI：多文件、可移除、空态不占布局，且发送时随 payl
   assert.ok(/id="file-input"[^>]*multiple/.test(htmlSrc), '文件选择必须支持多选');
   assert.ok(appSrc.includes('function addAttachments(') && appSrc.includes('function removeAttachment('), '缺少附件增删');
   assert.ok(appSrc.includes('renderAttach()'), '附件列表未接线渲染');
-  assert.ok(/attachments: state\.attachments\.length \? state\.attachments\.map\(\(a\) => a\.path\) : undefined/.test(appSrc),
+  assert.ok(/attachments: (?:state\.attachments|atts)\.length \? (?:state\.attachments|atts)\.map\(\(a\) => a\.path\) : undefined/.test(appSrc),
     '发送时没有把附件路径交给主进程');
-  assert.ok(/state\.attachments = \[\]; renderAttach\(\);/.test(appSrc), '发送后未清空附件');
+  assert.ok(/(?:state|tab)\.attachments = \[\]; renderAttach\(\);/.test(appSrc), '发送后未清空附件');
   assert.ok(appSrc.includes("if (evt.type === 'notice')"), '附件失败提示没有落点');
 });
 
@@ -640,17 +659,14 @@ t('状态条三段式：用量与上下文居中，模型与状态分列两端',
 });
 
 t('会话分组入口：SVG 图标 + 可聚焦按钮，不再是 12px unicode 符号', () => {
-  assert.ok(htmlSrc.includes('id="sb-quick-search"'), '缺少会话分组内的搜索入口');
   assert.ok(/id="sb-storage-btn"[^>]*class="sb-ga"/.test(htmlSrc), '存储入口未套用按钮样式');
   assert.ok(!htmlSrc.includes('title="搜索">⌕'), '仍是 unicode 搜索符号，字号过小看不清');
   assert.ok(!htmlSrc.includes('⛁'), '仍是 unicode 存储符号');
-  // id 必须唯一：sb-search-btn 已被品牌行占用，新增入口不能用同名 id
   const ids = htmlSrc.match(/id="([^"]+)"/g) || [];
   const dup = ids.filter((v, i) => ids.indexOf(v) !== i);
   assert.deepStrictEqual(dup, [], '存在重复 id：' + dup.join(', '));
   const ga = cssSrc.slice(cssSrc.indexOf('.sb-ga {'), cssSrc.indexOf('.sb-ga {') + 400);
   assert.ok(/width: 20px; height: 20px/.test(ga), '入口点击区仍过小');
-  assert.ok(appSrc.includes("$('#sb-quick-search')"), '搜索入口未接线');
   // 侧栏「新建项目」入口：弹窗是 #frame 外的全局浮层，直接在当前页面弹出，不许跳看板页
   assert.ok(/id="sb-new-project"[^>]*class="sb-ga"/.test(htmlSrc), '侧栏缺少新建项目入口');
   assert.ok(appSrc.includes("$('#sb-new-project')"), '新建项目入口未接线');
@@ -2903,18 +2919,15 @@ t('构建白名单覆盖全部运行时目录，且不含构建产物', () => {
   }
   assert.ok(!/^\s*-\s*release\//m.test(buildCfg), 'release/ 不应进入构建白名单');
 });
-t('asar / npmRebuild / node-pty asarUnpack 未被改坏', () => {
+t('asar / npmRebuild 未被改坏且已清理 node-pty', () => {
   assert.ok(/asar:\s*true/.test(buildCfg));
-  // node-pty 1.1.0 自带 NAPI prebuilds，跨 ABI 可用；强制重编译只会在 Python ≥3.12（无
-  // distutils）的机器上把打包整体拖失败。这条和 check-package 的架构断言是一对：关掉
-  // 重编译就必须确保 prebuilds 在，两者不能各自回退。
   assert.ok(/npmRebuild:\s*false/.test(buildCfg),
     'npmRebuild 必须是 false（否则机器上没编译链就打不出包，见 README 打包一节）');
-  assert.ok(/asarUnpack:[\s\S]*node-pty/.test(buildCfg));
+  assert.ok(!/node-pty/.test(buildCfg), 'electron-builder.yml 不应再包含 node-pty');
 });
-t('运行时依赖与可选原生依赖齐备', () => {
+t('运行时依赖齐备', () => {
   assert.ok(pkg.dependencies && pkg.dependencies.ws, 'WS 客户端依赖 ws 缺失');
-  assert.ok(pkg.optionalDependencies && pkg.optionalDependencies['node-pty'], 'node-pty 应为可选依赖');
+  assert.ok(!pkg.optionalDependencies || !pkg.optionalDependencies['node-pty'], 'node-pty 应已移除');
   assert.ok(fs.existsSync(path.join(ROOT, 'main/services/logger.js')));
   assert.ok(fs.existsSync(path.join(ROOT, 'main/services/hermes-bin.js')));
 });

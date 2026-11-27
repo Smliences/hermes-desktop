@@ -156,6 +156,10 @@ class GatewayTurn {
       const tab = this.channel.tabs.get(this.tabId);
       const liveByTab = this.channel.liveByTab;
 
+      const prevModel = tab ? (tab.model || '') : '';
+      const prevReasoning = tab ? (tab.reasoning || '') : '';
+      let createdNow = false;
+
       // ---- 确保活会话 ----
       if (tab && tab.liveId) {
         this.liveId = tab.liveId;
@@ -183,18 +187,37 @@ class GatewayTurn {
         if (this.opts.model) createParams.model = this.opts.model;
         if (this.opts.reasoning && this.opts.reasoning !== 'default') createParams.reasoning_effort = this.opts.reasoning;
         const r = await gw.rpc('session.create', createParams, 30000);
+        createdNow = true;
         this.liveId = r.session_id;
         this.storedId = r.stored_session_id || this.storedId;
         if (r.info?.model) this.model = this.model || r.info.model;
         liveByTab.set(this.liveId, this.tabId);
       }
-      if (tab) { tab.liveId = this.liveId; tab.storedId = this.storedId; }
+      if (tab) {
+        tab.liveId = this.liveId;
+        tab.storedId = this.storedId;
+        if (createdNow) {
+          tab.model = this.opts.model || this.model || '';
+          tab.reasoning = this.opts.reasoning || '';
+        }
+      }
 
       // ---- 模型/推理力度切换（活会话内经 slash 命令生效）----
-      if (this.opts.model && this.model && this.opts.model !== this.model) {
-        const eff = this.opts.reasoning && this.opts.reasoning !== 'default' ? this.opts.reasoning : '';
-        const cmd = `/model ${this.opts.model}${eff ? ` --reasoning ${eff}` : ''}`;
-        await gw.rpc('slash.exec', { session_id: this.liveId, command: cmd }, 30000).catch(() => {});
+      if (!createdNow) {
+        const nextModel = this.opts.model || '';
+        const nextReasoning = this.opts.reasoning || '';
+        const modelChanged = !!(nextModel && nextModel !== prevModel);
+        const reasoningChanged = !!(nextReasoning && nextReasoning !== prevReasoning);
+        const syncModel = nextModel || this.model || prevModel;
+        if ((modelChanged || reasoningChanged) && syncModel) {
+          const eff = nextReasoning && nextReasoning !== 'default' ? nextReasoning : '';
+          const cmd = `/model ${syncModel}${eff ? ` --reasoning ${eff}` : ''}`;
+          await gw.rpc('slash.exec', { session_id: this.liveId, command: cmd }, 30000).catch(() => {});
+          if (tab) {
+            tab.model = syncModel;
+            tab.reasoning = nextReasoning;
+          }
+        }
       }
 
       // ---- 合成 init 事件（渲染层靠它绑定 sessionId/model）----
@@ -288,10 +311,11 @@ class GatewayTurn {
       });
     } else if (t === 'tool.complete') {
       const raw = p.summary ?? p.result_text ?? (p.result != null ? JSON.stringify(p.result) : '');
+      const isErr = !!(p.is_error || p.error || p.status === 'error');
       this._emit({
         type: 'tool_result', name: p.name || '', tool_call_id: p.tool_id || '',
         output: prettyToolOutput(raw),
-        duration_ms: Math.round((p.duration_s || 0) * 1000), is_error: false,
+        duration_ms: Math.round((p.duration_s || 0) * 1000), is_error: isErr,
       });
     } else if (t === 'session.usage') {
       // 后端在回合进行中按间隔推送（tui_gateway: _emit("session.usage", sid, {usage})）
@@ -595,6 +619,7 @@ class ChatChannel {
 
   /** gateway WS 的连接状态（断线重连由 gateway-client 自己排期，这里只负责让状态可见）。 */
   _onGatewayStatus(st) {
+    if (st && st.connected && this._onGwConnect) this._onGwConnect();
     this._emitStatus(!!(st && st.connected));
   }
 
@@ -653,6 +678,13 @@ class ChatChannel {
       const stamp = this._epochStamp;
       if (!port || !this.backend.token) throw new Error('hermes serve 未返回有效端口');
       if (this.gateway) { try { this.gateway.close(); } catch {} this.gateway = null; }
+      let settled = false;
+      let resolveConn, rejectConn;
+      const connReady = new Promise((resolve, reject) => {
+        resolveConn = () => { if (!settled) { settled = true; resolve(); } };
+        rejectConn = (err) => { if (!settled) { settled = true; reject(err); } };
+      });
+      this._onGwConnect = resolveConn;
       const gw = this._gatewayFactory({
         port, token: this.backend.token,
         onStatus: (st) => this._onGatewayStatus(st),
@@ -668,14 +700,9 @@ class ChatChannel {
       let ok = false;
       try {
         gw.connect();
-        // 等待 connected
-        await new Promise((resolve, reject) => {
-          const t0 = Date.now();
-          const iv = setInterval(() => {
-            if (gw.connected) { clearInterval(iv); resolve(); }
-            else if (Date.now() - t0 > this._connectTimeoutMs) { clearInterval(iv); reject(new Error('gateway WS 连接超时')); }
-          }, 100);
-        });
+        if (gw.connected) resolveConn();
+        const timer = setTimeout(() => rejectConn(new Error('gateway WS 连接超时')), this._connectTimeoutMs);
+        try { await connReady; } finally { clearTimeout(timer); this._onGwConnect = null; }
         // 等待期间后端换过代：这条连接指向旧端口/旧 token，绝不能挂上去
         if (stamp !== this._epochStamp) throw new Error('hermes serve 已重启，连接作废，请重试');
         this.gateway = gw;
@@ -728,11 +755,15 @@ class ChatChannel {
       if (!this._pendingApprovals.has(requestId)) return;
       this._pendingApprovals.delete(requestId);
       this.gateway?.rpc('approval.respond', { session_id: sid, request_id: requestId, choice: 'deny' }, 15000).catch(() => {});
+      if (this._approvalTimeoutHandler) {
+        try { this._approvalTimeoutHandler(detail); } catch { /* ignore */ }
+      }
     }, 25000);
     this._pendingApprovals.set(requestId, { tabId, sid, timer });
   }
 
   setApprovalHandler(fn) { this._approvalHandler = typeof fn === 'function' ? fn : null; }
+  setApprovalTimeoutHandler(fn) { this._approvalTimeoutHandler = typeof fn === 'function' ? fn : null; }
 
   /** 渲染层回传用户选择；校验 requestId 归属，防止跨会话误批准。 */
   respondApproval(requestId, choice, tabId) {

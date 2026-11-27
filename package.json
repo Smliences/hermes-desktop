@@ -10,7 +10,6 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "postinstall": "node scripts/fix-pty-perm.js",
     "test": "node scripts/test-services.js && node scripts/test-contracts.js && node scripts/check-package.js",
     "test:ui": "node scripts/test-ui.js",
     "test:services": "node scripts/test-services.js",
@@ -25,9 +24,6 @@
   "devDependencies": {
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8"
-  },
-  "optionalDependencies": {
-    "node-pty": "^1.0.0"
   },
   "dependencies": {
     "ws": "^8.22.1"

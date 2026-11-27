@@ -82,6 +82,20 @@ async function openKanbanTask(id, silent) {
     if (my !== KB.detailEpoch || d.hidden) return;
     if (!r || !r.ok) { body.innerHTML = `<div class="kb-message">${esc((r && r.error) || '读取失败')}</div>`; return; }
     KB.detail = r;
+    const editForm = $('#kbd-edit-form');
+    const logBody = $('#kbd-log-body');
+    const hasConfirm = !!body.querySelector('.op-confirm');
+    const busyView = (editForm && !editForm.hidden) || (logBody && !logBody.hidden) || hasConfirm;
+    if (silent && busyView) {
+      if (!body.querySelector('#kbd-stale-hint')) {
+        const hint = document.createElement('div');
+        hint.id = 'kbd-stale-hint';
+        hint.className = 'kb-message';
+        hint.innerHTML = '任务有新动态，<button class="kbd-link" type="button" data-kb-refresh-detail="1">点此刷新</button>';
+        body.prepend(hint);
+      }
+      return;
+    }
     renderKanbanDetail(r);
   } catch (e) {
     if (my === KB.detailEpoch) body.innerHTML = `<div class="kb-message">${esc((e && e.message) || '读取失败')}</div>`;
@@ -188,16 +202,33 @@ function renderKanbanDetail(d) {
     wsRows.map((r) => `<div class="kbd-kv-row"><dt>${esc(r[0])}</dt><dd class="kbd-val">${esc(r[1])}</dd></div>`).join('')
   }</dl></div>`;
   const links = d.links || {};
+  const linkTaskMap = new Map();
+  for (const lt of (Array.isArray(d.linkTasks) ? d.linkTasks : [])) {
+    if (lt && lt.id) linkTaskMap.set(String(lt.id), lt);
+  }
+  const renderLinkItem = (roleLabel, x) => {
+    const lt = linkTaskMap.get(String(x));
+    const title = lt && lt.title ? lt.title : x;
+    const stTag = lt && lt.status ? ` <span class="kb-chip st">${esc(KB_STATUS_LABEL[lt.status] || lt.status)}</span>` : '';
+    return `<li class="kbd-row">${roleLabel} <button class="kbd-link" type="button" data-kb-task="${esc(x)}">${esc(clip(String(title), 40))}</button>${stTag}</li>`;
+  };
   const linkRows = [
-    ...(links.parents || []).map((x) => `<li class="kbd-row">父任务 <button class="kbd-link" type="button" data-kb-task="${esc(x)}">${esc(x)}</button></li>`),
-    ...(links.children || []).map((x) => `<li class="kbd-row">子任务 <button class="kbd-link" type="button" data-kb-task="${esc(x)}">${esc(x)}</button></li>`),
+    ...(links.parents || []).map((x) => renderLinkItem('父任务', x)),
+    ...(links.children || []).map((x) => renderLinkItem('子任务', x)),
   ].join('');
+  const childResults = (Array.isArray(d.childResults) ? d.childResults : []).map((c) => {
+    const stTag = c.status ? ` <span class="kb-chip st">${esc(KB_STATUS_LABEL[c.status] || c.status)}</span>` : '';
+    const sum = clip(String(c.latest_summary || c.result || ''), 240);
+    return `<li class="kbd-row"><button class="kbd-link" type="button" data-kb-task="${esc(c.id)}">${esc(clip(String(c.title || c.id), 36))}</button>${stTag}${sum ? `<div>${esc(sum)}</div>` : ''}</li>`;
+  }).join('');
   const comments = (d.comments || []).slice().reverse().map((c) =>
     kbdRow(String(c.author || 'agent') + '：', c.body, kbTime(c.created_at))).join('');
   const events = (d.events || []).slice().reverse().slice(0, 20).map((e) =>
     kbdRow(String(e.kind || 'event'), e.payload, kbTime(e.created_at))).join('');
-  const runs = (d.runs || []).slice().reverse().map((r) =>
-    kbdRow(`#${r.id} ${r.status || ''}`, [r.outcome, r.error].filter(Boolean).join(' · '), kbTime(r.started_at))).join('');
+  const runs = (d.runs || []).slice().reverse().map((r) => {
+    const summary = [r.outcome, r.error].filter(Boolean).join(' · ');
+    return `<li class="kbd-row">${r.started_at ? `<time>${esc(kbTime(r.started_at))}</time>` : ''}<button class="kbd-link" type="button" data-kb-run="${esc(r.id)}">#${esc(r.id)} ${esc(r.status || '')}</button>${summary ? ' ' + esc(clip(summary, 400)) : ''}<div class="kbd-run-detail" id="kbd-run-${esc(r.id)}" hidden></div></li>`;
+  }).join('');
   const atts = (d.attachments || []).map((x) =>
     kbdRow('附件', `${x.filename} (${Number(x.size) || 0} B)`)).join('');
   const canDelete = /^t_[A-Za-z0-9_-]{1,64}$/.test(String(t.id || ''));
@@ -267,7 +298,7 @@ function renderKanbanDetail(d) {
     ${canDelete ? `<div class="kbd-edit-form" id="kbd-edit-form" hidden>
       <label class="kb-frow"><span>标题</span><input id="kbd-edit-title" type="text" maxlength="200" value="${esc(t.title || '')}" /></label>
       <label class="kb-frow"><span>优先级</span><hm-select id="kbd-edit-priority" class="ui-select"><option value="0">P4 · 普通（默认）</option><option value="1">P3 · 低优先级</option><option value="2">P2 · 中优先级</option><option value="3">P1 · 高优先级</option><option value="10">P0 · 最紧急</option></hm-select></label>
-      <label class="kb-frow"><span>描述</span><textarea id="kbd-edit-body" rows="4" maxlength="4000">${esc(t.body || '')}</textarea></label>
+      <label class="kb-frow"><span>描述</span><textarea id="kbd-edit-body" rows="4" maxlength="20000">${esc(t.body || '')}</textarea></label>
       <div class="kbd-actions">
         <button class="kb-btn primary" type="button" data-kb-edit-save="${esc(t.id)}">保存修改</button>
         <button class="kb-btn" type="button" data-kb-edit-cancel="1">取消</button>
@@ -280,10 +311,11 @@ function renderKanbanDetail(d) {
     ${reassignAct}
     ${wsHtml}
     ${jump}
-    ${t.body ? `<div class="kbd-section"><h3>描述</h3><pre class="kbd-text">${esc(clip(t.body, 12000))}</pre></div>` : ''}
-    ${t.result || t.latest_summary ? `<div class="kbd-section"><h3>结果 / 交接</h3><pre class="kbd-text">${esc(clip(t.result || t.latest_summary, 12000))}</pre></div>` : ''}
+    ${t.body ? `<div class="kbd-section"><h3>描述</h3><div class="kbd-text md">${typeof renderMarkdown === 'function' ? renderMarkdown(clip(t.body, 20000)) : esc(clip(t.body, 20000))}</div></div>` : ''}
+    ${t.result || t.latest_summary ? `<div class="kbd-section"><h3>结果 / 交接</h3><div class="kbd-text md">${typeof renderMarkdown === 'function' ? renderMarkdown(clip(t.result || t.latest_summary, 20000)) : esc(clip(t.result || t.latest_summary, 20000))}</div></div>` : ''}
     <div class="kbd-section"><h3>依赖 (${(links.parents || []).length + (links.children || []).length})</h3>
       ${linkRows ? `<ul class="kbd-list">${linkRows}</ul>` : '<div class="kbd-empty">无父子依赖</div>'}</div>
+    ${childResults ? `<div class="kbd-section"><h3>子任务结果 (${(d.childResults || []).length})</h3><ul class="kbd-list">${childResults}</ul></div>` : ''}
     <div class="kbd-section"><h3>评论 (${(d.comments || []).length})</h3>
       ${comments ? `<ul class="kbd-list">${comments}</ul>` : '<div class="kbd-empty">暂无评论</div>'}
       ${commentBox}</div>
@@ -353,6 +385,8 @@ async function kbSaveTaskEdit(taskId) {
       if (saveBtn && saveBtn.isConnected) saveBtn.disabled = false;
       return;
     }
+    const ef = $('#kbd-edit-form');
+    if (ef) ef.hidden = true;
     toast('任务已更新', 1600);
     await kanbanLoad(true);
     await openKanbanTask(id, true);
@@ -380,7 +414,13 @@ async function kbLoadTaskLog(taskId) {
       if (pre) { pre.hidden = true; pre.textContent = ''; }
     } else {
       if (meta) meta.textContent = `日志大小 ${r.sizeBytes} B${r.truncated ? '（已截取末尾 32 KB）' : ''}`;
-      if (pre) { pre.hidden = false; pre.textContent = r.content; }
+      if (pre) {
+        const wasHidden = pre.hidden;
+        const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48;
+        pre.hidden = false;
+        pre.textContent = r.content;
+        if (wasHidden || nearBottom) pre.scrollTop = pre.scrollHeight;
+      }
     }
     if (btn && btn.isConnected) btn.textContent = '刷新日志';
   } catch (e) {

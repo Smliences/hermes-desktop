@@ -306,22 +306,6 @@ function setupKanban() {
   document.addEventListener('pointerup', kbDragUp);
   document.addEventListener('pointercancel', () => { if (KbDrag.armed || KbDrag.on) kbDragReset(); });
   window.addEventListener('blur', () => { if (KbDrag.armed || KbDrag.on) kbDragReset(); });
-
-  // 投放区的 chip：点一下 = 按该受让人筛选（再点取消），拖动则由 pointerup 处理
-  const dock = $('#kb-dock');
-  if (dock) dock.addEventListener('click', (e) => {
-    if (KbDrag.suppressClick) { KbDrag.suppressClick = false; return; }
-    const w = e.target.closest && e.target.closest('[data-kb-worker]');
-    if (!w) return;
-    const name = String(w.getAttribute('data-kb-worker') || '');
-    if (!name) return;
-    KB.filters.assignee = KB.filters.assignee === name ? '' : name;
-    const sel = $('#kb-assignee');
-    if (sel) sel.value = KB.filters.assignee;
-    kbSavePrefs();
-    renderKanbanStatusbar();
-    renderKanbanBody();
-  });
   const body = $('#kb-drawer-body');
   if (body) body.addEventListener('click', (e) => {
     const sub = e.target.closest && e.target.closest('[data-kb-submit]');
@@ -340,6 +324,26 @@ function setupKanban() {
     if (edtSave) { kbSaveTaskEdit(edtSave.getAttribute('data-kb-edit-save')); return; }
     const logBtn = e.target.closest && e.target.closest('[data-kb-log]');
     if (logBtn) { kbLoadTaskLog(logBtn.getAttribute('data-kb-log')); return; }
+    const refBtn = e.target.closest && e.target.closest('[data-kb-refresh-detail]');
+    if (refBtn && KB.detailId) { openKanbanTask(KB.detailId, false); return; }
+    const runBtn = e.target.closest && e.target.closest('[data-kb-run]');
+    if (runBtn) {
+      const runId = runBtn.getAttribute('data-kb-run');
+      const box = $('#kbd-run-' + runId);
+      if (box) {
+        if (!box.hidden) { box.hidden = true; return; }
+        box.hidden = false; box.textContent = '读取运行详情…';
+        const a = kbApi();
+        if (a && a.kanbanRun) {
+          a.kanbanRun(runId, kbParams()).then((r) => {
+            if (!r || !r.ok || !r.run) { box.textContent = (r && r.error) || '读取失败'; return; }
+            const u = r.run;
+            box.textContent = [u.profile && ('profile: ' + u.profile), u.step_key && ('step: ' + u.step_key), u.summary || u.outcome || u.error || ''].filter(Boolean).join(' · ') || '无更多详情';
+          }).catch(() => { box.textContent = '读取失败'; });
+        }
+      }
+      return;
+    }
     const spec = e.target.closest && e.target.closest('[data-kb-specify]');
     if (spec) { kbSpecifyTask(spec.getAttribute('data-kb-specify'), spec.closest('.kbd-actions') || body); return; }
     const est = e.target.closest && e.target.closest('[data-kb-estimate]');

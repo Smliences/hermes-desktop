@@ -41,21 +41,10 @@ t('files 白名单覆盖 main / preload / renderer / package.json', () => {
   }
 });
 
-t('node-pty 走 NAPI 预编译产物，且没被逼着重编译', () => {
-  assert(/asarUnpack:[\s\S]{0,160}node-pty/.test(yml), 'asarUnpack 未包含 node-pty（asar 内的 .node 无法加载）');
-  // 关掉重编译后完全依赖 prebuilds：这两个条件必须成对出现。若有人把 npmRebuild 改回
-  // true，在 Python 3.12+（无 distutils）的机器上 node-gyp 会直接失败，包都打不出来。
-  assert(/npmRebuild:\s*false/.test(yml),
-    'npmRebuild 必须是 false —— node-pty 已带 NAPI prebuilds，重编译只会在缺编译链的机器上失败');
-  const arch = `${process.platform}-${process.arch}`;
-  const bin = `node_modules/node-pty/prebuilds/${arch}/pty.node`;
-  assert(exists(bin), `关掉重编译后完全依赖预编译产物，缺 ${bin}`);
-  // spawn-helper 是独立可执行文件，必须一起 unpack 并保留执行位
-  const helper = path.join(ROOT, `node_modules/node-pty/prebuilds/${arch}/spawn-helper`);
-  if (fs.existsSync(helper)) {
-    const mode = fs.statSync(helper).mode & 0o777;
-    assert(mode & 0o111, 'spawn-helper 丢失执行位，伪终端会启动失败');
-  }
+t('已移除 node-pty 原生依赖且保持 npmRebuild: false', () => {
+  assert(!/node-pty/.test(yml), 'electron-builder.yml 不应再引用 node-pty');
+  assert(!pkg.optionalDependencies || !pkg.optionalDependencies['node-pty'], 'package.json 不应再保留 node-pty');
+  assert(/npmRebuild:\s*false/.test(yml), 'npmRebuild 应保持 false');
 });
 
 t('主进程 require 的第三方包都在 dependencies（devDependencies 不进包）', () => {

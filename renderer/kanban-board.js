@@ -181,15 +181,28 @@ function kbSetColTarget(next) {
   if (next) kbDockHint(`松手 → ${KB_STATUS_ACTION[next.status] || next.status}`);
   else if (!KbDrag.target) kbDockHint(KbDrag.title ? '⠿ ' + KbDrag.title : '⠿ 正在拖动');
 }
-/** 指针靠近 chip 行的左右边缘就自动横向滚动，否则窄窗口里根本够不到后面的 profile */
+/** 指针靠近 chip 行或看板横向区的左右边缘就自动横向滚动 */
 function kbDragAutoScroll(x, y) {
   const row = $('#kb-dock-workers'), dock = $('#kb-dock');
-  if (!row || !dock) { KbDrag.vel = 0; return; }
-  const d = dock.getBoundingClientRect();
-  if (y < d.top - 48 || y > d.bottom + 48) { KbDrag.vel = 0; return; }
-  const r = row.getBoundingClientRect();
-  if (r.scrollWidth <= r.width + 1) { KbDrag.vel = 0; return; }
-  KbDrag.vel = Math.round(kbScrollVel(x, r, 44, 12) * 10) / 10;
+  if (row && dock) {
+    const d = dock.getBoundingClientRect();
+    if (y >= d.top - 48 && y <= d.bottom + 48 && row.scrollWidth > row.clientWidth + 1) {
+      KbDrag.vel = Math.round(kbScrollVel(x, row.getBoundingClientRect(), 44, 12) * 10) / 10;
+      KbDrag.scrollEl = row;
+      return;
+    }
+  }
+  const board = $('#kb-columns') || $('#kb-scroll');
+  if (board && board.scrollWidth > board.clientWidth + 1) {
+    const br = board.getBoundingClientRect();
+    if (y >= br.top && y <= br.bottom) {
+      KbDrag.vel = Math.round(kbScrollVel(x, br, 56, 14) * 10) / 10;
+      KbDrag.scrollEl = board;
+      return;
+    }
+  }
+  KbDrag.vel = 0;
+  KbDrag.scrollEl = null;
 }
 /** 边缘自动滚动的速度（px/帧）：离边缘越近越快，中间与区外都是 0。纯函数，便于数值断言。 */
 function kbScrollVel(x, r, edge, max) {
@@ -203,8 +216,8 @@ function kbDragScrollLoop() {
   const step = () => {
     KbDrag.raf = 0;
     if (!KbDrag.on) return;
-    const row = $('#kb-dock-workers');
-    if (row && KbDrag.vel) row.scrollLeft += KbDrag.vel;
+    const target = KbDrag.scrollEl || $('#kb-dock-workers');
+    if (target && KbDrag.vel) target.scrollLeft += KbDrag.vel;
     KbDrag.raf = requestAnimationFrame(step);
   };
   KbDrag.raf = requestAnimationFrame(step);
@@ -414,7 +427,7 @@ const KB_PRI_OPTIONS = [
 function kbCardHtml(t, colName, opts) {
   const o = opts || {};
   const st = String(colName || t.status || '');
-  const draggable = KB_DRAG_SOURCE.includes(st) ? '1' : '0';
+  const draggable = !o.showStatus && KB_DRAG_SOURCE.includes(st) ? '1' : '0';
   const pri = Number(t.priority) || 0;
   const pm = kbPriMeta(pri);
   const priHtml = pri > 0 ? `<span class="kb-pri ${pm.cls}" title="${esc(pm.title)}">${pm.tag}</span>` : '';
@@ -862,7 +875,7 @@ function renderRailKanban() {
       `<button class="rkb-stat${rkbFilter === key ? ' is-on' : ''}" type="button" data-rkb-group="${esc(key)}"`
       + (dot ? ` data-dot="${esc(dot)}"` : '')
       + ` aria-pressed="${rkbFilter === key ? 'true' : 'false'}" title="${esc(tip)}">`
-      + (dot ? '<span class="rkb-dot"></span>' : '')
+      + (dot ? `<span class="rkb-dot" data-dot="${esc(dot)}"></span>` : '')
       + `${esc(label)}<b>${Number(n) || 0}</b></button>`;
     sum.innerHTML = chip('', '全部', '', total, '显示全部任务')
       + groups.map((g) => chip(g.key, g.label, g.dot, g.all.length, `${g.hint} · 点一下只看这一组`)).join('');

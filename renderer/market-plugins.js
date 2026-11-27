@@ -237,14 +237,15 @@ function updateCatalogStats(page) {
 function cardHTML(p, idx, native, demoOn) {
   const on = native ? !!p.enabled : !!demoOn;
   const name = esc(p.name);
+  const locked = native && (p.id === 'hermes-agent' || p.name === 'hermes-agent');
   return `<article class="cat-card ${on ? 'on' : 'off'}" data-idx="${idx}">
     <div class="cat-top">
       <span class="cat-ico" style="background:${p.color}">${p.ico}</span>
       <div class="cat-title">
-        <div class="cat-name"><span>${name}</span><span class="cat-badge ${on ? 'ok' : 'off'}">${on ? '已启用' : '已停用'}</span>${p.tag ? `<span class="cat-tag">${esc(p.tag)}</span>` : ''}</div>
+        <div class="cat-name"><span>${name}</span><span class="cat-badge ${on ? 'ok' : 'off'}">${on ? '已启用' : '已停用'}</span>${locked ? '<span class="cat-tag">核心必需</span>' : (p.tag ? `<span class="cat-tag">${esc(p.tag)}</span>` : '')}</div>
         <div class="cat-key">${esc(p.meta || p.id)}</div>
       </div>
-      <button class="plg-switch ${on ? 'on' : ''} ${p.pending ? 'pending' : ''}" title="${on ? '停用' : '启用'}" role="switch" aria-label="${on ? '停用' : '启用'} ${name}"></button>
+      <button class="plg-switch ${on ? 'on' : ''} ${p.pending ? 'pending' : ''}"${locked ? ' disabled title="核心必需技能，不可停用"' : ` title="${on ? '停用' : '启用'}"`} role="switch" aria-label="${on ? '停用' : '启用'} ${name}"></button>
     </div>
     <p class="cat-desc">${esc(p.desc || '暂无描述')}</p>
     <div class="cat-foot"><code>${esc(p.configKey || p.id)}</code><span>${native ? '点击展开描述' : '查看详情 ›'}</span></div>
@@ -292,10 +293,11 @@ function renderSubpageRows(page) {
     const pri = (s) => (s === '内置插件' || s === '内置配置') ? 0 : (s === '未分类' || s === '其他') ? 2 : 1;
     return pri(a) - pri(b) || a.localeCompare(b);
   });
+  const idxMap = new Map(defs.map((d, i) => [d, i]));
   groups.innerHTML = names.map((g) => {
     const items = buckets.get(g).sort((a, b) => String(a.name).localeCompare(String(b.name)));
     return `<section class="cat-group"><div class="cat-group-label">${esc(g)} <span>${items.length}</span></div>` +
-      `<div class="cat-grid">${items.map((d) => cardHTML(d, defs.indexOf(d), native, demoState[d.id])).join('')}</div></section>`;
+      `<div class="cat-grid">${items.map((d) => cardHTML(d, idxMap.get(d), native, demoState[d.id])).join('')}</div></section>`;
   }).join('');
 }
 /** 只重绘单个卡片 + 统计条：开关点击后不整页重排，避免闪烁与丢失焦点。 */
@@ -413,10 +415,11 @@ function setupSubpage(page) {
     if (sp) sp.hidden = false; if (g) g.hidden = true;
     // 强制重读要真跑一次 CLI/Python（6–8s），先把预期说清楚，别让人以为点空了
     if (isNativeCLI()) toast(`正在重新读取${label}，约需 6–8 秒…`, 2200);
-    if (isNativeCLI()) await loadLive(kind, page, { force: true });
+    let ok = true;
+    if (isNativeCLI()) ok = await loadLive(kind, page, { force: true });
     else showSubpageList(page);
     if (sp) sp.hidden = true; if (g) g.hidden = false;
-    toast(`${label}列表已刷新`, 1200);
+    if (ok !== false) toast(`${label}列表已刷新`, 1200);
   };
   const toggleMenu = () => { const m = page.querySelector('.pp-menu'); if (m) m.hidden = !m.hidden; };
   const addMain = page.querySelector('.pp-add-main'), addCaret = page.querySelector('.pp-add-caret');
@@ -426,15 +429,25 @@ function setupSubpage(page) {
     b.onclick = () => {
       page.querySelector('.pp-menu').hidden = true;
       const act = b.dataset.act;
-      if (act === 'cmd') toast(`在终端 rail 或 hermes CLI 运行：${cmd} <path>`, 2600);
-      else if (act === 'local') toast(`本地安装请按 hermes CLI 指引放置目录，然后点右上角刷新`, 2400);
+      if (act === 'cmd') {
+        const full = `${cmd} <path>`;
+        if (typeof gwCopy === 'function') gwCopy(full);
+        toast(`已复制安装命令：${full}`, 2400);
+      } else if (act === 'local') toast(`请将本地${label}目录放入 ~/.hermes/${kind === 'plugins' ? 'plugins' : 'skills'} 后点击右上角刷新`, 2600);
       else openMarket(kind, page.id);
     };
   });
   // 搜索 / 过滤：只重绘卡片区，输入焦点不丢失
   const inp = page.querySelector('.pp-search-wrap input');
   const clear = page.querySelector('.pp-search-wrap button');
-  if (inp) inp.addEventListener('input', () => { ui.search = inp.value; renderSubpageRows(page); });
+  if (inp) {
+    let _deb = 0;
+    inp.addEventListener('input', () => {
+      ui.search = inp.value;
+      clearTimeout(_deb);
+      _deb = setTimeout(() => renderSubpageRows(page), 150);
+    });
+  }
   if (clear) clear.onclick = () => { if (inp) { inp.value = ''; inp.focus(); } ui.search = ''; renderSubpageRows(page); };
   page.querySelectorAll('.pp-filters button').forEach((b) => {
     b.onclick = () => { ui.filter = b.dataset.filter; renderSubpageRows(page); };
@@ -505,17 +518,24 @@ function mkCapHTML(caps, compact, emptyText) {
     `<div class="mk-cap-row ${cls}"><span class="mk-cap-k">${esc(k)}</span>` +
     `<span class="mk-cap-v">${esc(v.join('、'))}</span></div>`).join('') + `</div>`;
 }
+function mkItemKey(it) { return String((it && (it.id || it.name)) || ''); }
 function mkDetailHTML(it, idx) {
+  const key = mkItemKey(it);
   const bits = [
     ['标识', it.id], ['来源', it.source], ['维护者', it.maintainer], ['分类', it.category],
     ['版本', it.version], ['Hermes 要求', it.requiresHermes],
   ].filter(([, v]) => v);
-  const insp = mk.inspect.get(idx);
+  const insp = mk.inspect.get(key);
+  const issuesList = Array.isArray(it.known_issues) ? it.known_issues
+    : (Array.isArray(it.knownIssues) ? it.knownIssues : []);
   const cmd = mk.kind === 'plugins'
     ? `hermes plugins install ${it.id} --no-enable --no-deps`
     : `hermes skills install ${it.id} --yes`;
   return `<div class="mk-detail">` +
     bits.map(([k, v]) => `<div><b>${esc(k)}：</b>${esc(v)}</div>`).join('') +
+    (issuesList.length
+      ? `<div class="mk-sec-label">已知问题</div><ul class="mk-issues">${issuesList.map((x) => `<li>${esc(typeof x === 'string' ? x : (x.message || x.title || JSON.stringify(x)))}</li>`).join('')}</ul>`
+      : '') +
     `<div class="mk-sec-label">目录声明的能力</div>` +
     mkCapHTML(it.capabilities, false, mk.kind === 'skills' ? '技能搜索结果不含权限声明，请点「安装前预览」查看 SKILL.md' : '') +
     `<div style="margin-top:8px"><code>${esc(cmd)}</code> <button class="mk-btn" data-act="copy" data-cmd="${esc(cmd)}">复制</button></div>` +
@@ -525,11 +545,12 @@ function mkDetailHTML(it, idx) {
     `</div>`;
 }
 function mkCardHTML(it, idx) {
+  const key = mkItemKey(it);
   const installed = !!it.installed;
   const isPlugin = mk.kind === 'plugins';
   const trustCls = ['trusted', 'builtin', 'official', 'verified'].includes(it.trust) ? 'safe' : '';
   const meta = [it.source, it.category, it.maintainer, it.version].filter(Boolean).map(esc).join(' · ');
-  const detail = mk.expanded.has(idx) ? mkDetailHTML(it, idx) : '';
+  const detail = mk.expanded.has(key) ? mkDetailHTML(it, idx) : '';
   // 技能安装没有 --no-enable / --no-deps 这类开关（CLI 只接受 --yes），
   // 且装完默认启用。确认卡必须按类别展示真实命令，不能沿用插件的权限文案。
   const confirmNote = isPlugin
@@ -558,8 +579,8 @@ function mkCardHTML(it, idx) {
         : `<button class="mk-btn primary" data-act="do-install" data-enable="0">确认安装</button>`) +
       `<button class="mk-btn" data-act="cancel">取消</button></div></div>`
     : '';
-  const armed = mk.armed.has(idx);
-  return `<article class="mk-card ${mk.expanded.has(idx) ? 'expanded' : ''}" data-idx="${idx}">
+  const armed = mk.armed.has(key);
+  return `<article class="mk-card ${mk.expanded.has(key) ? 'expanded' : ''}" data-idx="${idx}">
     <div class="mk-card-top">
       <span class="mk-ico">${mk.kind === 'plugins' ? '⧉' : '✦'}</span>
       <div class="mk-card-title">
@@ -567,12 +588,14 @@ function mkCardHTML(it, idx) {
         <div class="mk-id">${esc(it.id)}</div>
         ${(it.needsNewer || it.issues) ? `<div class="mk-flags">${it.needsNewer ? `<span class="mk-warn" title="该条目要求更新的 Hermes：${esc(it.needsNewer)}">需先升级 CLI</span>` : ''}${it.issues ? `<span class="mk-warn" title="目录标注了 ${it.issues} 条已知问题，安装前请点「安装前预览」查看">已知问题 ${it.issues}</span>` : ''}</div>` : ''}
       </div>
-      ${installed ? '<button class="mk-btn" disabled>已安装</button>' : '<button class="mk-btn primary" data-act="install">安装</button>'}
+      ${installed ? (mk.justInstalled === key && isPlugin
+        ? '<button class="mk-btn primary" data-act="enable-installed">立即启用</button>'
+        : '<button class="mk-btn" disabled>已安装</button>') : '<button class="mk-btn primary" data-act="install">安装</button>'}
     </div>
     <p class="mk-desc">${esc(it.description || '暂无描述')}</p>
     ${meta ? `<div class="mk-meta">${meta}</div>` : ''}
     <div class="mk-actions">
-      <button class="mk-btn" data-act="detail">${mk.expanded.has(idx) ? '收起详情' : '详情'}</button>
+      <button class="mk-btn" data-act="detail">${mk.expanded.has(key) ? '收起详情' : '详情'}</button>
       <button class="mk-btn" data-act="inspect">安装前预览</button>
       ${it.repo || it.docsUrl ? `<button class="mk-btn" data-act="repo">查看源码 ↗</button>` : ''}
       ${installed ? `<button class="mk-btn" data-act="update">更新</button>` +
@@ -594,8 +617,8 @@ function renderMarket() {
   if (mk.error) {
     const q = mk.query ? ` ${esc(mk.query)}` : '';
     const cmd = mk.kind === 'plugins' ? `hermes plugins search${q} --json` : `hermes skills search${q ? ' "' + mk.query + '"' : ' ""'} --json --limit 30`;
-    box.innerHTML = `<div class="mk-error">${esc(mk.error)}<code>hermes ${esc(cmd)}</code>` +
-      `<div style="margin-top:10px;display:flex;gap:6px"><button class="mk-btn" data-act="copy" data-cmd="hermes ${esc(cmd)}">复制命令</button>` +
+    box.innerHTML = `<div class="mk-error">${esc(mk.error)}<code>${esc(cmd)}</code>` +
+      `<div style="margin-top:10px;display:flex;gap:6px"><button class="mk-btn" data-act="copy" data-cmd="${esc(cmd)}">复制命令</button>` +
       `<button class="mk-btn" data-act="retry">重试</button></div></div>`;
     $('#mk-foot').textContent = '在线技能源需要网络；若 CLI 在终端能跑通，请检查网络代理后重试。可复制上方命令到终端验证。';
     return;
@@ -615,6 +638,7 @@ async function mkSearch(q, { force = false } = {}) {
   if (mk.busy) return;
   q = String(q == null ? '' : q).trim();
   mk.query = q; mk.error = ''; mk.limit = 48; mk.confirm = null; mk.armed.clear();
+  mk.expanded.clear(); mk.inspect.clear();
   const key = mkKey(q);
   if (!force && mkCache.has(key)) {
     const c = mkCache.get(key);
@@ -666,6 +690,7 @@ async function mkCheckUpdates() {
 }
 function mkSwitchKind(kind) {
   if (kind !== 'skills' && kind !== 'plugins') return;
+  if (mk.busy) { toast('还有命令在执行，请稍候', 1800); return; }
   mk.kind = kind; mk.confirm = null; mk.armed.clear(); mk.expanded.clear(); mk.inspect.clear();
   mk.updates.clear();
   document.querySelectorAll('.mk-tab').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
@@ -700,7 +725,8 @@ async function mkAction(op, idx, opts = {}) {
   const it = mk.items[idx]; if (!it) return;
   const label = ({ install: '安装', uninstall: '卸载', update: '更新', inspect: '读取预览' })[op] || '操作';
   const ident = op === 'install' || op === 'inspect' ? it.id : (it.name || it.id);
-  mk.busy = true; mk.confirm = null; mk.armed.delete(idx);
+  const key = mkItemKey(it);
+  mk.busy = true; mk.confirm = null; mk.armed.delete(key);
   mkStatus(`正在${label} ${it.name}…（CLI 冷启或下载可能需要十几秒）`, 'busy');
   renderMarket();
   let r;
@@ -711,13 +737,17 @@ async function mkAction(op, idx, opts = {}) {
     mkStatus(`${label}失败：${(r && r.error) || '未知错误'}`, 'err');
     toast(`${label}失败，详见状态行`, 2600);
   } else if (op === 'inspect') {
-    mk.inspect.set(idx, r.text || '（无输出）'); mk.expanded.add(idx);
+    mk.inspect.set(key, r.text || '（无输出）'); mk.expanded.add(key);
     mkStatus(`${label}完成`, '');
   } else {
-    if (op === 'install') { it.installed = true; mk.updates.delete(it.name || it.id); }
-    if (op === 'uninstall') it.installed = false;
+    if (op === 'install') {
+      it.installed = true;
+      mk.updates.delete(it.name || it.id);
+      mk.justInstalled = (mk.kind === 'plugins' && !(opts && opts.enable)) ? key : '';
+    }
+    if (op === 'uninstall') { it.installed = false; if (mk.justInstalled === key) mk.justInstalled = ''; }
     mkCache.clear();
-    mkStatus(`${label}完成：${it.name}`, '');
+    mkStatus(`${label}完成：${it.name}` + (mk.justInstalled === key ? '（已安装但默认停用，可点击「立即启用」）' : ''), '');
     toast(`${label}完成：${it.name}`, 2000);
     // 同步刷新本机「插件 / 技能」页列表：先给缓存（毫秒），后台重拉后由
     // catalog:updated 事件回来重绘——不再为了一次安装阻塞 6–8s 冷启 CLI。
@@ -734,11 +764,36 @@ $('#mk-results').addEventListener('click', (e) => {
   if (act === 'more') { mk.limit += 48; renderMarket(); return; }
   const card = btn.closest('.mk-card'); if (!card) return;
   const idx = +card.dataset.idx; const it = mk.items[idx]; if (!it) return;
+  const key = mkItemKey(it);
   // 详情与确认卡互斥：同时展开会把确认按钮推到 900px 以下，增加操作成本。
   if (act === 'install') {
-    mk.expanded.delete(idx);
+    mk.expanded.delete(key);
     mk.confirm = mk.confirm === idx ? null : idx;
     renderMarket(); return;
+  }
+  if (act === 'enable-installed') {
+    if (mk.busy || !isNativeCLI() || !mkApi().pluginsSetEnabled) return;
+    mk.busy = true;
+    mkStatus(`正在启用 ${it.name}…`, 'busy');
+    renderMarket();
+    mkApi().pluginsSetEnabled(it.name || it.id, true).then((r) => {
+      mk.busy = false;
+      if (r && r.ok) {
+        mk.justInstalled = '';
+        mkStatus(`已启用：${it.name}`, '');
+        toast(`已启用：${it.name}`, 1800);
+        const page = $('#plugins-page');
+        if (page) loadLive('plugins', page, { revalidate: true, quiet: true });
+      } else {
+        mkStatus(`启用失败：${(r && r.error) || '未知错误'}`, 'err');
+      }
+      renderMarket();
+    }).catch((err) => {
+      mk.busy = false;
+      mkStatus(`启用失败：${(err && err.message) || err}`, 'err');
+      renderMarket();
+    });
+    return;
   }
   if (act === 'cancel') { mk.confirm = null; renderMarket(); return; }
   if (act === 'do-install') {
@@ -753,7 +808,7 @@ $('#mk-results').addEventListener('click', (e) => {
   }
   if (act === 'detail') {
     mk.confirm = null;
-    if (mk.expanded.has(idx)) mk.expanded.delete(idx); else mk.expanded.add(idx);
+    if (mk.expanded.has(key)) mk.expanded.delete(key); else mk.expanded.add(key);
     renderMarket(); return;
   }
   if (act === 'repo') {
@@ -764,7 +819,7 @@ $('#mk-results').addEventListener('click', (e) => {
   if (act === 'inspect') { mkAction('inspect', idx); return; }
   if (act === 'update') { mkAction('update', idx); return; }
   if (act === 'uninstall') {
-    if (!mk.armed.has(idx)) { mk.armed.add(idx); renderMarket(); return; }
+    if (!mk.armed.has(key)) { mk.armed.add(key); renderMarket(); return; }
     mkAction('uninstall', idx);
   }
 });
@@ -786,7 +841,7 @@ if (hasNative && api.onMarketProgress) {
     if ($('#market-page').hidden) return;
     if (phase === 'start' || phase === 'busy') mkStatus(text, 'busy');
     if (phase === 'catalog-updated' && mk.kind === 'plugins' && !mk.busy) {
-      for (const k of [...mkCache.keys()]) { if (k.startsWith('plugins||')) mkCache.delete(k); }
+      for (const k of [...mkCache.keys()]) { if (k.startsWith('plugins|')) mkCache.delete(k); }
       mkSearch(mk.query);
     }
   });
@@ -795,7 +850,8 @@ if (hasNative && api.onMarketProgress) {
 // 页面可见就原地重绘并保持滚动位置；不可见只更新数据，等下次打开直接渲新值。
 if (hasNative && api.onCatalogUpdated) {
   api.onCatalogUpdated((p) => {
-    const kind = p && p.kind === 'skills' ? 'skills' : 'plugins';
+    if (!p || (p.kind !== 'plugins' && p.kind !== 'skills')) return;
+    const kind = p.kind;
     const page = $(kind === 'skills' ? '#skills-page' : '#plugins-page');
     loadLive(kind, page, { quiet: true });
   });

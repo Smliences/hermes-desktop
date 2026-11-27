@@ -147,17 +147,16 @@ function validText(v, max) {
  */
 function overview() {
   return enqueue(async () => {
-    const [listRes, statusRes, doctorRes] = await Promise.all([
+    const [listRes, statusRes] = await Promise.all([
       exec(['cron', 'list', '--all']),
       exec(['cron', 'status']),
-      exec(['cron', 'doctor']),
     ]);
     if (!listRes.ok) return { ok: false, error: listRes.error || '读取定时任务失败' };
     return {
       ok: true,
       jobs: parseCronList(listRes.text),
       status: parseCronStatus(statusRes.ok ? statusRes.text : ''),
-      doctor: (doctorRes.ok ? doctorRes.text : (doctorRes.error || '')).slice(0, 4000),
+      doctor: '',
       emptyHint: /No scheduled jobs/i.test(listRes.text),
       listRaw: listRes.text.slice(0, 6000),
     };

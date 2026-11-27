@@ -43,6 +43,8 @@
       // scrollIntoView 触发）必须忽略，否则一按方向键下拉就自己关掉。
       window.addEventListener('scroll', (event) => {
         if (!owner || !pop || event.target === pop) return;
+        const r = owner._trigger.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) { owner.close(); return; }
         place(pop, owner._trigger);
       }, true);
     }
@@ -69,13 +71,14 @@
 
   function place(p, trigger) {
     const r = trigger.getBoundingClientRect();
-    const w = Math.max(r.width, 148);
-    p.style.minWidth = Math.round(w) + 'px';
-    p.style.left = Math.round(Math.max(4, Math.min(r.left, window.innerWidth - w - 4))) + 'px';
+    const minW = Math.min(Math.max(r.width, 148), window.innerWidth - 16);
+    p.style.minWidth = Math.round(minW) + 'px';
+    const realW = Math.min(Math.max(minW, p.offsetWidth || minW), window.innerWidth - 16);
+    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - realW - 8))) + 'px';
     const h = Math.min(p.scrollHeight || 0, MAX_POP_H);
-    const below = window.innerHeight - r.bottom - 6;
-    const above = r.top - 6;
-    p.style.top = Math.round(below >= h || below >= above ? r.bottom + 4 : Math.max(4, r.top - h - 4)) + 'px';
+    const below = window.innerHeight - r.bottom - 8;
+    const above = r.top - 8;
+    p.style.top = Math.round(below >= h || below >= above ? r.bottom + 4 : Math.max(8, r.top - h - 4)) + 'px';
     p.style.maxHeight = MAX_POP_H + 'px';
   }
 
@@ -231,6 +234,7 @@
         p.appendChild(row);
       }
       this._optRows = Array.from(p.querySelectorAll('.us-opt'));
+      this._optRows.forEach((r, i) => { r.id = 'us-opt-' + i; });
       p.hidden = false;
       this._trigger.classList.add('is-open');
       place(p, this._trigger);
@@ -244,16 +248,26 @@
       if (this._trigger) {
         this._trigger.classList.remove('is-open');
         this._trigger.setAttribute('aria-expanded', 'false');
+        this._trigger.removeAttribute('aria-activedescendant');
       }
       this._active = -1;
     }
 
     _highlight() {
       if (!this._optRows) return;
+      let activeId = '';
       this._optRows.forEach((r, i) => {
-        r.classList.toggle('is-active', i === this._active);
-        if (i === this._active) r.scrollIntoView({ block: 'nearest' });
+        const on = i === this._active;
+        r.classList.toggle('is-active', on);
+        if (on) {
+          if (r.id) activeId = r.id;
+          r.scrollIntoView({ block: 'nearest' });
+        }
       });
+      if (this._trigger) {
+        if (activeId) this._trigger.setAttribute('aria-activedescendant', activeId);
+        else this._trigger.removeAttribute('aria-activedescendant');
+      }
     }
 
     _move(delta) {

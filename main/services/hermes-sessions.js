@@ -72,9 +72,15 @@ async function listSessions({ limit = 50, search = '', profileName = '' } = {}) 
 /** messages 表列集合：CLI 各版本会增减列，动态投影保证新旧库都能读。
  *  失败轮次（display_kind='failed_turn'）的真实错误藏在 display_metadata 里，
  *  早期投影把它丢掉了，界面只剩一句「Your request was not processed」。 */
+let _msgColsDb = '';
+let _msgColsSet = null;
 async function messageColumns() {
+  const db = getDB();
+  if (_msgColsSet && _msgColsDb === db) return _msgColsSet;
   const info = await sqliteExec('PRAGMA table_info(messages)');
-  return new Set(info.map((r) => r.name));
+  const s = new Set(info.map((r) => r.name));
+  if (s.size) { _msgColsDb = db; _msgColsSet = s; }
+  return s;
 }
 
 /** 加载某会话的消息历史（渲染用轻量投影） */
@@ -98,6 +104,8 @@ async function loadHistory(sessionId, { limit = 200 } = {}) {
       content: r.content || '',
       toolName: r.tool_name || '',
       toolCalls,
+      toolCallId: r.tool_call_id || '',
+      reasoningContent: r.reasoning_content || '',
       timestamp: r.timestamp,
       tokens: r.token_count || 0,
       displayKind: r.display_kind || '',
@@ -147,39 +155,44 @@ async function searchMessages(query, { limit = 40 } = {}) {
   try {
     rows = await sqliteExec(
       `SELECT m.session_id AS id, COUNT(*) AS hits,
-              snippet(messages_fts, 0, ${lit('[[')}, ${lit(']]')}, '…', 14) AS snip
+              snippet(messages_fts, 0, ${lit('[[')}, ${lit(']]')}, '…', 14) AS snip,
+              s.title AS title, s.started_at AS started_at, s.ended_at AS ended_at
        FROM messages_fts f JOIN messages m ON m.id = f.rowid
+       LEFT JOIN sessions s ON s.id = m.session_id
        WHERE messages_fts MATCH ${lit(ftsQ)}
        GROUP BY m.session_id ORDER BY hits DESC LIMIT ${cap}`
     );
   } catch { /* FTS 语法不兼容（中文/特殊字符）时走兜底 */ }
   if (!rows.length) {
     rows = await sqliteExec(
-      `SELECT session_id AS id, 1 AS hits,
-              substr(content, MAX(1, instr(content, ${lit(q)}) - 30), 110) AS snip
+      `SELECT sub.session_id AS id, 1 AS hits,
+              substr(sub.content, MAX(1, instr(sub.content, ${lit(q)}) - 30), 110) AS snip,
+              s.title AS title, s.started_at AS started_at, s.ended_at AS ended_at
        FROM (SELECT session_id, content FROM messages WHERE content LIKE ${lit('%' + q + '%')} LIMIT ${cap * 8}) sub
-       GROUP BY session_id LIMIT ${cap}`
+       LEFT JOIN sessions s ON s.id = sub.session_id
+       GROUP BY sub.session_id LIMIT ${cap}`
     );
   }
-  return rows.map((r) => ({ id: r.id, hits: Number(r.hits) || 1, snippet: String(r.snip || '').replace(/[\r\n]+/g, ' ').slice(0, 120) }));
+  return rows.map((r) => ({
+    id: r.id,
+    hits: Number(r.hits) || 1,
+    snippet: String(r.snip || '').replace(/[\r\n]+/g, ' ').slice(0, 120),
+    title: r.title || '',
+    started_at: Number(r.started_at) || 0,
+    ended_at: Number(r.ended_at) || 0,
+  }));
 }
 
 /** 会话库空间统计（只读）：库大小、页数、可回收空间、会话/消息数量与时间跨度。 */
 async function storageStats() {
   const dbBytes = fs.existsSync(getDB()) ? fs.statSync(getDB()).size : 0;
-  const one = async (sql, key, def = 0) => {
-    try { const r = await sqliteExec(sql); return Number(r[0] && r[0][key]) || def; }
-    catch { return def; }
-  };
-  const [pageCount, pageSize, freePages] = await Promise.all([
-    one('PRAGMA page_count', 'page_count'),
-    one('PRAGMA page_size', 'page_size', 4096),
-    one('PRAGMA freelist_count', 'freelist_count'),
-  ]);
   let agg = {};
   try {
     agg = (await sqliteExec(
-      `SELECT (SELECT COUNT(*) FROM sessions) AS sessions,
+      `SELECT (SELECT page_count FROM pragma_page_count()) AS page_count,
+              (SELECT page_size FROM pragma_page_size()) AS page_size,
+              (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count,
+              (SELECT COUNT(*) FROM sessions) AS sessions,
               (SELECT COUNT(*) FROM messages) AS messages,
               (SELECT COUNT(*) FROM sessions WHERE COALESCE(archived,0)=1 OR COALESCE(hidden,0)=1) AS archived,
               (SELECT COUNT(*) FROM sessions WHERE COALESCE(pinned,0)=1) AS pinned,
@@ -187,6 +200,9 @@ async function storageStats() {
               (SELECT MAX(started_at) FROM sessions) AS newest`
     ))[0] || {};
   } catch {}
+  const pageCount = Number(agg.page_count) || 0;
+  const pageSize = Number(agg.page_size) || 4096;
+  const freePages = Number(agg.freelist_count) || 0;
   return {
     ok: true, dbPath: getDB(), dbBytes, pageCount, pageSize,
     freeBytes: freePages * pageSize, freePages,

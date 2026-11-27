@@ -346,11 +346,14 @@ function kbProjectDialog(mode, project) {
       : (mode === 'settings' ? 'project-settings' : 'project-add-folder'));
   kbModalOpen(kind);
 }
-function kbModalOpen(kind, presetStatus) {
+function kbModalOpen(kind, presetArg) {
   const modal = $('#kb-modal'), mask = $('#kb-modal-mask');
   if (!modal || !mask || (kind !== 'task' && kind !== 'board' && kind !== 'bind' && !KB_PROJECT_KINDS.includes(kind))) return;
+  const prefill = (presetArg && typeof presetArg === 'object') ? presetArg : null;
+  const presetStatus = prefill ? prefill.status : presetArg;
   KB.modal = kind;
   KB.modalBusy = false;
+  KB.modalSessionId = (kind === 'task' && prefill && prefill.sessionId) ? String(prefill.sessionId) : '';
   KB.modalKey = 'desktop-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   const taskForm = $('#kb-form-task'), boardForm = $('#kb-form-board'), bindForm = $('#kb-form-bind');
   const projForm = $('#kb-form-project'), delForm = $('#kb-form-project-del');
@@ -359,6 +362,11 @@ function kbModalOpen(kind, presetStatus) {
     taskForm.reset();
     taskForm.querySelectorAll('hm-select').forEach((el) => { if (el.reset) el.reset(); });
     taskForm.hidden = kind !== 'task';
+    if (kind === 'task' && prefill) {
+      if (prefill.title && $('#kb-f-title')) $('#kb-f-title').value = String(prefill.title).slice(0, 200);
+      if (prefill.body && $('#kb-f-body')) $('#kb-f-body').value = String(prefill.body).slice(0, 20000);
+      if (prefill.projectId && $('#kb-f-project')) $('#kb-f-project').value = String(prefill.projectId);
+    }
   }
   // 列尾「＋ 添加任务」带过来的起始状态。后端只认 triage / ready，其它值一律忽略，
   // 免得界面暗示「能直接建到进行中 / 受阻 / 已完成」。
@@ -496,6 +504,7 @@ function kbModalSubmit() {
       modelOverride: modelVal,
       providerOverride: modelVal ? (kbModelProviders[modelVal] || '') : '',
       reasoningEffort: $('#kb-f-effort')?.value || '',
+      sessionId: KB.modalSessionId || undefined,
       idempotencyKey: key,
     };
   } else if (kind === 'bind') {

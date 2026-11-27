@@ -1,14 +1,19 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog, clipboard, powerMonitor, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, clipboard, powerMonitor, screen, nativeTheme, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-// 受限环境兼容：禁用硬件加速，避免 GPU 子进程不可用时启动失败
-app.disableHardwareAcceleration();
-
 const log = require('./services/logger');
 const isDev = process.argv.includes('--dev');
+
+// 受限环境兼容：仅在显式要求时禁用硬件加速，正常环境启用硬件合成提升滚动/动画帧率
+if (process.env.HERMES_DISABLE_GPU === '1') app.disableHardwareAcceleration();
+process.on('uncaughtException', (err) => log.error('process', 'uncaughtException', { err: log.redact(String((err && err.stack) || err)) }));
+process.on('unhandledRejection', (err) => log.error('process', 'unhandledRejection', { err: log.redact(String((err && err.stack) || err)) }));
+app.on('child-process-gone', (_e, details) => {
+  if (details && details.type === 'GPU') log.warn('app', 'GPU process gone', { reason: details.reason });
+});
 
 /* 调试口：仅显式授权时开启。
    旧实现只要 /tmp/hermes_cdp_port 存在就 appendSwitch，而 /tmp 全局可写，
@@ -114,16 +119,82 @@ function boot() {
    *  迷你窗靠它绑定「同一个会话」，所以它由渲染层推、主进程只做缓存。 */
   let orbCtx = null;
 
+  const winStatePath = () => path.join(app.getPath('userData'), 'window-state.json');
+  function loadWinState() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(winStatePath(), 'utf8'));
+      const w = Number(raw.width), h = Number(raw.height);
+      const out = {
+        width: Number.isFinite(w) && w >= 940 ? Math.round(w) : 1360,
+        height: Number.isFinite(h) && h >= 600 ? Math.round(h) : 860,
+        maximized: !!raw.maximized,
+      };
+      if (Number.isFinite(raw.x) && Number.isFinite(raw.y)) {
+        out.x = Math.round(raw.x);
+        out.y = Math.round(raw.y);
+      }
+      return out;
+    } catch {
+      return { width: 1360, height: 860, maximized: false };
+    }
+  }
+  let winStateTimer = null;
+  function saveWinStateNow() {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized() || orbActive) return;
+    try {
+      const maximized = mainWindow.isMaximized();
+      const b = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+      fs.writeFileSync(winStatePath(), JSON.stringify({
+        x: b.x, y: b.y, width: b.width, height: b.height, maximized,
+      }), 'utf8');
+    } catch { /* ignore */ }
+  }
+  function scheduleWinStateSave() {
+    clearTimeout(winStateTimer);
+    winStateTimer = setTimeout(saveWinStateNow, 300);
+  }
+
+  function notifyDesktop({ title, body, urgency = 'normal', onClick } = {}) {
+    try {
+      if (process.platform === 'darwin' && app.dock) {
+        app.dock.bounce(urgency === 'critical' ? 'critical' : 'informational');
+      }
+      if (!Notification || !Notification.isSupported()) return;
+      const n = new Notification({ title: String(title || 'Hermes'), body: String(body || ''), silent: urgency !== 'critical' });
+      if (typeof onClick === 'function') n.on('click', () => { try { onClick(); } catch {} });
+      n.show();
+    } catch { /* 通知权限被拒或无桌面会话时静默降级 */ }
+  }
+
   function createWindow() {
+    const ws = loadWinState();
     mainWindow = new BrowserWindow({
-      width: 1360, height: 860, minWidth: 940, minHeight: 600,
-      backgroundColor: '#f2f4f3',
+      x: ws.x, y: ws.y, width: ws.width, height: ws.height, minWidth: 940, minHeight: 600,
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1a18' : '#fbfaf7',
       titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 13 } : undefined,
       webPreferences: {
         preload: path.join(__dirname, '..', 'preload', 'preload.js'),
         contextIsolation: true, nodeIntegration: false, sandbox: true,
       },
+    });
+    if (ws.maximized) mainWindow.maximize();
+    mainWindow.on('resize', scheduleWinStateSave);
+    mainWindow.on('move', scheduleWinStateSave);
+    mainWindow.on('maximize', scheduleWinStateSave);
+    mainWindow.on('unmaximize', scheduleWinStateSave);
+    mainWindow.on('close', saveWinStateNow);
+    mainWindow.webContents.on('render-process-gone', async (_e, details) => {
+      log.error('window', 'render-process-gone', details || {});
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: '界面进程异常退出',
+        message: '渲染进程意外终止，是否立即重新加载界面？',
+        buttons: ['重新加载', '关闭'],
+        defaultId: 0,
+      });
+      if (response === 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
     });
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -161,6 +232,9 @@ function boot() {
    *  - hotkey 模式：球只允许在迷你聊天窗打开时出现，收起即隐去。
    *  （菜单栏托盘已按用户 2026-11-11 要求删除，这里不再推 tray 文案） */
   function syncOrb() {
+    if (process.platform === 'darwin' && app.dock) {
+      try { app.dock.setBadge(pendingApprovals > 0 ? String(pendingApprovals) : ''); } catch {}
+    }
     if (orb) orb.setStatus(orbSnapshot());
     if (orbChat && orbChat.isOpen() && (busyTurns > 0) !== orbChatLastRunning) {
       pushOrbChatRunning(busyTurns > 0);
@@ -363,12 +437,14 @@ function boot() {
         model: (orbCtx && orbCtx.model) || '',
         theme: (orbCtx && orbCtx.theme) || 'light',
         messages: (orbCtx && orbCtx.messages) || [],
+        approvals: Array.from(activeApprovals.values()).filter((a) => !orbCtx || !a.tabId || a.tabId === orbCtx.tabId),
         running: busyTurns > 0,
       }),
       onSubmit: (text) => {
         if (!orbCtx || !orbCtx.tabId) return { ok: false, error: '还没有可用的会话，先回主窗口发一条' };
         const tabId = orbCtx.tabId;
-        submitTurn(tabId, { query: text, sessionId: orbCtx.sessionId || null });
+        const cfg = loadConfig();
+        submitTurn(tabId, { query: text, sessionId: orbCtx.sessionId || null, model: cfg.model || undefined, reasoning: cfg.reasoning, yolo: !!cfg.yolo, cwd: orbCtx.cwd || undefined });
         // 主窗口只是 hide，渲染层还活着：告诉它补一条用户消息，
         // 否则小窗聊的内容回主窗后「只有回答、没有提问」。
         safeSend('orb:user-message', { tabId, text });
@@ -519,13 +595,29 @@ function boot() {
       onEvent: (evt) => fanoutEvent(tabId, evt),
       onError: (err) => {
         safeSend('hermes:error', { tabId, message: err.message });
-        if (orbChat) orbChat.pushEvent({ type: 'error', text: err.message });
+        if (orbChat && orbChat.isOpen() && (!orbCtx || orbCtx.tabId === tabId)) {
+          orbChat.pushEvent({ type: 'error', text: err.message });
+        }
+        if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) {
+          notifyDesktop({
+            title: 'Hermes 执行出错',
+            body: String(err.message || '请回到主窗口查看详情').slice(0, 120),
+            onClick: () => { leaveOrb(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus(); safeSend('app:focus-tab', tabId); },
+          });
+        }
       },
       onClose: (summary) => {
         busyTurns = Math.max(0, busyTurns - 1);
         pushOrbChatRunning(busyTurns > 0, { summary: summary || null });
         syncOrb();
         safeSend('hermes:close', { tabId, summary });
+        if ((!summary || !summary.aborted) && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive)) {
+          notifyDesktop({
+            title: 'Hermes 回复已完成',
+            body: '点击回到对话查看结果',
+            onClick: () => { leaveOrb(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus(); safeSend('app:focus-tab', tabId); },
+          });
+        }
       },
     });
     return chat.getTabState(tabId);
@@ -638,9 +730,30 @@ function boot() {
     try { await chat.backend.whenReady(8000); } catch {}
     return !!chat.backendInfo().port;
   }
+  const kbPrevStatuses = new Map();
   handle('kanban:board', async (_e, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
-    return kanban.board(opts || {});
+    const r = await kanban.board(opts || {});
+    if (r && r.ok && r.board && r.board.columns) {
+      const bg = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive;
+      for (const list of Object.values(r.board.columns)) {
+        if (!Array.isArray(list)) continue;
+        for (const t of list) {
+          if (!t || !t.id) continue;
+          const prev = kbPrevStatuses.get(t.id);
+          const cur = String(t.status || '');
+          if (bg && prev === 'running' && (cur === 'done' || cur === 'blocked' || cur === 'review')) {
+            notifyDesktop({
+              title: '看板任务状态更新',
+              body: `${t.title || t.id} → ${cur === 'done' ? '已完成' : cur === 'blocked' ? '受阻' : '待审阅'}`,
+              onClick: () => { leaveOrb(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus(); safeSend('app:menu-action', 'kanban'); },
+            });
+          }
+          kbPrevStatuses.set(t.id, cur);
+        }
+      }
+    }
+    return r;
   });
   handle('kanban:task', async (_e, taskId, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
@@ -960,7 +1073,9 @@ function boot() {
   // ---- 危险操作审批：把后端请求交给渲染层确认（默认拒绝，30s 超时） ----
   // 主窗口与迷你聊天窗都能表态；任一侧表决后广播 resolved，另一侧立刻把卡片收口，
   // 否则那侧 24s 的自动拒绝定时器还会再发一次（对同一 requestId 的重复表态）。
+  const activeApprovals = new Map();
   function respondApproval(requestId, choice, tabId) {
+    activeApprovals.delete(requestId);
     chat.respondApproval(requestId, choice, tabId);
     pendingApprovals = Math.max(0, pendingApprovals - 1);
     syncOrb();
@@ -974,10 +1089,38 @@ function boot() {
     // 球上有珊瑚色「待确认」徽标，面板里有确认卡，回来就能看到。
     if (orbChat && orbChat.isOpen()) toOrb = orbChat.pushApproval(req);
     if (!toMain && !toOrb) return false;
+    activeApprovals.set(req.requestId, req);
     pendingApprovals += 1;
     syncOrb();
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) {
+      notifyDesktop({
+        title: `需要确认危险操作：${req.tool || '工具调用'}`,
+        body: String(req.command || '请在 25 秒内确认，超时将自动拒绝').slice(0, 120),
+        urgency: 'critical',
+        onClick: () => {
+          if (orbActive) {
+            revealBallForChat();
+            ensureOrbChat().open();
+          } else {
+            leaveOrb();
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
+            safeSend('app:focus-tab', req.tabId);
+          }
+        },
+      });
+    }
     return true;
   });
+  if (typeof chat.setApprovalTimeoutHandler === 'function') {
+    chat.setApprovalTimeoutHandler((req) => {
+      if (!req || !req.requestId) return;
+      activeApprovals.delete(req.requestId);
+      pendingApprovals = Math.max(0, pendingApprovals - 1);
+      syncOrb();
+      safeSend('orb:approval-resolved', { requestId: req.requestId, choice: 'deny' });
+      if (orbChat) orbChat.pushApprovalResolved({ requestId: req.requestId, choice: 'deny' });
+    });
+  }
   handle('hermes:approval-respond', (_e, payload) => {
     const p = payload || {};
     respondApproval(p.requestId, p.choice, p.tabId);
@@ -994,6 +1137,7 @@ function boot() {
       sessionId: typeof ctx.sessionId === 'string' ? ctx.sessionId : null,
       title: typeof ctx.title === 'string' ? ctx.title.slice(0, 80) : '',
       model: typeof ctx.model === 'string' ? ctx.model.slice(0, 80) : '',
+      cwd: typeof ctx.cwd === 'string' ? ctx.cwd : undefined,
       theme: ctx.theme === 'dark' ? 'dark' : 'light',
       messages: Array.isArray(ctx.messages) ? ctx.messages.slice(-14).map((m) => ({
         role: m && m.role === 'user' ? 'user' : 'assistant',
@@ -1061,16 +1205,28 @@ function boot() {
     ],
   };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'Hermes', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
-    { label: '编辑', submenu: [{ role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { type: 'separator' }, { role: 'find' }] },
+    { label: 'Hermes', submenu: [
+      { role: 'about' },
+      { type: 'separator' },
+      { label: '偏好设置…', accelerator: 'CmdOrCtrl+,', click: () => { leaveOrb(); safeSend('app:menu-action', 'settings'); } },
+      { type: 'separator' },
+      ...(process.platform === 'darwin' ? [{ role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }] : []),
+      { role: 'quit' },
+    ] },
+    { label: '编辑', submenu: [
+      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      { type: 'separator' }, { role: 'find' },
+    ] },
     viewMenu,
     { label: '窗口', submenu: [
+      { label: '新建会话', accelerator: 'CmdOrCtrl+N', click: () => { leaveOrb(); safeSend('app:menu-action', 'new-session'); } },
       { label: '收起成小圆球', accelerator: 'CmdOrCtrl+Shift+M', click: () => enterOrb() },
       // 只写文案、不挂 accelerator：真正的全局快捷键由 globalShortcut 注册，
       // 这里再挂一次会变成「只在本应用前台生效」的第二套键位，容易互相抢。
       { label: `打开 / 收起迷你聊天窗（${ACCEL_LABEL}）`, click: () => toggleOrbChat() },
       { type: 'separator' },
-      { role: 'minimize' }, { role: 'zoom' },
+      { role: 'minimize' }, { role: 'zoom' }, { role: 'close' },
     ] },
   ]));
   // 第二个实例（再次双击 app）要把球态收回来，而不是去 focus 一颗球

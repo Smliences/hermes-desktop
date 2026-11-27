@@ -220,9 +220,14 @@ function renderSettingsPanel() {
   settingsPanelEpoch++;
   // 底部栏是「保存到本地设置」的语义；自带「应用」按钮的面板会把它收起来，
   // 切回来时必须还原，否则别的分类会失去保存入口。
-  const saveBtn = $('#set-save'), hintEl = $('#set-hint');
-  if (saveBtn) saveBtn.hidden = false;
-  if (hintEl && !(saveBtn && saveBtn.classList.contains('dirty'))) hintEl.textContent = '更改需保存后生效';
+  const saveBtn = $('#set-save'), cancelBtn = $('#set-cancel'), hintEl = $('#set-hint');
+  const isGeneral = cat.id === 'general';
+  if (saveBtn) saveBtn.hidden = !isGeneral;
+  if (cancelBtn) cancelBtn.textContent = isGeneral ? '取消' : '关闭';
+  if (hintEl) {
+    if (!isGeneral) hintEl.textContent = '';
+    else if (!(saveBtn && saveBtn.classList.contains('dirty'))) hintEl.textContent = '更改需保存后生效';
+  }
   if (cat.custom === 'model') { renderModelPanel(panel, cat); return; }
   if (cat.custom === 'profile') { renderProfilePanel(panel, cat); return; }
   if (cat.custom === 'shortcuts') { renderShortcutPanel(panel, cat); return; }
@@ -375,12 +380,18 @@ async function renderModelPanel(panel, cat) {
           <span class="set-provider-name">${esc(p.name)}</span>
           <span class="set-provider-hint">${esc(p.baseUrl || '')}${count ? ` · ${count} 个模型` : ''}</span>
         </span>
-        <button class="set-provider-edit">编辑</button>`;
-      row.querySelector('.set-provider-edit').onclick = () => toast(`编辑提供商请运行 hermes CLI（providers 配置存储于 providers.json）`, 2400);
+        <button class="set-provider-edit" title="只读列表：点击打开配置文件">只读 · 打开配置</button>`;
+      row.querySelector('.set-provider-edit').onclick = () => {
+        if (isNativeCLI() && typeof api.configOpenFile === 'function') {
+          api.configOpenFile('providers.json').catch(() => toast('请通过 hermes CLI 编辑 ~/.hermes/providers.json', 2400));
+        } else {
+          toast('提供商列表为只读（请通过 hermes CLI 编辑 providers.json）', 2400);
+        }
+      };
       list.appendChild(row);
     });
   }
-  const add = document.createElement('button'); add.className = 'set-add-provider'; add.textContent = '＋ 添加模型提供商';
+  const add = document.createElement('button'); add.className = 'set-add-provider'; add.textContent = '配置说明：通过 CLI 添加/修改提供商（只读）';
   add.onclick = () => toast('请通过 hermes CLI 配置提供商（hermes login / config.yaml）', 2400);
   panel.appendChild(add);
 }
@@ -446,6 +457,8 @@ function renderShortcutPanel(panel, cat) {
 
 /* ---------- 设置页：记忆（只读诊断 + 文件元信息，无写操作） ---------- */
 async function renderMemoryPanel(panel, cat) {
+  const epoch = settingsPanelEpoch;
+  const alive = () => epoch === settingsPanelEpoch;
   const head = document.createElement('div');
   head.innerHTML = `<div class="pp-group-label">记忆状态</div><div class="set-desc">${esc(cat.desc)}</div>`;
   panel.appendChild(head);
@@ -481,6 +494,7 @@ async function renderMemoryPanel(panel, cat) {
   if (isNativeCLI()) {
     try { const r = await api.diagnosticsMemoryFiles(); if (r && r.ok) files = arr(r.files); } catch {}
   }
+  if (!alive()) return;
   list.innerHTML = '';
   if (!files.length) {
     list.innerHTML = '<div class="set-row-hint">未读取到记忆文件信息。</div>';
@@ -531,6 +545,8 @@ function toolRow(item, onToggle) {
   return row;
 }
 async function renderToolsPanel(panel, cat) {
+  const epoch = settingsPanelEpoch;
+  const alive = () => epoch === settingsPanelEpoch;
   const head = document.createElement('div');
   head.innerHTML = `<div class="pp-group-label">工具集 · CLI 平台</div><div class="set-desc">${esc(cat.desc)}</div>`;
   panel.appendChild(head);
@@ -602,6 +618,7 @@ async function renderToolsPanel(panel, cat) {
     try { r = await api.toolsList(); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
   }
   if (!isNativeCLI()) { status.textContent = '演示模式：不做 CLI 调用。'; return; }
+  if (!alive()) return;
   if (!r || !r.ok) {
     status.textContent = '读取失败：' + ((r && r.error) || '未知错误');
     status.classList.add('is-error');
@@ -1108,7 +1125,17 @@ async function renderCronPanel(panel, cat) {
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button'; clearBtn.className = 'mk-btn'; clearBtn.textContent = '清空';
   fBtns.append(createBtn, clearBtn);
+  const presets = document.createElement('div');
+  presets.className = 'op-form-btns';
+  presets.style.marginBottom = '6px';
+  for (const [label, val] of [['每 15 分钟', 'every 15m'], ['每小时', 'every 1h'], ['每天 9:00', '0 9 * * *'], ['工作日 9:00', '0 9 * * 1-5']]) {
+    const pb = document.createElement('button');
+    pb.type = 'button'; pb.className = 'mk-btn'; pb.textContent = label;
+    pb.onclick = () => { schedIn.value = val; schedIn.focus(); };
+    presets.appendChild(pb);
+  }
   form.append(fieldRow('调度', '支持相对间隔、every 间隔与 5 段 cron 表达式。', schedIn),
+    presets,
     fieldRow('名称', '', nameIn), fieldRow('内容', '每行会原样作为 CLI 的位置参数；不要以 - 开头。', promptIn), fBtns);
   guardFieldKey(schedIn, () => form.querySelectorAll('.op-confirm').forEach((n) => n.remove()));
   guardFieldKey(nameIn, () => form.querySelectorAll('.op-confirm').forEach((n) => n.remove()));
@@ -1226,23 +1253,37 @@ async function renderCronPanel(panel, cat) {
     return true;
   }
 
-  createBtn.onclick = () => opConfirm(form, {
-    title: '创建这个定时任务？',
-    cmd: `hermes -p <current> cron create ${schedIn.value.trim() || '<schedule>'} --paused`,
-    note: '任务以暂停状态创建，不会立刻运行；恢复后才会按调度唤醒 agent。',
-    confirmLabel: '确认创建',
-    onGo: async () => {
-      const ok = await write(() => api.cronCreate({
-        schedule: schedIn.value.trim(), name: nameIn.value.trim(), prompt: promptIn.value.trim(),
-      }), '已创建（暂停）', '创建失败');
-      if (ok) { schedIn.value = ''; nameIn.value = ''; promptIn.value = ''; }
-      return ok;
-    },
-  });
+  const isValidSchedule = (v) => {
+    if (!v || v.startsWith('-')) return false;
+    if (/^(?:every\s+)?\d+\s*[smhd]$/i.test(v)) return true;
+    const parts = v.split(/\s+/);
+    return parts.length === 5 && parts.every((p) => /^[\d*,/-]+$/.test(p));
+  };
+  createBtn.onclick = () => {
+    const sched = schedIn.value.trim();
+    if (!isValidSchedule(sched)) {
+      toast('调度格式无效：请填写如 30m、every 2h 或 5 段 cron（0 9 * * *）', 2600);
+      schedIn.focus();
+      return;
+    }
+    opConfirm(form, {
+      title: '创建这个定时任务？',
+      cmd: `hermes -p <current> cron create ${sched} --paused`,
+      note: '任务以暂停状态创建，不会立刻运行；恢复后才会按调度唤醒 agent。',
+      confirmLabel: '确认创建',
+      onGo: async () => {
+        const ok = await write(() => api.cronCreate({
+          schedule: sched, name: nameIn.value.trim(), prompt: promptIn.value.trim(),
+        }), '已创建（暂停）', '创建失败');
+        if (ok) { schedIn.value = ''; nameIn.value = ''; promptIn.value = ''; }
+        return ok;
+      },
+    });
+  };
 
   async function reload() {
     if (!isNativeCLI()) { status.textContent = '演示模式：不做 CLI 调用。'; return; }
-    status.textContent = '正在执行 hermes cron list --all / status / doctor…';
+    status.textContent = '正在执行 hermes cron list --all / status…';
     let r;
     try { r = await api.cronOverview(); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
     if (!alive()) return;
@@ -1347,12 +1388,19 @@ function setupSettings() {
   $('#settings-page').addEventListener('click', (e) => { if (e.target.id === 'settings-page') toggleSettings(false); });
   $('#set-cancel').onclick = () => toggleSettings(false);
   $('#set-save').onclick = () => {
+    const prevMode = settingsRead().approvalMode;
     const ok = SettingsStore.set(settingsDraft);
     settingsDraft = {};
     $('#set-save').classList.remove('dirty');
     if (!ok) { $('#set-hint').textContent = '保存失败（本地存储不可用）'; toast('设置无法保存', 2400); return; }
     // 设置此前只写不读，全部是摆设；保存后立刻应用到界面
     applySettings();
+    const nextMode = settingsRead().approvalMode;
+    if (nextMode !== prevMode && state && state.config) {
+      state.config.yolo = nextMode === '自动批准全部';
+      if (hasNative && api.setConfig) api.setConfig({ yolo: state.config.yolo });
+      if (typeof syncComposerState === 'function') syncComposerState();
+    }
     $('#set-hint').textContent = '已保存并生效';
     toast('设置已保存并生效', 1400);
   };
@@ -1402,8 +1450,39 @@ async function doSwitchProfile(name) {
 }
 function askSwitch(name) {
   if (name === pfSnapshot?.current) return;
-  if (!confirm(`切换到 profile「${name}」？\n\n将重启后端并重载界面，当前进行中的对话会中断。桌面端只改自己的选择，不会写入 ~/.hermes，终端 CLI 不受影响。`)) return;
-  doSwitchProfile(name);
+  const old = document.querySelector('.pf-switch-confirm');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'palette pf-switch-confirm';
+  const box = document.createElement('div');
+  box.className = 'palette-box';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', '确认切换 Profile');
+  box.style.padding = '16px 18px';
+  const card = document.createElement('div');
+  card.className = 'op-confirm';
+  const h = document.createElement('div');
+  h.className = 'op-confirm-title';
+  h.textContent = `切换到 profile「${name}」？`;
+  const p = document.createElement('p');
+  p.className = 'op-confirm-note';
+  p.textContent = '将重启后端并重载界面，当前进行中的对话会中断。桌面端只改自己的选择，不会写入 ~/.hermes，终端 CLI 不受影响。';
+  const btns = document.createElement('div');
+  btns.className = 'op-confirm-btns';
+  const cancel = document.createElement('button');
+  cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = '取消';
+  const ok = document.createElement('button');
+  ok.type = 'button'; ok.className = 'btn primary'; ok.textContent = '确认切换';
+  cancel.onclick = () => wrap.remove();
+  ok.onclick = () => { wrap.remove(); doSwitchProfile(name); };
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) wrap.remove(); });
+  btns.append(cancel, ok);
+  card.append(h, p, btns);
+  box.append(card);
+  wrap.append(box);
+  document.body.append(wrap);
+  ok.focus();
 }
 
 function renderPfMenu() {
@@ -1444,6 +1523,8 @@ document.addEventListener('click', (e) => {
 
 /** 设置页 → Profile 分区 */
 async function renderProfilePanel(panel, cat) {
+  const epoch = settingsPanelEpoch;
+  const alive = () => epoch === settingsPanelEpoch;
   const head = document.createElement('div');
   head.innerHTML = `<div class="pp-group-label">实例</div><div class="set-desc">${esc(cat.desc)}</div>`;
   panel.appendChild(head);
@@ -1461,6 +1542,7 @@ async function renderProfilePanel(panel, cat) {
   panel.appendChild(note);
 
   const snap = await loadProfiles(true);
+  if (!alive()) return;
   if (!snap) {
     grid.innerHTML = '<div class="set-row-hint">需要桌面端原生环境才能切换 profile。</div>';
     return;
