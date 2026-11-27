@@ -47,10 +47,15 @@
         </div>
       </div>
       <div class="sb-brand">
-        <img src="assets/hermes-logo.png" class="sb-logo" alt="" />
-        <span class="sb-wordmark">hermes <span class="sb-pill">AGENT</span></span>
-        <button id="pf-chip" class="pf-chip" title="切换 Profile">
-          <span class="pf-dot"></span><span class="pf-name" id="pf-name">default</span><span class="pf-caret">▾</span>
+        <img src="assets/hermes-logo.png" class="sb-logo" alt="Hermes" />
+        <div class="sb-wordmark">
+          <span class="sb-brand-name">Hermes</span>
+          <span class="sb-pill">AGENT</span>
+        </div>
+        <button id="pf-chip" class="pf-chip" type="button" title="切换 Profile" aria-haspopup="menu" aria-expanded="false">
+          <span class="pf-dot" aria-hidden="true"></span>
+          <span class="pf-name" id="pf-name">default</span>
+          <svg class="pf-caret" viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 4.6 6 2.2l2.5 2.4M3.5 7.4 6 9.8l2.5-2.4"/></svg>
         </button>
       </div>
       <button id="btn-new-session" class="new-session-btn">
@@ -724,7 +729,7 @@
           <div class="kb-adv-card" id="kb-b-adv" hidden>
             <div class="kb-fgrid">
               <label class="kb-frow"><span>图标</span><hm-select id="kb-b-icon" class="ui-select"><option value="">默认</option><option value="◈">◈ 默认菱标</option><option value="🚀">🚀 发布 / 冲刺</option><option value="🛠">🛠 工程修复</option><option value="📋">📋 需求整理</option><option value="🧪">🧪 实验 / 测试</option><option value="⚡">⚡ 自动化</option><option value="📦">📦 打包交付</option><option value="🔍">🔍 调研分析</option></hm-select></label>
-              <label class="kb-frow"><span>主题色</span><hm-select id="kb-b-color" class="ui-select"><option value="">默认</option><option value="#ad4c2a">陶土橘（#ad4c2a）</option><option value="#2563eb">钴蓝（#2563eb）</option><option value="#16a34a">翠绿（#16a34a）</option><option value="#d97706">琥珀（#d97706）</option><option value="#dc2626">珊瑚红（#dc2626）</option><option value="#7c3aed">紫罗兰（#7c3aed）</option></hm-select></label>
+              <label class="kb-frow"><span>主题色</span><hm-select id="kb-b-color" class="ui-select"><option value="">默认</option><option value="#3f3e39">石墨灰（#3f3e39）</option><option value="#2563eb">钴蓝（#2563eb）</option><option value="#16a34a">翠绿（#16a34a）</option><option value="#d97706">琥珀（#d97706）</option><option value="#dc2626">珊瑚红（#dc2626）</option><option value="#7c3aed">紫罗兰（#7c3aed）</option></hm-select></label>
             </div>
           </div>
         </div>

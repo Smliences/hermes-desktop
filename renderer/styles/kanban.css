@@ -303,7 +303,7 @@ body.kb-dragging * { cursor: grabbing !important; }
    标题 600 与正文色居中突出，摘要降到 --text-3；P4 不占角标；
    弱信息收进脚行（头像首字母 + 图标数字 + 右端时间），去掉重复状态点。 */
 .kb-card {
-  position: relative; display: block; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
+  position: relative; display: block; flex: 0 0 auto; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
   padding: 11px 12px 9px; border: 1px solid var(--line); border-radius: var(--r-lg);
   background: var(--canvas); color: var(--text); font: 400 12px/1.5 var(--sans);
   overflow: hidden;
@@ -503,9 +503,40 @@ body.kb-dragging .kb-col[data-group]:not([data-group="archived"]) {
 .kb-col-collapse:hover { background: var(--fill-3); color: var(--text); }
 .kb-col-collapse:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kb-col-body {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin;
-  padding: 8px; display: flex; flex-direction: column; gap: 8px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+  padding: 8px 8px 12px; display: flex; flex-direction: column; gap: 8px;
 }
+/* 已完成 / 已归档列常积压大量卡片：收紧密度、弱化纸面阴影，同时保持标题高对比度 */
+.kb-col[data-group="done"] .kb-col-body,
+.kb-col[data-group="archived"] .kb-col-body { gap: 6px; }
+.kb-col[data-group="done"] .kb-card,
+.kb-col[data-group="archived"] .kb-card {
+  padding: 8px 10px 7px;
+  background: color-mix(in srgb, var(--canvas) 78%, var(--fill-2));
+  box-shadow: none;
+}
+.kb-col[data-group="done"] .kb-card:hover,
+.kb-col[data-group="done"] .kb-card.sel,
+.kb-col[data-group="archived"] .kb-card:hover,
+.kb-col[data-group="archived"] .kb-card.sel {
+  background: var(--canvas);
+}
+.kb-col[data-group="done"] .kb-pri,
+.kb-col[data-group="archived"] .kb-pri { top: 7px; right: 9px; }
+.kb-col[data-group="done"] .kb-card-title,
+.kb-col[data-group="archived"] .kb-card-title {
+  font-size: 12.5px; line-height: 1.38;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kb-col[data-group="done"] .kb-card-sum,
+.kb-col[data-group="archived"] .kb-card-sum {
+  margin-top: 3px; font-size: 11px; line-height: 1.42; -webkit-line-clamp: 1;
+}
+.kb-col[data-group="done"] .kb-card-meta,
+.kb-col[data-group="archived"] .kb-card-meta { margin-top: 5px; }
+.kb-col[data-group="done"] .kb-card-foot,
+.kb-col[data-group="archived"] .kb-card-foot { margin-top: 6px; padding-top: 5px; gap: 6px; }
 /* 列尾「＋ 添加任务」：只出现在待办 / 就绪（后端只认 triage / ready） */
 .kb-add-col {
   flex: 0 0 auto; padding: 8px 10px;
@@ -516,7 +547,7 @@ body.kb-dragging .kb-col[data-group]:not([data-group="archived"]) {
 .kb-add-col:hover { border-color: var(--accent); background: var(--canvas); color: var(--blue); }
 .kb-add-col:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kb-col-empty {
-  padding: 18px 8px; text-align: center;
+  flex: 0 0 auto; padding: 18px 8px; text-align: center;
   border: 1px dashed color-mix(in srgb, var(--line-2) 60%, transparent);
   border-radius: var(--r-md); color: var(--caption); font: 400 11px/1.6 var(--sans);
 }

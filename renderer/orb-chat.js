@@ -14,8 +14,18 @@ const api = window.orbChat;
 
 const els = {
   shell: document.querySelector('.oc-shell'),
+  pill: document.getElementById('oc-pill'),
+  popover: document.getElementById('oc-popover'),
+  popTitle: document.getElementById('oc-pop-title'),
+  popNew: document.getElementById('oc-pop-new'),
+  popSessions: document.getElementById('oc-pop-sessions'),
+  popProfiles: document.getElementById('oc-pop-profiles'),
+  popExpand: document.getElementById('oc-pop-expand'),
+  modelPopover: document.getElementById('oc-model-popover'),
   title: document.getElementById('oc-title'),
   meta: document.getElementById('oc-meta'),
+  barInfo: document.getElementById('oc-bar-info'),
+  barLabel: document.getElementById('oc-bar-label'),
   feed: document.getElementById('oc-feed'),
   empty: document.getElementById('oc-empty'),
   status: document.getElementById('oc-status'),
@@ -235,6 +245,7 @@ function paint() {
     if (first) S.title = String(first.text).replace(/\s+/g, ' ').slice(0, 24);
   }
   els.title.textContent = S.title || '新会话';
+  if (els.popTitle) els.popTitle.textContent = S.title || '新会话';
   document.documentElement.setAttribute('data-theme', S.theme === 'dark' ? 'dark' : 'light');
 
   const running = S.running;
@@ -245,9 +256,234 @@ function paint() {
 }
 
 function syncMeta() {
-  if (!S.ready) { els.meta.textContent = '连接中…'; return; }
-  if (S.running) { els.meta.textContent = '运行中…'; return; }
-  els.meta.textContent = S.model ? S.model : '就绪';
+  let stateText = '就绪';
+  if (!S.ready) stateText = '连接中…';
+  else if (S.running) stateText = '运行中…';
+  else if (S.model) stateText = S.model;
+  els.meta.textContent = stateText;
+  if (els.barLabel) {
+    els.barLabel.textContent = S.running ? '运行中…' : (S.model || '对话');
+  }
+}
+
+function checkSvg() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'oc-pop-check');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.6');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', 'M3.5 8.5l3 3 6-6.5');
+  svg.appendChild(p);
+  return svg;
+}
+
+function closeAllPopovers() {
+  if (els.popover) els.popover.hidden = true;
+  if (els.pill) els.pill.setAttribute('aria-expanded', 'false');
+  if (els.modelPopover) els.modelPopover.hidden = true;
+}
+
+async function toggleSessionPopover(force) {
+  if (!els.popover || !els.pill) return;
+  const open = typeof force === 'boolean' ? force : els.popover.hidden;
+  closeAllPopovers();
+  if (!open) return;
+  els.popover.hidden = false;
+  els.pill.setAttribute('aria-expanded', 'true');
+  if (els.popSessions) {
+    els.popSessions.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'oc-pop-empty';
+    loading.textContent = '加载中…';
+    els.popSessions.appendChild(loading);
+  }
+  try {
+    const data = await api.listSessions();
+    if (!els.popover || els.popover.hidden) return;
+    renderSessionPopover(data || {});
+  } catch {
+    if (els.popSessions) {
+      els.popSessions.textContent = '';
+      const err = document.createElement('div');
+      err.className = 'oc-pop-empty';
+      err.textContent = '无法读取会话列表';
+      els.popSessions.appendChild(err);
+    }
+  }
+}
+
+function chevSvg(cls) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', cls);
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.35');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', 'M4.5 2.5L8 6l-3.5 3.5');
+  svg.appendChild(p);
+  return svg;
+}
+
+function renderSessionPopover(data) {
+  if (els.popSessions) {
+    els.popSessions.textContent = '';
+    const groups = Array.isArray(data.groups) && data.groups.length
+      ? data.groups
+      : (Array.isArray(data.sessions) && data.sessions.length
+        ? [{ id: '__other__', label: '其他会话', isProject: false, sessions: data.sessions }]
+        : []);
+    if (!groups.length) {
+      const empty = document.createElement('div');
+      empty.className = 'oc-pop-empty';
+      empty.textContent = '暂无历史会话';
+      els.popSessions.appendChild(empty);
+    } else {
+      const activeGroupIdx = groups.findIndex((g) => (g.sessions || []).some((s) => S.sessionId && s.id === S.sessionId));
+      groups.forEach((g, idx) => {
+        const list = Array.isArray(g.sessions) ? g.sessions : [];
+        if (!list.length) return;
+        const expanded = activeGroupIdx >= 0 ? idx === activeGroupIdx : idx === 0;
+        const hd = document.createElement('button');
+        hd.type = 'button';
+        hd.className = 'oc-pop-group-btn';
+        hd.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+        const name = document.createElement('span');
+        name.className = 'oc-pop-group-name';
+        name.textContent = g.isProject ? g.label : '其他会话';
+        const cnt = document.createElement('span');
+        cnt.className = 'oc-pop-group-count';
+        cnt.textContent = String(list.length);
+        hd.appendChild(name);
+        hd.appendChild(cnt);
+        hd.appendChild(chevSvg('oc-pop-group-chev'));
+
+        const sub = document.createElement('div');
+        sub.className = 'oc-pop-sub';
+        sub.hidden = !expanded;
+
+        hd.addEventListener('click', () => {
+          const next = sub.hidden;
+          sub.hidden = !next;
+          hd.setAttribute('aria-expanded', next ? 'true' : 'false');
+        });
+
+        for (const s of list) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          const active = S.sessionId && s.id === S.sessionId;
+          btn.className = 'oc-pop-item' + (active ? ' is-active' : '');
+          const title = document.createElement('span');
+          title.className = 'oc-pop-item-title';
+          title.textContent = s.title || s.id;
+          btn.appendChild(title);
+          if (active) btn.appendChild(checkSvg());
+          btn.addEventListener('click', async () => {
+            closeAllPopovers();
+            if (active) return;
+            const r = await api.selectSession({ sessionId: s.id });
+            if (r && r.ok === false) setStatus(r.error || '切换会话失败', true);
+          });
+          sub.appendChild(btn);
+        }
+
+        els.popSessions.appendChild(hd);
+        els.popSessions.appendChild(sub);
+      });
+    }
+  }
+  if (els.popProfiles) {
+    els.popProfiles.textContent = '';
+    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    if (profiles.length > 1) {
+      els.popProfiles.hidden = false;
+      for (const name of profiles) {
+        const pf = document.createElement('button');
+        pf.type = 'button';
+        const active = name === data.currentProfile;
+        pf.className = 'oc-pop-pf' + (active ? ' is-active' : '');
+        pf.textContent = name;
+        pf.addEventListener('click', async () => {
+          closeAllPopovers();
+          if (active) return;
+          await api.selectSession({ profile: name });
+        });
+        els.popProfiles.appendChild(pf);
+      }
+    } else {
+      els.popProfiles.hidden = true;
+    }
+  }
+}
+
+async function toggleModelPopover(force) {
+  if (!els.modelPopover) return;
+  const open = typeof force === 'boolean' ? force : els.modelPopover.hidden;
+  closeAllPopovers();
+  if (!open) return;
+  els.modelPopover.hidden = false;
+  els.modelPopover.textContent = '';
+  const loading = document.createElement('div');
+  loading.className = 'oc-pop-empty';
+  loading.textContent = '加载模型中…';
+  els.modelPopover.appendChild(loading);
+  try {
+    const data = await api.listModels();
+    if (!els.modelPopover || els.modelPopover.hidden) return;
+    els.modelPopover.textContent = '';
+    const models = Array.isArray(data && data.models) ? data.models : [];
+    const current = (data && data.current) || S.model || '';
+    if (!models.length) {
+      const empty = document.createElement('div');
+      empty.className = 'oc-pop-empty';
+      empty.textContent = '暂无可用模型';
+      els.modelPopover.appendChild(empty);
+      return;
+    }
+    for (const m of models) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const active = m.key === current;
+      btn.className = 'oc-pop-item' + (active ? ' is-active' : '');
+      const title = document.createElement('span');
+      title.className = 'oc-pop-item-title';
+      title.textContent = m.name || m.key;
+      btn.appendChild(title);
+      if (m.tag) {
+        const tag = document.createElement('span');
+        tag.className = 'oc-pop-item-tag';
+        tag.textContent = m.tag;
+        btn.appendChild(tag);
+      }
+      if (active) btn.appendChild(checkSvg());
+      btn.addEventListener('click', async () => {
+        closeAllPopovers();
+        const r = await api.setModel(m.key);
+        if (r && r.ok === false) { setStatus(r.error || '切换模型失败', true); return; }
+        S.model = m.key;
+        syncMeta();
+        setStatus('模型 → ' + m.key);
+      });
+      els.modelPopover.appendChild(btn);
+    }
+  } catch {
+    if (els.modelPopover) {
+      els.modelPopover.textContent = '';
+      const err = document.createElement('div');
+      err.className = 'oc-pop-empty';
+      err.textContent = '无法读取模型列表';
+      els.modelPopover.appendChild(err);
+    }
+  }
 }
 
 let statusTimer = null;
@@ -440,6 +676,10 @@ els.input.addEventListener('input', () => {
 });
 
 function handleEscape() {
+  if ((els.popover && !els.popover.hidden) || (els.modelPopover && !els.modelPopover.hidden)) {
+    closeAllPopovers();
+    return;
+  }
   if (S.running) {
     stop();
     setStatus('已停止（再按 Esc 收起）', true);
@@ -465,6 +705,21 @@ els.send.addEventListener('click', send);
 els.stop.addEventListener('click', stop);
 document.getElementById('oc-close').addEventListener('click', () => api.close());
 document.getElementById('oc-expand').addEventListener('click', () => api.expand());
+if (els.pill) els.pill.addEventListener('click', (event) => { event.stopPropagation(); toggleSessionPopover(); });
+if (els.barInfo) els.barInfo.addEventListener('click', (event) => { event.stopPropagation(); toggleModelPopover(); });
+if (els.popNew) els.popNew.addEventListener('click', async () => {
+  closeAllPopovers();
+  await api.selectSession({ isNew: true });
+});
+if (els.popExpand) els.popExpand.addEventListener('click', () => { closeAllPopovers(); api.expand(); });
+document.addEventListener('click', (event) => {
+  if (els.popover && !els.popover.hidden && !els.popover.contains(event.target) && (!els.pill || !els.pill.contains(event.target))) {
+    closeAllPopovers();
+  }
+  if (els.modelPopover && !els.modelPopover.hidden && !els.modelPopover.contains(event.target) && (!els.barInfo || !els.barInfo.contains(event.target))) {
+    closeAllPopovers();
+  }
+});
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') { event.preventDefault(); handleEscape(); }

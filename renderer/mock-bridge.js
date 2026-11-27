@@ -33,7 +33,7 @@
       srcdoc: '<!doctype html><meta charset="utf-8"><style>body{font:14px/1.7 system-ui;padding:24px;color:#2b2620}</style><h1>PDF 预览</h1><p>真机由 Chromium 内置 PDF viewer 渲染；Demo 只占位。可用 ↗ 交给系统默认程序。</p>',
       text: '' },
     { path: '/tmp/demo/chart.png', type: 'image', ext: '.png', label: 'chart.png',
-      url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" rx="10" fill="#f3ede4"/><rect x="30" y="120" width="42" height="50" rx="4" fill="#ad4c2a"/><rect x="90" y="86" width="42" height="84" rx="4" fill="#c2703f"/><rect x="150" y="52" width="42" height="118" rx="4" fill="#90612c"/><rect x="210" y="30" width="42" height="140" rx="4" fill="#4a7ebb"/><text x="30" y="24" font-family="system-ui" font-size="13" fill="#2b2620">图片渲染视图 · Demo</text></svg>'),
+      url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" rx="10" fill="#f3ede4"/><rect x="30" y="120" width="42" height="50" rx="4" fill="#3f3e39"/><rect x="90" y="86" width="42" height="84" rx="4" fill="#6e6a5e"/><rect x="150" y="52" width="42" height="118" rx="4" fill="#90612c"/><rect x="210" y="30" width="42" height="140" rx="4" fill="#4a7ebb"/><text x="30" y="24" font-family="system-ui" font-size="13" fill="#2b2620">图片渲染视图 · Demo</text></svg>'),
       text: '' },
     { path: '/tmp/demo/report.md', type: 'doc', ext: '.md', label: 'report.md', url: 'about:blank', srcdoc: '',
       text: '# 文档渲染视图\n\n复用聊天流同一套 Markdown 渲染器：\n\n- **粗体**、*强调*、`行内代码`\n- 自动跟随 Agent 写出的文件\n\n| 类型 | 渲染器 |\n| --- | --- |\n| 网页 | iframe |\n| 图片 | img |\n\n> 右上角可切到「源码」看原文。' },
@@ -465,7 +465,7 @@
           previewSessions: rows.slice(0, 3).map((x) => mkRow(x.sid, x.i)) };
       };
       const tree = [
-        nodeOf({ id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '#c2703f', icon: '',
+        nodeOf({ id: 'pj_demo1', label: 'Hermes Agent', path: '/tmp/demo-repo', color: '#525049', icon: '',
           isAuto: false, isNoProject: false, lastActive: now }),
         nodeOf({ id: 'pj_demo2', label: 'WorkBuddy 桌面端', path: '/tmp/demo-repo-2', color: '#4a7ebb', icon: '',
           isAuto: false, isNoProject: false, lastActive: now - 1800 }),

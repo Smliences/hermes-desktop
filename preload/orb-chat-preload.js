@@ -20,6 +20,10 @@ function on(channel, fn) {
 contextBridge.exposeInMainWorld('orbChat', {
   /** 打开面板时拉一次：绑定的 tab / 会话标题 / 最近消息 / 主题 / 是否在跑 */
   bootstrap: () => ipcRenderer.invoke('orbchat:bootstrap'),
+  listSessions: () => ipcRenderer.invoke('orbchat:sessions'),
+  selectSession: (opts) => ipcRenderer.invoke('orbchat:select-session', opts && typeof opts === 'object' ? opts : {}),
+  listModels: () => ipcRenderer.invoke('orbchat:models'),
+  setModel: (model) => ipcRenderer.invoke('orbchat:set-model', { model: String(model == null ? '' : model) }),
   send: (text) => ipcRenderer.invoke('orbchat:send', { text: String(text == null ? '' : text) }),
   abort: () => ipcRenderer.invoke('orbchat:abort'),
   approve: (requestId, choice) => ipcRenderer.invoke('orbchat:approve', { requestId, choice }),

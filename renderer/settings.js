@@ -1493,21 +1493,32 @@ function askSwitch(name) {
 
 function renderPfMenu() {
   const m = $('#pf-menu');
-  if (!pfSnapshot) { m.innerHTML = '<div class="pf-menu-head">正在读取 profile…</div>'; return; }
-  m.innerHTML = `<div class="pf-menu-head">切换 Profile · 当前 ${esc(pfSnapshot.current)}</div>` +
-    pfSnapshot.profiles.map((p) =>
-      `<button class="pf-menu-item" data-name="${esc(p.name)}"><span class="pf-dot"></span>` +
-      `<span class="pf-mi-name">${esc(p.name)}</span>${p.current ? '<span class="pf-mi-tag">当前</span>' : ''}</button>`).join('') +
-    `<div class="pf-menu-foot">切换会重启后端并重载界面。桌面端不写入 <code>~/.hermes</code>，` +
-    `终端 CLI 的 <code>profile use</code> 默认互不影响。</div>`;
+  const snap = pfSnapshot || (!pfNative() ? { current: 'default', profiles: [{ name: 'default', current: true }] } : null);
+  if (!snap) { m.innerHTML = '<div class="pf-menu-head"><span>正在读取 Profile…</span></div>'; return; }
+  const list = Array.isArray(snap.profiles) ? snap.profiles : [];
+  m.innerHTML = `<div class="pf-menu-head"><span>工作区 Profile</span><span class="pf-menu-count">${list.length}</span></div>` +
+    list.map((p) => {
+      const cur = !!p.current || p.name === snap.current;
+      return `<button class="pf-menu-item${cur ? ' is-current' : ''}" type="button" data-name="${esc(p.name)}">` +
+        `<span class="pf-dot${cur ? '' : ' muted'}" aria-hidden="true"></span>` +
+        `<span class="pf-mi-name">${esc(p.name)}</span>` +
+        (cur ? '<span class="pf-mi-tag" aria-label="当前"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.3 5 8.8 9.5 3.5"/></svg></span>' : '') +
+        `</button>`;
+    }).join('') +
+    `<div class="pf-menu-foot">切换会重启后端并重载界面，不写入 <code>~/.hermes</code>。</div>`;
 }
 function togglePfMenu(show) {
   const m = $('#pf-menu');
+  const chip = $('#pf-chip');
   const on = show !== undefined ? show : m.hidden;
   m.hidden = !on;
+  if (chip) {
+    chip.classList.toggle('open', !!on);
+    chip.setAttribute('aria-expanded', on ? 'true' : 'false');
+  }
   if (!on) return;
-  const r = $('#pf-chip').getBoundingClientRect();
-  m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 232)) + 'px';
+  const r = chip.getBoundingClientRect();
+  m.style.left = Math.max(10, Math.min(r.right - 232, window.innerWidth - 242)) + 'px';
   m.style.top = (r.bottom + 6) + 'px';
   renderPfMenu();
 }
@@ -1519,12 +1530,12 @@ $('#pf-chip').onclick = (e) => {
 $('#pf-menu').addEventListener('click', (e) => {
   const b = e.target.closest('.pf-menu-item');
   if (!b) return;
-  $('#pf-menu').hidden = true;
+  togglePfMenu(false);
   askSwitch(b.dataset.name);
 });
 document.addEventListener('click', (e) => {
   const m = $('#pf-menu');
-  if (!m.hidden && !m.contains(e.target) && !$('#pf-chip').contains(e.target)) m.hidden = true;
+  if (!m.hidden && !m.contains(e.target) && !$('#pf-chip').contains(e.target)) togglePfMenu(false);
 });
 
 /** 设置页 → Profile 分区 */

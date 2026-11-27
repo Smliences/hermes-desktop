@@ -1221,6 +1221,12 @@ async function init() {
       if (act === 'settings') toggleSettings(true);
       else if (act === 'new-session') newSessionAction();
       else if (act === 'kanban' && typeof showKanban === 'function') showKanban(true);
+      else if (act && typeof act === 'object' && act.type === 'set-model') {
+        state.config.model = String(act.model || '');
+        driftDismissed = true;
+        const box = $('#model-drift'); if (box) box.hidden = true;
+        updateStatus();
+      }
     });
     if (api.onFocusTab) api.onFocusTab((tabId) => {
       if (tabId && state.tabs.some((t) => t.id === tabId)) {

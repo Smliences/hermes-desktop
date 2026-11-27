@@ -25,12 +25,42 @@ function landingGreet() {
 function renderLanding() {
   $('#landing').innerHTML = `
     <div class="landing-inner">
-      <div class="landing-greet">${esc(landingGreet())}</div>
+      <div class="landing-hero">
+        <div class="landing-mark" aria-hidden="true">
+          <img src="assets/hermes-logo.png" alt="" />
+        </div>
+        <h1 class="landing-greet">${esc(landingGreet())}</h1>
+        <p class="landing-sub">输入想法、拖入图片或文档，或按 <kbd>/</kbd> 呼出快捷指令</p>
+      </div>
       <div class="landing-chips" role="toolbar" aria-label="快捷开始">
-        <button class="landing-chip" data-landing="slash">/ 看看指令</button>
-        <button class="landing-chip" data-landing="kanban">打开看板</button>
-        <button class="landing-chip" data-landing="model">切换模型</button>
-        <button class="landing-chip" data-landing="project">新建项目会话</button>
+        <button type="button" class="landing-chip" data-landing="slash">
+          <span class="lc-top">
+            <span class="lc-ico" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M10.2 3.2 5.8 12.8"/></svg></span>
+            <span class="lc-title">斜杠指令</span>
+          </span>
+          <span class="lc-desc">快捷呼出本地与 CLI 命令</span>
+        </button>
+        <button type="button" class="landing-chip" data-landing="kanban">
+          <span class="lc-top">
+            <span class="lc-ico" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="2" y="3" width="3.4" height="10" rx="1"/><rect x="6.3" y="3" width="3.4" height="7" rx="1"/><rect x="10.6" y="3" width="3.4" height="9" rx="1"/></svg></span>
+            <span class="lc-title">任务看板</span>
+          </span>
+          <span class="lc-desc">管理进度与派发 Agent</span>
+        </button>
+        <button type="button" class="landing-chip" data-landing="model">
+          <span class="lc-top">
+            <span class="lc-ico" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4l1.35 3.9 3.9 1.35-3.9 1.35L8 12.9l-1.35-3.9-3.9-1.35 3.9-1.35z"/></svg></span>
+            <span class="lc-title">模型与推理</span>
+          </span>
+          <span class="lc-desc">切换默认模型或思考深度</span>
+        </button>
+        <button type="button" class="landing-chip" data-landing="project">
+          <span class="lc-top">
+            <span class="lc-ico" aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.4 4.6c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.6h4.6c.7 0 1.3.6 1.3 1.3v5.4c0 .7-.6 1.3-1.3 1.3H3.7c-.7 0-1.3-.6-1.3-1.3z"/><path d="M8 7.3v3M6.5 8.8h3"/></svg></span>
+            <span class="lc-title">新建项目</span>
+          </span>
+          <span class="lc-desc">绑定本地目录开始协作</span>
+        </button>
       </div>
     </div>`;
 }

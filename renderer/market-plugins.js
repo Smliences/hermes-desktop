@@ -52,7 +52,7 @@ const PLUGIN_DEFS = [
     ],
     toggles: [],
   },
-  { id: 'agent-team', kind: 'experimental', name: '智能体团队', ico: '✚', color: 'linear-gradient(135deg,#f6a85c,#ef7f2e)', tag: '实验性', desc: '启用团队协作、团队工具、成员列表和共享任务看板。' },
+  { id: 'agent-team', kind: 'experimental', name: '智能体团队', ico: '✚', color: 'linear-gradient(135deg,#6b7280,#374151)', tag: '实验性', desc: '启用团队协作、团队工具、成员列表和共享任务看板。' },
   { id: 'voice-input', kind: 'experimental', name: '语音输入', ico: '≈', color: 'linear-gradient(135deg,#64a8f7,#3b74e0)', tag: '实验性', desc: '在本地转写录音，首次使用需安装依赖。' },
   { id: 'auto-auth', kind: 'experimental', name: '自动授权审查', ico: '✓', color: 'linear-gradient(135deg,#5fd0a5,#2fa57c)', tag: '实验性', desc: '自动审查工具调用授权请求，降低打断频率。' },
   { id: 'devtools', kind: 'experimental', name: '开发者工具', ico: '⛭', color: 'linear-gradient(135deg,#9aa5b1,#5c6670)', tag: '实验性', desc: '查看 fiber 状态、事件流与调试信息。' },
@@ -107,7 +107,7 @@ const SKILL_DEFS = [
     toggles: [],
   },
   { id: 'deep-research', kind: 'experimental', name: '深度研究', ico: '✧', color: 'linear-gradient(135deg,#a78bfa,#7c5cf0)', tag: '实验性', desc: '多轮检索、交叉验证并生成带引用的研究报告。' },
-  { id: 'self-heal', kind: 'experimental', name: '自愈修复', ico: '⚒', color: 'linear-gradient(135deg,#f6a85c,#ef7f2e)', tag: '实验性', desc: '任务失败后自动诊断原因并尝试恢复执行。' },
+  { id: 'self-heal', kind: 'experimental', name: '自愈修复', ico: '⚒', color: 'linear-gradient(135deg,#64748b,#334155)', tag: '实验性', desc: '任务失败后自动诊断原因并尝试恢复执行。' },
   { id: 'proactive', kind: 'experimental', name: '主动建议', ico: '☀', color: 'linear-gradient(135deg,#ffd166,#e8a616)', tag: '实验性', desc: '根据上下文主动推荐下一步可执行的操作。' },
   { id: 'voice-out', kind: 'experimental', name: '语音播报', ico: '♪', color: 'linear-gradient(135deg,#64a8f7,#3b74e0)', tag: '实验性', desc: '将助手回复用语音朗读，支持自动分句。' },
 ];
@@ -128,10 +128,8 @@ function subscribeCatalog(fn) {
   if (!hasNative || !api.onCatalogUpdated) return;
   offCatalog = api.onCatalogUpdated(fn);
 }
-// Claude / Anthropic 大地色系：低饱和暖调，替换原先高饱和的蓝紫糖果色，
-// 保证白色图标可读，同时在暖纸底上不跳。纯视觉常量，与数据源无关。
-// 大地色板：每个色对白色图标字形均 ≥ 5:1（WCAG AA），色相保持 Claude 暖调
-const LIVE_COLORS = ['#b4522e', '#64754e', '#5d708a', '#936537', '#a75759', '#7a6c5f', '#58746a', '#826685'];
+// 低饱和墨黑与中性色系：保证白色图标可读，同时在暖纸底上克制统一
+const LIVE_COLORS = ['#3f3e39', '#64754e', '#5d708a', '#936537', '#a75759', '#7a6c5f', '#58746a', '#826685'];
 // 稳定取色：同一条目每次渲染颜色一致，不会因排序/过滤换位而跳色
 function colorFor(name) {
   let h = 0;

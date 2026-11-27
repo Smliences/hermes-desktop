@@ -21,10 +21,10 @@
   --orb-rim: rgba(255, 255, 255, 0.14);
   --orb-specular: rgba(255, 246, 226, 0.16);
   --orb-bounce: rgba(255, 232, 198, 0.09);
-  --orb-busy: #e0a35c;
-  --orb-warn: #de8a68;
+  --orb-busy: #d4a85a;
+  --orb-warn: #d4a85a;
   --orb-off: #c96a5f;
-  --orb-active: #d9a066;
+  --orb-active: #e8e5dc;
   /* 就绪：球面上肉眼可辨的绿（不是 app 内的 --green，那个在深色球面上太暗） */
   --orb-ready: #5fb37e;
   --orb-ready-glow: rgba(95, 179, 126, 0.34);
@@ -72,10 +72,9 @@ body {
     inset 0 1px 0 var(--orb-rim),
     inset 0 -7px 13px rgba(0, 0, 0, 0.38),
     inset 4px 0 9px rgba(0, 0, 0, 0.14);
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.40));
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.36));
   cursor: grab;
   transition: transform 0.16s ease, filter 0.16s ease;
-  will-change: transform;
 }
 
 /* 顶部弧形高光：让 52px 的圆读成「球」而不是「深色圆片」 */
@@ -156,7 +155,7 @@ body[data-state="idle"] .orb-ready {
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 10px 1px var(--orb-ready-glow);
+    box-shadow: 0 0 7px 0 var(--orb-ready-glow);
   }
 }
 

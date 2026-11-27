@@ -1942,8 +1942,9 @@ t('小窗：透明无边框 + 可拖拉尺寸 + 置顶，沙箱与主窗口同�
 t('小窗 preload 只开聊天与开关窗动作，通道全在 orbchat: 前缀', () => {
   const keys = uniq(collect(ocPreSrc, /^\s{2}([A-Za-z_$][\w$]*)\s*:/gm));
   assert.deepStrictEqual(keys, [
-    'abort', 'approve', 'bootstrap', 'close', 'draft', 'expand',
-    'onApproval', 'onApprovalResolved', 'onEvent', 'onFocus', 'onState', 'onSync', 'send',
+    'abort', 'approve', 'bootstrap', 'close', 'draft', 'expand', 'listModels', 'listSessions',
+    'onApproval', 'onApprovalResolved', 'onEvent', 'onFocus', 'onState', 'onSync',
+    'selectSession', 'send', 'setModel',
   ], '暴露面变化：' + keys.join(', '));
   assert.ok(!/exposeInMainWorld\('hermesAPI'/.test(ocPreSrc), '不得覆盖主窗口的 API');
   assert.ok(!/'hermes:/.test(ocPreSrc), '小窗不得直接触碰 hermes:* 通道');
@@ -3015,6 +3016,8 @@ t('5 列自适应：列宽恒等分，空列不许抢宽度', () => {
   assert.ok(/\.kb-col \{[^}]*min-width: 160px/.test(kbCss), '列最小宽应为 160px，否则五列在默认窗口就要横向滚动');
   assert.ok(!/\.kb-col \{[^}]*min-width: 210px/.test(kbCss), '旧的 210px 固定最小宽会让五列必然横向滚动');
   assert.ok(/\.kb-col-body \{[^}]*overflow-y: auto/.test(kbCss), '列内必须能纵向滚动');
+  assert.ok(/\.kb-card \{[^}]*(?:flex:\s*0 0 auto|flex-shrink:\s*0)/.test(kbCss),
+    '列内卡片必须禁止 flex 收缩（flex: 0 0 auto），否则卡片一多会被压扁成一条缝');
   // 空列曾写成 flex: 0 0 132px，结果「只有已完成有卡」时那一列吃掉其余四列的宽度
   const emptyRule = (kbCss.match(/\.kb-col\.is-empty \{[^}]*\}/) || [''])[0];
   assert.ok(!/flex:|min-width:|width:/.test(emptyRule), '空列不得单独指定宽度，五列必须等分');
@@ -3293,7 +3296,7 @@ t('composer 项目下拉：紧邻权限胶囊、自绘 pill、双主题 token、
   const block = cssSrc.slice(start, end > start ? end : start + 1200);
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(block), '项目下拉出现硬编码色，深色主题会失配');
   assert.ok(/font-size:\s*var\(--fs-sm\)/.test(block), '字号未跟随 --ui-fs 单一旋钮');
-  assert.ok(/height:\s*32px/.test(block) && /border-radius:\s*999px/.test(block), '未按权限胶囊的 32px pill 对齐');
+  assert.ok(/height:\s*28px/.test(block) && /border-radius:\s*var\(--r-sm\)/.test(block) && /border:\s*none/.test(block), '未与选模型按钮统一为 28px 无边框样式');
   // 数据 / 行为：候选来自侧栏项目树，选中写 tab.cwd，已开始的会话另开项目页签
   for (const fn of ['composerProjectOptions(', 'syncComposerProject(', 'applyComposerProject(']) {
     assert.ok(appSrc.includes('function ' + fn), '缺少函数 ' + fn);

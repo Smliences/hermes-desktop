@@ -473,6 +473,111 @@ function boot() {
       onAbort: () => { if (orbCtx && orbCtx.tabId) chat.abort(orbCtx.tabId); },
       onApprove: (requestId, choice) => respondApproval(requestId, choice, orbCtx && orbCtx.tabId),
       onExpand: () => leaveOrb(),
+      onListSessions: async () => {
+        const snap = profile.snapshot();
+        const cur = snap.current;
+        const [rowsRes, treeRes] = await Promise.all([
+          sessions.listSessions({ limit: 50, profileName: cur }).catch(() => []),
+          kanban.projectsTree({ profile: cur, previewLimit: 5 }).catch(() => null),
+        ]);
+        const allRows = (Array.isArray(rowsRes) ? rowsRes : []).filter((s) => s && s.id).map((s) => ({
+          id: String(s.id),
+          title: String(s.title || s.id),
+          updatedAt: Number(s.last_active || s.updated_at || s.started_at || 0),
+        }));
+        const byId = new Map(allRows.map((s) => [s.id, s]));
+        const claimed = new Set();
+        const groups = [];
+        const projects = (treeRes && treeRes.ok && Array.isArray(treeRes.projects)) ? treeRes.projects : [];
+        for (const p of projects) {
+          if (!p || !p.id || p.isNoProject || p.isAuto) continue;
+          const allProjIds = Array.isArray(p.sessionIds) ? p.sessionIds : [];
+          for (const sid of allProjIds) {
+            if (sid) claimed.add(String(sid));
+          }
+          const items = [];
+          const seenInProj = new Set();
+          for (const ps of (Array.isArray(p.previewSessions) ? p.previewSessions : [])) {
+            if (!ps || !ps.id || seenInProj.has(ps.id)) continue;
+            seenInProj.add(ps.id);
+            claimed.add(ps.id);
+            const full = byId.get(ps.id);
+            items.push({ id: String(ps.id), title: String((full && full.title) || ps.title || ps.id) });
+          }
+          for (const sid of allProjIds) {
+            if (!sid || seenInProj.has(sid)) continue;
+            const full = byId.get(sid);
+            if (!full) continue;
+            seenInProj.add(sid);
+            items.push({ id: full.id, title: full.title });
+            if (items.length >= 15) break;
+          }
+          if (items.length) {
+            groups.push({ id: String(p.id || p.label || ''), label: String(p.label || '项目'), isProject: true, sessions: items });
+          }
+        }
+        const ungrouped = allRows.filter((s) => !claimed.has(s.id)).slice(0, 20);
+        if (ungrouped.length) {
+          groups.push({ id: '__other__', label: '其他会话', isProject: false, sessions: ungrouped });
+        }
+        return {
+          currentProfile: cur,
+          profiles: snap.profiles.map((p) => p.name).filter((n) => profile.validName(n)),
+          groups,
+          sessions: allRows.slice(0, 20),
+        };
+      },
+      onSelectSession: (payload) => {
+        const p = payload || {};
+        if (p.isNew) {
+          safeSend('app:menu-action', 'new-session');
+          return { ok: true };
+        }
+        const cur = profile.current();
+        const targetProfile = (p.profile && profile.validName(p.profile)) ? p.profile : cur;
+        const needsSwitch = targetProfile !== cur;
+        const sessionId = String(p.sessionId || '');
+        if (!sessionId && !needsSwitch) return { ok: false, error: 'missing sessionId' };
+        safeSend('orb:open-session', { profile: targetProfile, sessionId, needsSwitch });
+        return { ok: true };
+      },
+      onListModels: async () => {
+        const cfg = loadConfig();
+        let ms = null;
+        try { ms = hermesConfig.modelState ? await Promise.resolve(hermesConfig.modelState()) : null; } catch {}
+        let fallback = [];
+        if (!ms || !Array.isArray(ms.models) || !ms.models.length) {
+          try {
+            const r = hermesConfig.listModels ? await Promise.resolve(hermesConfig.listModels()) : null;
+            if (r && r.ok) fallback = r.models || [];
+          } catch {}
+        }
+        const rows = [];
+        const seen = new Set();
+        const cliDefault = ms && ms.defaultModel ? String(ms.defaultModel) : '';
+        if (cliDefault) {
+          rows.push({ key: cliDefault, name: cliDefault, tag: 'CLI 默认' });
+          seen.add(cliDefault);
+        }
+        const list = (ms && Array.isArray(ms.models) && ms.models.length) ? ms.models : fallback;
+        for (const m of (Array.isArray(list) ? list : [])) {
+          if (!m || !m.model || seen.has(m.model)) continue;
+          seen.add(m.model);
+          rows.push({ key: String(m.model), name: String(m.name || m.model), tag: String(m.provider || '') });
+        }
+        const cur = String(cfg.model || '');
+        if (cur && !seen.has(cur)) rows.push({ key: cur, name: cur, tag: '当前配置' });
+        return { current: cur || cliDefault, models: rows };
+      },
+      onSetModel: (modelKey) => {
+        const m = String(modelKey || '').trim();
+        if (!m) return { ok: false, error: '模型为空' };
+        saveConfig({ model: m });
+        if (orbCtx) orbCtx.model = m;
+        safeSend('app:menu-action', { type: 'set-model', model: m });
+        if (orbChat && orbChat.isOpen()) orbChat.pushSync();
+        return { ok: true, model: m };
+      },
       // 点球 / Esc / × / 拖球 / 展开都会走 open() 或 close()，统一在这里回推球态，
       // 免得漏掉某条路径让球一直亮着内环。
       onVisibilityChange: () => syncOrb(),

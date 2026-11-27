@@ -196,6 +196,22 @@ function createOrbChat(opts) {
 
   handle('orbchat:bootstrap', () => ({ ...context(), draft }));
 
+  handle('orbchat:sessions', async () => (
+    typeof opts.onListSessions === 'function' ? opts.onListSessions() : { currentProfile: '', profiles: [], sessions: [] }
+  ));
+
+  handle('orbchat:select-session', async (payload) => (
+    typeof opts.onSelectSession === 'function' ? opts.onSelectSession(payload || {}) : { ok: false, error: 'unsupported' }
+  ));
+
+  handle('orbchat:models', async () => (
+    typeof opts.onListModels === 'function' ? opts.onListModels() : { current: '', models: [] }
+  ));
+
+  handle('orbchat:set-model', async (payload) => (
+    typeof opts.onSetModel === 'function' ? opts.onSetModel(String((payload && payload.model) || '')) : { ok: false, error: 'unsupported' }
+  ));
+
   handle('orbchat:send', async (payload) => {
     const text = String((payload && payload.text) || '').trim();
     if (!text) return { ok: false, error: '消息为空' };
@@ -276,7 +292,7 @@ function createOrbChat(opts) {
       screen.removeListener('display-removed', onDisplayChange);
       screen.removeListener('display-metrics-changed', onDisplayChange);
     } catch {}
-    for (const ch of ['orbchat:bootstrap', 'orbchat:send', 'orbchat:abort', 'orbchat:approve']) {
+    for (const ch of ['orbchat:bootstrap', 'orbchat:sessions', 'orbchat:select-session', 'orbchat:models', 'orbchat:set-model', 'orbchat:send', 'orbchat:abort', 'orbchat:approve']) {
       try { ipcMain.removeHandler(ch); } catch { /* ignore */ }
     }
     if (win && !win.isDestroyed()) win.destroy();

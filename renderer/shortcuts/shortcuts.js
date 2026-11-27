@@ -375,6 +375,7 @@ function closeAllOverlays() {
     const el = $(sel);
     if (el && !el.hidden) {
       if (sel === '#chip-menu' && typeof chipMenuCleanup === 'function') chipMenuCleanup();
+      else if (sel === '#pf-menu' && typeof togglePfMenu === 'function') togglePfMenu(false);
       else el.hidden = true;
       closed = true;
     }

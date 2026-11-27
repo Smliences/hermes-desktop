@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs');
 
 const BALL = 52;   // 可见球直径
-const WIN = 68;    // 窗口边长：四周各留 8px 给阴影与忙碌时的旋转弧
+const WIN = 84;    // 窗口边长：四周各留 16px，避免投影与呼吸光晕被透明窗口边界裁成方形底座
 const EDGE = 24;   // 贴屏幕边缘的留白
 
 const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
@@ -157,7 +157,7 @@ function createOrb(opts) {
       x: pos.x, y: pos.y, width: WIN, height: WIN,
       frame: false, transparent: true, backgroundColor: '#00000000',
       resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
-      hasShadow: false, skipTaskbar: true, autoHideMenuBar: true,
+      hasShadow: false, roundedCorners: false, skipTaskbar: true, autoHideMenuBar: true,
       alwaysOnTop: true, acceptFirstMouse: true, focusable: true, show: false,
       webPreferences: {
         preload: path.join(__dirname, '..', 'preload', 'orb-preload.js'),

@@ -14,24 +14,55 @@
     <span class="oc-rail" aria-hidden="true"></span>
     <!-- 头部整条可拖动窗口；按钮区单独 no-drag，否则点不动 -->
     <header class="oc-head">
-      <span class="oc-glyph" aria-hidden="true">H</span>
-      <div class="oc-heading">
-        <div id="oc-title" class="oc-title">新会话</div>
-        <div id="oc-meta" class="oc-meta">就绪</div>
-      </div>
-      <div class="oc-tools">
-        <button id="oc-expand" class="oc-icon" type="button" title="在 Hermes 窗口中打开" aria-label="在主窗口中打开">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9.6 2.8h3.6v3.6" /><path d="M13.2 2.8L8.1 7.9" /><path d="M12.4 9.8v2.6a1.2 1.2 0 0 1-1.2 1.2H3.8a1.2 1.2 0 0 1-1.2-1.2V5a1.2 1.2 0 0 1 1.2-1.2h2.6" />
+      <div class="oc-tools oc-tools-left">
+        <button id="oc-close" class="oc-icon" type="button" title="收起（Esc）" aria-label="收起小窗">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="M3.5 8h9" />
           </svg>
         </button>
-        <button id="oc-close" class="oc-icon" type="button" title="收起（Esc）" aria-label="收起小窗">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
-            <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" />
+      </div>
+
+      <button id="oc-pill" class="oc-pill" type="button" aria-expanded="false" aria-controls="oc-popover" title="查看会话信息与快捷操作">
+        <span class="oc-glyph" aria-hidden="true">H</span>
+        <span id="oc-title" class="oc-title">新会话</span>
+        <svg class="oc-pill-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 2.5L8 6l-3.5 3.5" />
+        </svg>
+      </button>
+
+      <div class="oc-tools oc-tools-right">
+        <button id="oc-expand" class="oc-icon" type="button" title="在 Hermes 窗口中打开" aria-label="在主窗口中打开">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.6 2.8h3.6v3.6" /><path d="M13.2 2.8L8.1 7.9" /><path d="M12.4 9.8v2.6a1.2 1.2 0 0 1-1.2 1.2H3.8a1.2 1.2 0 0 1-1.2-1.2V5a1.2 1.2 0 0 1 1.2-1.2h2.6" />
           </svg>
         </button>
       </div>
     </header>
+
+    <div id="oc-popover" class="oc-popover" role="dialog" aria-label="切换会话与账号" hidden>
+      <div class="oc-pop-head">
+        <span class="oc-pop-av" aria-hidden="true">H</span>
+        <div class="oc-pop-info">
+          <div id="oc-pop-title" class="oc-pop-name">新会话</div>
+          <div id="oc-meta" class="oc-meta">就绪</div>
+        </div>
+        <button id="oc-pop-new" class="oc-pop-new" type="button" title="新建会话">+ 新建</button>
+      </div>
+      <div class="oc-pop-sep"></div>
+      <div id="oc-pop-sessions" class="oc-pop-list" role="listbox" aria-label="最近会话"></div>
+      <div id="oc-pop-profiles" class="oc-pop-profiles" hidden></div>
+      <div class="oc-pop-sep"></div>
+      <button id="oc-pop-expand" class="oc-pop-action" type="button">
+        <span class="oc-pop-ico" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.6 2.8h3.6v3.6" /><path d="M13.2 2.8L8.1 7.9" /><path d="M12.4 9.8v2.6a1.2 1.2 0 0 1-1.2 1.2H3.8a1.2 1.2 0 0 1-1.2-1.2V5a1.2 1.2 0 0 1 1.2-1.2h2.6" />
+          </svg>
+        </span>
+        <span class="oc-pop-label">在主窗口中打开完整会话</span>
+      </button>
+    </div>
+
+    <div id="oc-model-popover" class="oc-model-popover" role="listbox" aria-label="选择模型" hidden></div>
 
     <main id="oc-feed" class="oc-feed" role="log" aria-live="polite" aria-label="对话内容">
       <div id="oc-empty" class="oc-empty">
@@ -44,15 +75,24 @@
     <footer class="oc-foot">
       <div id="oc-status" class="oc-status" hidden></div>
       <div class="oc-composer">
-        <textarea id="oc-input" class="oc-input" rows="1" placeholder="问点什么…" aria-label="输入消息" spellcheck="false"></textarea>
-        <button id="oc-send" class="oc-send" type="button" title="发送（↵）" aria-label="发送">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M8 13V3.6" /><path d="M3.9 7.5L8 3.4l4.1 4.1" />
-          </svg>
-        </button>
-        <button id="oc-stop" class="oc-stop" type="button" title="停止本回合（Esc 或点此）" aria-label="停止" hidden>
-          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1.2" /></svg>
-        </button>
+        <textarea id="oc-input" class="oc-input" rows="1" placeholder="发消息，↵ 发送 / ⇧↵ 换行…" aria-label="输入消息" spellcheck="false"></textarea>
+        <div class="oc-composer-bar">
+          <button id="oc-bar-info" class="oc-bar-chip" type="button" title="切换模型">
+            <span id="oc-bar-label" class="oc-bar-label">对话</span>
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4.5 2.5L8 6l-3.5 3.5" />
+            </svg>
+          </button>
+          <span class="oc-bar-spacer" aria-hidden="true"></span>
+          <button id="oc-send" class="oc-send" type="button" title="发送（↵）" aria-label="发送">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 13V3.6" /><path d="M3.9 7.5L8 3.4l4.1 4.1" />
+            </svg>
+          </button>
+          <button id="oc-stop" class="oc-stop" type="button" title="停止本回合（Esc 或点此）" aria-label="停止" hidden>
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1.2" /></svg>
+          </button>
+        </div>
       </div>
     </footer>
   </div>
