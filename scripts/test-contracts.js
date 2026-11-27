@@ -306,7 +306,9 @@ t('失败卡样式沿用双主题 token，长文本可换行', () => {
 });
 
 section('3e. 窄主区降级与模态焦点隔离（生产级可访问性）');
-const compactCss = cssSrc.slice(cssSrc.indexOf('11. 窄主区降级层'));
+const compactStart = cssSrc.indexOf('11. 窄主区降级层');
+const compactEnd = cssSrc.indexOf('/* ══', compactStart + 1);
+const compactCss = compactEnd > compactStart ? cssSrc.slice(compactStart, compactEnd) : cssSrc.slice(compactStart);
 t('主区宽度状态机齐备，且只依据 #main 实际宽度', () => {
   assert.ok(appSrc.includes('ResizeObserver'), '缺少 ResizeObserver 宽度监听');
   assert.ok(appSrc.includes("classList.toggle('compact'"), '缺少 compact 切换');
@@ -3810,8 +3812,9 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
 section('3aj. 右侧预览按类型分流：五视图、三层对齐、双主题与边界');
 const previewSvc = read('main/services/hermes-preview.js');
 const mockBridgeSrc = read('renderer/mock-bridge.js');
-const pvApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
-  appSrc.indexOf('/* ---------- 全局快捷键'));
+const _pvStart = appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */');
+const _pvEnd = appSrc.indexOf('/* ---------- 全局快捷键', _pvStart);
+const pvApp = (_pvEnd > _pvStart ? appSrc.slice(_pvStart, _pvEnd) : appSrc.slice(_pvStart)) + '\n' + read('renderer/preview/preview.js');
 const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'));
 const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),
   htmlSrc.indexOf('<div class="rail-pane" id="kanban-pane"'));
@@ -3920,8 +3923,7 @@ const railHtml = htmlSrc.slice(htmlSrc.indexOf('<!-- ═════════
   htmlSrc.indexOf('<!-- ══════════ 新建弹窗'));
 const railCss = cssSrc.slice(cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'),
   cssSrc.indexOf('/* ══════════ 命令面板'));
-const railApp = appSrc.slice(appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */'),
-  appSrc.indexOf('/* ---------- 全局快捷键'));
+const railApp = pvApp;
 const rkbApp = appSrc.slice(appSrc.indexOf('/* ---- 右侧 rail 紧凑看板'),
   appSrc.indexOf('/* ---- 任务详情抽屉 ---- */'));
 
