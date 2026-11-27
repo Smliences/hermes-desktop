@@ -50,7 +50,7 @@ const KB_APP_FILES = [
   'renderer/kanban-modal.js',
   'renderer/kanban.js',
 ];
-const RENDERER_SUBDIRS = ['core', 'chat', 'sidebar', 'preview', 'input', 'shortcuts'];
+const RENDERER_SUBDIRS = ['core', 'sidebar', 'chat', 'preview', 'input', 'shortcuts'];
 const appSrc = [
   ...RENDERER_SUBDIRS.flatMap((d) => readTree(`renderer/${d}`, '.js')),
   'renderer/app.js',
@@ -269,7 +269,9 @@ t('历史投影带出 display_kind / display_metadata，且旧库缺列时安全
   assert.ok(sessSrc.includes('displayKind:') && sessSrc.includes('displayMetadata:'), '返回对象缺少诊断字段');
 });
 t('历史里的 failed_turn 先于普通助手消息匹配，不再显示占位英文', () => {
-  const body = appSrc.slice(appSrc.indexOf('async function openSession('), appSrc.indexOf('/* ---------- 渲染：聊天流'));
+  const s = appSrc.indexOf('async function openSession(');
+  const e = appSrc.indexOf('/* ---------- 渲染：聊天流', s);
+  const body = e > s ? appSrc.slice(s, e) : appSrc.slice(s);
   assert.ok(body.includes("m.displayKind === 'failed_turn'"), 'openSession 未识别失败轮次');
   assert.ok(body.indexOf("m.displayKind === 'failed_turn'") < body.indexOf("m.role === 'assistant'"),
     'failed_turn 的 role 是 assistant，必须先于普通助手分支匹配');
@@ -1383,7 +1385,7 @@ t('新建弹窗里的每个类都有样式，不许退回浏览器默认正文',
   for (const m of block.matchAll(/class="([^"]+)"/g)) {
     m[1].split(/\s+/).filter(Boolean).forEach((c) => used.add(c));
   }
-  const missing = [...used].filter((c) => !kbCss.includes('.' + c));
+  const missing = [...used].filter((c) => !cssSrc.includes('.' + c));
   assert.deepEqual(missing, [], '这些类没有 CSS 规则，会按浏览器默认字体渲染: ' + missing.join(', '));
   assert.ok(/\.kb-fhint\s*\{[^}]*font:\s*400 11px/.test(kbCss), '字段说明字号必须小于 11.5px 的字段标签');
   assert.ok(/\.kb-fhint\s*\{[^}]*var\(--caption\)/.test(kbCss), '字段说明必须用次级文字色，不能抢标签层级');
@@ -3798,8 +3800,9 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
   assert.ok(/id="chip-project"[^>]*aria-label=/.test(htmlSrc)
     && /id="chip-project"[^>]*placeholder="选择项目"/.test(htmlSrc), '无障碍名与空值占位不能丢');
   assert.ok(!/\$\('#chip-project'\)\.remove\(/.test(appSrc), '不得从 DOM 移除项目选择器');
-  const openSess = appSrc.slice(appSrc.indexOf('async function openSession('),
-    appSrc.indexOf('/* ---------- 渲染：聊天流'));
+  const _os = appSrc.indexOf('async function openSession(');
+  const _oe = appSrc.indexOf('/* ---------- 渲染：聊天流', _os);
+  const openSess = _oe > _os ? appSrc.slice(_os, _oe) : appSrc.slice(_os);
   assert.ok(openSess.includes('syncComposerProject()'),
     '从项目分组点开已有会话会复用空 tab，不走 setActiveTab，显隐不会更新');
   const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
