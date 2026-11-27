@@ -4,13 +4,14 @@
 function renderInline(s) {
   const imgs = [];
   const codes = [];
-  let t = String(s).replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, (_, alt, url) => {
-    imgs.push(`<img class="md-img" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" />`);
-    return `\u0000I${imgs.length - 1}\u0000`;
-  });
-  t = t.replace(/`([^`\n]+)`/g, (_, c) => {
+  // 先抽行内代码，避免反引号里的 ![alt](url) 被误当成图片渲染
+  let t = String(s).replace(/`([^`\n]+)`/g, (_, c) => {
     codes.push(`<code>${esc(c)}</code>`);
     return `\u0000C${codes.length - 1}\u0000`;
+  });
+  t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[^)\s]+)\)/g, (_, alt, url) => {
+    imgs.push(`<img class="md-img" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" />`);
+    return `\u0000I${imgs.length - 1}\u0000`;
   });
   t = esc(t)
     .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
@@ -31,14 +32,18 @@ const HL_KW = new Set([
 function highlightCode(lang, raw) {
   const l = String(lang || '').toLowerCase();
   if (!l || l === 'text' || l === 'txt' || l === 'log') return esc(raw);
-  const re = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\\n])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b)/g;
+  const hashCmt = /^(py|python|sh|bash|zsh|shell|yaml|yml|toml|rb|ruby|r|pl|perl|conf|ini|dockerfile|makefile)$/.test(l);
+  const slashCmt = /^(js|javascript|ts|typescript|jsx|tsx|mjs|cjs|c|cpp|cc|cxx|h|hpp|java|go|rs|rust|css|scss|less|json|jsonc|swift|kt|kotlin|php)$/.test(l);
+  const re = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|--[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\\n])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b)/g;
   let out = '';
   let last = 0;
   let m;
   while ((m = re.exec(raw)) !== null) {
     if (m.index > last) out += esc(raw.slice(last, m.index));
     const tok = m[0];
-    if (tok.startsWith('//') || tok.startsWith('#') || tok.startsWith('/*')) {
+    if ((slashCmt && (tok.startsWith('//') || tok.startsWith('/*')))
+      || (hashCmt && tok.startsWith('#'))
+      || (l === 'sql' && tok.startsWith('--'))) {
       out += `<span class="hl-cmt">${esc(tok)}</span>`;
     } else if (tok.startsWith('"') || tok.startsWith("'") || tok.startsWith('`')) {
       out += `<span class="hl-str">${esc(tok)}</span>`;
@@ -144,8 +149,42 @@ function renderMarkdown(src) {
   flushAll();
   return out.join('');
 }
-/** 代码块复制按钮：全局委托，renderChat 重建 DOM 后依然有效。 */
+/** 代码块复制 / 折叠、表格复制按钮：全局委托，覆盖聊天流、预览栏与看板抽屉。 */
 document.addEventListener('click', async (e) => {
+  const foldBtn = e.target.closest && e.target.closest('.md-code-fold');
+  if (foldBtn) {
+    const box = foldBtn.closest('.md-code');
+    if (box) {
+      const collapsed = box.classList.toggle('collapsed');
+      const lines = (box.querySelector('.md-code-lines') && box.querySelector('.md-code-lines').textContent) || '';
+      foldBtn.textContent = collapsed ? `展开全部 (${lines})` : '收起代码';
+    }
+    return;
+  }
+  const tblCopy = e.target.closest && e.target.closest('.md-table-copy');
+  if (tblCopy) {
+    const wrap = tblCopy.closest('.md-table-wrap');
+    const tbl = wrap && wrap.querySelector('table');
+    if (tbl) {
+      const rows = Array.from(tbl.querySelectorAll('tr')).map((tr) =>
+        Array.from(tr.children).map((c) => String(c.textContent || '').trim()));
+      if (rows.length) {
+        const fmt = tblCopy.dataset.fmt;
+        const out = fmt === 'csv'
+          ? rows.map((r) => r.map((v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(',')).join('\n')
+          : [
+              '| ' + rows[0].join(' | ') + ' |',
+              '| ' + rows[0].map(() => '---').join(' | ') + ' |',
+              ...rows.slice(1).map((r) => '| ' + r.join(' | ') + ' |'),
+            ].join('\n');
+        try {
+          await navigator.clipboard.writeText(out);
+          toast(fmt === 'csv' ? '已复制 CSV' : '已复制 Markdown 表格', 1400);
+        } catch { toast('复制失败', 1400); }
+      }
+    }
+    return;
+  }
   const btn = e.target.closest && e.target.closest('.md-code-copy');
   if (!btn) return;
   const pre = btn.closest('.md-code') && btn.closest('.md-code').querySelector('pre');

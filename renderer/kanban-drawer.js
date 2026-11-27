@@ -80,7 +80,11 @@ async function openKanbanTask(id, silent) {
   try {
     const r = await a.kanbanTask(id, kbParams());
     if (my !== KB.detailEpoch || d.hidden) return;
-    if (!r || !r.ok) { body.innerHTML = `<div class="kb-message">${esc((r && r.error) || '读取失败')}</div>`; return; }
+    if (!r || !r.ok) {
+      if (silent && ($('#kbd-edit-form') && !$('#kbd-edit-form').hidden || $('#kbd-log-body') && !$('#kbd-log-body').hidden || body.querySelector('.op-confirm'))) return;
+      body.innerHTML = `<div class="kb-message">${esc((r && r.error) || '读取失败')}</div>`;
+      return;
+    }
     KB.detail = r;
     const editForm = $('#kbd-edit-form');
     const logBody = $('#kbd-log-body');
@@ -98,7 +102,10 @@ async function openKanbanTask(id, silent) {
     }
     renderKanbanDetail(r);
   } catch (e) {
-    if (my === KB.detailEpoch) body.innerHTML = `<div class="kb-message">${esc((e && e.message) || '读取失败')}</div>`;
+    if (my === KB.detailEpoch) {
+      if (silent && ($('#kbd-edit-form') && !$('#kbd-edit-form').hidden || $('#kbd-log-body') && !$('#kbd-log-body').hidden || body.querySelector('.op-confirm'))) return;
+      body.innerHTML = `<div class="kb-message">${esc((e && e.message) || '读取失败')}</div>`;
+    }
   }
 }
 function kbdRow(label, value, time) {
@@ -227,7 +234,7 @@ function renderKanbanDetail(d) {
     kbdRow(String(e.kind || 'event'), e.payload, kbTime(e.created_at))).join('');
   const runs = (d.runs || []).slice().reverse().map((r) => {
     const summary = [r.outcome, r.error].filter(Boolean).join(' · ');
-    return `<li class="kbd-row">${r.started_at ? `<time>${esc(kbTime(r.started_at))}</time>` : ''}<button class="kbd-link" type="button" data-kb-run="${esc(r.id)}">#${esc(r.id)} ${esc(r.status || '')}</button>${summary ? ' ' + esc(clip(summary, 400)) : ''}<div class="kbd-run-detail" id="kbd-run-${esc(r.id)}" hidden></div></li>`;
+    return `<li class="kbd-row">${r.started_at ? `<time>${esc(kbTime(r.started_at))}</time>` : ''}<button class="kbd-link" type="button" data-kb-run-id="${esc(r.id)}">#${esc(r.id)} ${esc(r.status || '')}</button>${summary ? ' ' + esc(clip(summary, 400)) : ''}<div class="kbd-run-detail" id="kbd-run-${esc(r.id)}" hidden></div></li>`;
   }).join('');
   const atts = (d.attachments || []).map((x) =>
     kbdRow('附件', `${x.filename} (${Number(x.size) || 0} B)`)).join('');

@@ -154,6 +154,7 @@ function boot() {
     winStateTimer = setTimeout(saveWinStateNow, 300);
   }
 
+  const activeNotifications = new Set();
   function notifyDesktop({ title, body, urgency = 'normal', onClick } = {}) {
     try {
       if (process.platform === 'darwin' && app.dock) {
@@ -161,7 +162,9 @@ function boot() {
       }
       if (!Notification || !Notification.isSupported()) return;
       const n = new Notification({ title: String(title || 'Hermes'), body: String(body || ''), silent: urgency !== 'critical' });
-      if (typeof onClick === 'function') n.on('click', () => { try { onClick(); } catch {} });
+      activeNotifications.add(n);
+      n.on('close', () => activeNotifications.delete(n));
+      n.on('click', () => { activeNotifications.delete(n); if (typeof onClick === 'function') { try { onClick(); } catch {} } });
       n.show();
     } catch { /* 通知权限被拒或无桌面会话时静默降级 */ }
   }
@@ -185,6 +188,7 @@ function boot() {
     mainWindow.on('unmaximize', scheduleWinStateSave);
     mainWindow.on('close', saveWinStateNow);
     mainWindow.webContents.on('render-process-gone', async (_e, details) => {
+      if (details && details.reason === 'clean-exit') return;
       log.error('window', 'render-process-gone', details || {});
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const { response } = await dialog.showMessageBox(mainWindow, {
@@ -194,7 +198,9 @@ function boot() {
         buttons: ['重新加载', '关闭'],
         defaultId: 0,
       });
-      if (response === 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (response === 0) mainWindow.reload();
+      else if (response === 1) mainWindow.close();
     });
     mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -436,6 +442,7 @@ function boot() {
         title: (orbCtx && orbCtx.title) || '新会话',
         model: (orbCtx && orbCtx.model) || '',
         theme: (orbCtx && orbCtx.theme) || 'light',
+        fontSize: orbCtx && orbCtx.fontSize,
         messages: (orbCtx && orbCtx.messages) || [],
         approvals: Array.from(activeApprovals.values()).filter((a) => !orbCtx || !a.tabId || a.tabId === orbCtx.tabId),
         running: busyTurns > 0,
@@ -598,7 +605,8 @@ function boot() {
         if (orbChat && orbChat.isOpen() && (!orbCtx || orbCtx.tabId === tabId)) {
           orbChat.pushEvent({ type: 'error', text: err.message });
         }
-        if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) {
+        const inBg = (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) && !(orbChat && orbChat.isOpen());
+        if (inBg) {
           notifyDesktop({
             title: 'Hermes 执行出错',
             body: String(err.message || '请回到主窗口查看详情').slice(0, 120),
@@ -611,7 +619,9 @@ function boot() {
         pushOrbChatRunning(busyTurns > 0, { summary: summary || null });
         syncOrb();
         safeSend('hermes:close', { tabId, summary });
-        if ((!summary || !summary.aborted) && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive)) {
+        const failed = summary && (summary.aborted || summary.error || (summary.exitCode != null && summary.exitCode !== 0));
+        const inBg = (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) && !(orbChat && orbChat.isOpen());
+        if (!failed && inBg) {
           notifyDesktop({
             title: 'Hermes 回复已完成',
             body: '点击回到对话查看结果',
@@ -734,10 +744,10 @@ function boot() {
   handle('kanban:board', async (_e, opts) => {
     if (!await ensureBackendReady()) return { ok: false, error: '后端正在启动，请稍后重试' };
     const r = await kanban.board(opts || {});
-    if (r && r.ok && r.board && r.board.columns) {
+    if (r && r.ok && Array.isArray(r.columns)) {
       const bg = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive;
-      for (const list of Object.values(r.board.columns)) {
-        if (!Array.isArray(list)) continue;
+      for (const col of r.columns) {
+        const list = col && Array.isArray(col.tasks) ? col.tasks : [];
         for (const t of list) {
           if (!t || !t.id) continue;
           const prev = kbPrevStatuses.get(t.id);
@@ -1075,22 +1085,26 @@ function boot() {
   // 否则那侧 24s 的自动拒绝定时器还会再发一次（对同一 requestId 的重复表态）。
   const activeApprovals = new Map();
   function respondApproval(requestId, choice, tabId) {
+    const ok = chat.respondApproval(requestId, choice, tabId);
+    if (!ok) return false;
     activeApprovals.delete(requestId);
-    chat.respondApproval(requestId, choice, tabId);
-    pendingApprovals = Math.max(0, pendingApprovals - 1);
+    pendingApprovals = activeApprovals.size;
     syncOrb();
     safeSend('orb:approval-resolved', { requestId, choice });
     if (orbChat) orbChat.pushApprovalResolved({ requestId, choice });
+    return true;
   }
   chat.setApprovalHandler((req) => {
     const toMain = safeSend('hermes:approval', req);
     let toOrb = false;
     // 刻意不抢焦点：用户可能正在别的应用里打字，抢焦点比漏看一次更烦人。
     // 球上有珊瑚色「待确认」徽标，面板里有确认卡，回来就能看到。
-    if (orbChat && orbChat.isOpen()) toOrb = orbChat.pushApproval(req);
+    if (orbChat && orbChat.isOpen() && orbCtx && String(req.tabId) === String(orbCtx.tabId)) {
+      toOrb = orbChat.pushApproval(req);
+    }
     if (!toMain && !toOrb) return false;
     activeApprovals.set(req.requestId, req);
-    pendingApprovals += 1;
+    pendingApprovals = activeApprovals.size;
     syncOrb();
     if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused() || orbActive) {
       notifyDesktop({
@@ -1115,10 +1129,21 @@ function boot() {
     chat.setApprovalTimeoutHandler((req) => {
       if (!req || !req.requestId) return;
       activeApprovals.delete(req.requestId);
-      pendingApprovals = Math.max(0, pendingApprovals - 1);
+      pendingApprovals = activeApprovals.size;
       syncOrb();
       safeSend('orb:approval-resolved', { requestId: req.requestId, choice: 'deny' });
       if (orbChat) orbChat.pushApprovalResolved({ requestId: req.requestId, choice: 'deny' });
+    });
+  }
+  if (typeof chat.setApprovalClearHandler === 'function') {
+    chat.setApprovalClearHandler((ids) => {
+      for (const requestId of (ids || [])) {
+        activeApprovals.delete(requestId);
+        safeSend('orb:approval-resolved', { requestId, choice: 'deny' });
+        if (orbChat) orbChat.pushApprovalResolved({ requestId, choice: 'deny' });
+      }
+      pendingApprovals = activeApprovals.size;
+      syncOrb();
     });
   }
   handle('hermes:approval-respond', (_e, payload) => {
@@ -1139,6 +1164,7 @@ function boot() {
       model: typeof ctx.model === 'string' ? ctx.model.slice(0, 80) : '',
       cwd: typeof ctx.cwd === 'string' ? ctx.cwd : undefined,
       theme: ctx.theme === 'dark' ? 'dark' : 'light',
+      fontSize: Number.isFinite(Number(ctx.fontSize)) ? Math.max(10, Math.min(20, Number(ctx.fontSize))) : undefined,
       messages: Array.isArray(ctx.messages) ? ctx.messages.slice(-14).map((m) => ({
         role: m && m.role === 'user' ? 'user' : 'assistant',
         text: String((m && m.text) || '').slice(0, 4000),
@@ -1173,7 +1199,8 @@ function boot() {
     // Dock 图标被点时：球态下先展开主窗口。hotkey 模式的球是隐去的，
     // 所以判据要加上「主窗口本身被 hide 了」，否则点 Dock 会毫无反应。
     app.on('activate', () => {
-      const hidden = mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible();
+      if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return; }
+      const hidden = !mainWindow.isVisible();
       if ((orb && orb.isVisible()) || orbActive || hidden) { leaveOrb(); return; }
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -1226,7 +1253,20 @@ function boot() {
       // 这里再挂一次会变成「只在本应用前台生效」的第二套键位，容易互相抢。
       { label: `打开 / 收起迷你聊天窗（${ACCEL_LABEL}）`, click: () => toggleOrbChat() },
       { type: 'separator' },
-      { role: 'minimize' }, { role: 'zoom' }, { role: 'close' },
+      { role: 'minimize' }, { role: 'zoom' },
+      {
+        label: '关闭窗口',
+        accelerator: 'CmdOrCtrl+W',
+        click: () => {
+          const focused = BrowserWindow.getFocusedWindow();
+          if (orbChat && orbChat.isOpen() && focused && focused !== mainWindow) {
+            orbChat.close();
+            return;
+          }
+          if (focused && focused !== mainWindow) { focused.close(); return; }
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+        },
+      },
     ] },
   ]));
   // 第二个实例（再次双击 app）要把球态收回来，而不是去 focus 一颗球

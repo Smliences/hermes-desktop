@@ -205,7 +205,9 @@ function normalizePlugins(j) {
       repo: x.repo || '', docsUrl: x.docs_url || '', version: x.version || '',
       category: x.category || '', maintainer: x.maintainer || '',
       capabilities: x.capabilities || {}, requiresHermes: x.requires_hermes || '',
-      needsNewer: x.needs_newer_hermes || '', issues: Array.isArray(x.known_issues) ? x.known_issues.length : 0,
+      needsNewer: x.needs_newer_hermes || '',
+      issues: Array.isArray(x.known_issues) ? x.known_issues.length : 0,
+      knownIssues: Array.isArray(x.known_issues) ? x.known_issues : [],
     };
   }).filter((x) => x.id);
 }

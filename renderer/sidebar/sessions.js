@@ -723,12 +723,18 @@ async function openSession(sessionId) {
     return;
   }
   const cur = activeTab();
+  const reuse = cur && !cur.running && !cur.loading && cur.items.length === 0;
+  if (reuse) {
+    const inp = $('#input');
+    if (inp && inp._draftTimer) { clearTimeout(inp._draftTimer); inp._draftTimer = null; }
+    if (typeof saveDraftFor === 'function') saveDraftFor(cur);
+  }
   // loading 标记阻止连点两次复用同一个空 tab，导致两份历史互相覆盖
-  const tab = (cur && !cur.running && !cur.loading && cur.items.length === 0)
-    ? cur : newTab(null, sessionId, true);
+  const tab = reuse ? cur : newTab(sessionId, '新会话', true);
   const gen = (tab.loadGen = (tab.loadGen || 0) + 1);
   tab.loading = true;
   tab.sessionId = sessionId; state.view = 'chat';
+  if (reuse && typeof restoreDraftFor === 'function') restoreDraftFor(tab);
   // 从项目分组点开已有会话时会复用当前空 tab，不走 setActiveTab；归属在下一行才落地，
   // 必须在这里补一次同步，否则项目选择器会沿用上一个页签的显隐状态。
   syncComposerProject();

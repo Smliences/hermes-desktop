@@ -56,11 +56,11 @@ function envKeySet() {
       if (!m) continue;
       let val = m[2].trim();
       if (val.startsWith('#')) continue;
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1).trim();
-      } else {
-        val = val.replace(/\s+#.*$/, '').trim();
-      }
+      const dq = val.match(/^"([^"]*)"\s*(?:#.*)?$/);
+      const sq = !dq && val.match(/^'([^']*)'\s*(?:#.*)?$/);
+      if (dq) val = dq[1].trim();
+      else if (sq) val = sq[1].trim();
+      else val = val.replace(/\s+#.*$/, '').trim();
       if (val) keys.add(m[1]);
     }
   } catch {}
@@ -132,7 +132,7 @@ function overview() {
 
   const platforms = PLATFORMS.map((p) => {
     const declared = !!(cfg[p.key] && cfg[p.key].declared);
-    const envConfigured = p.env.length > 0 && p.env.some((k) => envKeys.has(k));
+    const envConfigured = p.env.length > 0 && p.env.every((k) => envKeys.has(k));
     const configured = declared || envConfigured || p.env.length === 0;
     const enabled = declared ? cfg[p.key].enabled !== false : envConfigured;
     return {
@@ -196,7 +196,7 @@ async function action(op) {
 /** 状态文本（刷新按钮可选走 CLI，权威但慢） */
 async function cliStatus() {
   const r = await run(['gateway', 'status'], 30000);
-  return { ok: r.ok, text: r.output.split('\n').slice(0, 24).join('\n') };
+  return { ok: r.ok, text: r.output.split('\n').slice(0, 24).join('\n'), error: r.error || undefined };
 }
 
 module.exports = { overview, action, cliStatus, PLATFORMS, get HOME() { return curHome(); } };

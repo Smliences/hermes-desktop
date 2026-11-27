@@ -60,7 +60,8 @@ async function listSessions({ limit = 50, search = '', profileName = '' } = {}) 
               s.id) AS title,
             COALESCE(s.title_source,'') AS title_source,
             s.model, s.message_count,
-            s.input_tokens, s.output_tokens, s.started_at, s.ended_at, s.end_reason, s.source,
+            s.input_tokens, s.output_tokens, s.started_at, s.ended_at,
+            COALESCE(s.ended_at, s.started_at) AS last_active, s.end_reason, s.source,
             COALESCE(s.pinned,0) AS pinned, COALESCE(s.archived,0) AS archived, COALESCE(s.hidden,0) AS hidden
      FROM sessions s ${where}
      ORDER BY COALESCE(s.pinned,0) DESC, s.started_at DESC LIMIT ${num(limit, 50, 200)}`,
@@ -77,7 +78,7 @@ let _msgColsSet = null;
 async function messageColumns() {
   const db = getDB();
   if (_msgColsSet && _msgColsDb === db) return _msgColsSet;
-  const info = await sqliteExec('PRAGMA table_info(messages)');
+  const info = await sqliteExec('PRAGMA table_info(messages)', db);
   const s = new Set(info.map((r) => r.name));
   if (s.size) { _msgColsDb = db; _msgColsSet = s; }
   return s;
@@ -186,29 +187,24 @@ async function searchMessages(query, { limit = 40 } = {}) {
 /** 会话库空间统计（只读）：库大小、页数、可回收空间、会话/消息数量与时间跨度。 */
 async function storageStats() {
   const dbBytes = fs.existsSync(getDB()) ? fs.statSync(getDB()).size : 0;
-  let agg = {};
-  try {
-    agg = (await sqliteExec(
-      `SELECT (SELECT page_count FROM pragma_page_count()) AS page_count,
-              (SELECT page_size FROM pragma_page_size()) AS page_size,
-              (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count,
-              (SELECT COUNT(*) FROM sessions) AS sessions,
-              (SELECT COUNT(*) FROM messages) AS messages,
-              (SELECT COUNT(*) FROM sessions WHERE COALESCE(archived,0)=1 OR COALESCE(hidden,0)=1) AS archived,
-              (SELECT COUNT(*) FROM sessions WHERE COALESCE(pinned,0)=1) AS pinned,
-              (SELECT MIN(started_at) FROM sessions) AS oldest,
-              (SELECT MAX(started_at) FROM sessions) AS newest`
-    ))[0] || {};
-  } catch {}
-  const pageCount = Number(agg.page_count) || 0;
-  const pageSize = Number(agg.page_size) || 4096;
-  const freePages = Number(agg.freelist_count) || 0;
+  const q = async (sql) => { try { return (await sqliteExec(sql))[0] || {}; } catch { return {}; } };
+  const [pg, sess, msgs, arch, pin, span] = await Promise.all([
+    q('SELECT (SELECT page_count FROM pragma_page_count()) AS page_count, (SELECT page_size FROM pragma_page_size()) AS page_size, (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count'),
+    q('SELECT COUNT(*) AS sessions FROM sessions'),
+    q('SELECT COUNT(*) AS messages FROM messages'),
+    q('SELECT COUNT(*) AS archived FROM sessions WHERE COALESCE(archived,0)=1 OR COALESCE(hidden,0)=1'),
+    q('SELECT COUNT(*) AS pinned FROM sessions WHERE COALESCE(pinned,0)=1'),
+    q('SELECT MIN(started_at) AS oldest, MAX(started_at) AS newest FROM sessions'),
+  ]);
+  const pageCount = Number(pg.page_count) || 0;
+  const pageSize = Number(pg.page_size) || 4096;
+  const freePages = Number(pg.freelist_count) || 0;
   return {
     ok: true, dbPath: getDB(), dbBytes, pageCount, pageSize,
     freeBytes: freePages * pageSize, freePages,
-    sessions: Number(agg.sessions) || 0, messages: Number(agg.messages) || 0,
-    archived: Number(agg.archived) || 0, pinned: Number(agg.pinned) || 0,
-    oldest: Number(agg.oldest) || 0, newest: Number(agg.newest) || 0,
+    sessions: Number(sess.sessions) || 0, messages: Number(msgs.messages) || 0,
+    archived: Number(arch.archived) || 0, pinned: Number(pin.pinned) || 0,
+    oldest: Number(span.oldest) || 0, newest: Number(span.newest) || 0,
   };
 }
 

@@ -309,6 +309,8 @@ function setActiveTab(id, silent) {
   state.activeTabId = id; state.view = 'chat';
   const _cur = state.tabs.find((x) => x.id === id);
   if (_cur) _cur.unread = false;
+  const _sc = $('#chat-scroll');
+  if (_sc) _sc._userScrolledAway = false;
   closeSubpages();
   document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   renderTabs(); renderChat(); renderSessions(); updateStatus();
@@ -368,7 +370,7 @@ async function refreshSessions(search = '') {
     ? Promise.resolve(api.projectsTree({ previewLimit: 3 })).catch(() => null)
     : Promise.resolve(null);
   try {
-    const [allR, treeR] = await Promise.all([api.listSessions({ limit: 200, search: '' }), treeP]);
+    const [allR, treeR] = await Promise.all([api.listSessions({ limit: 200, search: q }), treeP]);
     const all = arr(allR);
     let hits = [];
     if (q && typeof api.searchMessages === 'function') {
@@ -790,7 +792,11 @@ function showGateway() {
   page.hidden = false;
   loadGatewayOverview();
 }
-function closeGatewayPage() { const p = $('#gateway-page'); if (p) p.hidden = true; }
+function closeGatewayPage() {
+  const p = $('#gateway-page'); if (p) p.hidden = true;
+  const cf = $('#gw-confirm'); if (cf) { cf.hidden = true; cf.innerHTML = ''; }
+  const out = $('#gw-cli-out'); if (out) { out.hidden = true; out.textContent = ''; }
+}
 
 async function loadGatewayOverview() {
   const stateEl = $('#gw-service-state');
@@ -941,7 +947,9 @@ async function gwCheckCliStatus() {
     if (btn) btn.disabled = false;
   }
 }
+let gwActionBusy = false;
 function gwRunAction(op) {
+  if (gwActionBusy) { toast('已有 Gateway 操作正在执行，请稍候', 1800); return; }
   const label = { start: '启动', stop: '停止', restart: '重启' }[op];
   const host = $('#gw-confirm');
   if (!host) return;
@@ -957,9 +965,13 @@ function gwRunAction(op) {
   </div>`;
   host.querySelector('[data-gw-cancel]').onclick = () => { host.hidden = true; host.innerHTML = ''; };
   host.querySelector('[data-gw-go]').onclick = async () => {
+    if (gwActionBusy) return;
     host.hidden = true; host.innerHTML = '';
     const api = window.hermesAPI;
     if (!api || !api.gwAction) { toast('需要在桌面端运行', 2200); return; }
+    gwActionBusy = true;
+    const btns = ['#gw-start', '#gw-stop', '#gw-restart'].map((s) => $(s)).filter(Boolean);
+    btns.forEach((b) => { b.disabled = true; });
     toast(`正在${label} Gateway…`, 2000);
     try {
       const r = await api.gwAction(op);
@@ -976,6 +988,9 @@ function gwRunAction(op) {
     } catch (e) {
       gwShowCliOut(e.message, true);
       toast(`${label}失败：${e.message}`, 3200);
+    } finally {
+      gwActionBusy = false;
+      btns.forEach((b) => { b.disabled = false; });
     }
   };
 }
@@ -1024,37 +1039,6 @@ $('#chat').addEventListener('click', (e) => {
     else if (kind === 'detail') {
       const raw = msg && msg.querySelector('.err-raw');
       if (raw) { raw.hidden = !raw.hidden; ea.textContent = raw.hidden ? '查看原始错误' : '收起原始错误'; }
-    }
-    return;
-  }
-  const foldBtn = t.closest && t.closest('.md-code-fold');
-  if (foldBtn) {
-    const box = foldBtn.closest('.md-code');
-    if (box) {
-      const collapsed = box.classList.toggle('collapsed');
-      const lines = (box.querySelector('.md-code-lines') && box.querySelector('.md-code-lines').textContent) || '';
-      foldBtn.textContent = collapsed ? `展开全部 (${lines})` : '收起代码';
-    }
-    return;
-  }
-  const tblCopy = t.closest && t.closest('.md-table-copy');
-  if (tblCopy) {
-    const wrap = tblCopy.closest('.md-table-wrap');
-    const tbl = wrap && wrap.querySelector('table');
-    if (tbl) {
-      const rows = Array.from(tbl.querySelectorAll('tr')).map((tr) =>
-        Array.from(tr.children).map((c) => String(c.textContent || '').trim()));
-      if (rows.length) {
-        const fmt = tblCopy.dataset.fmt;
-        const out = fmt === 'csv'
-          ? rows.map((r) => r.map((v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(',')).join('\n')
-          : [
-              '| ' + rows[0].join(' | ') + ' |',
-              '| ' + rows[0].map(() => '---').join(' | ') + ' |',
-              ...rows.slice(1).map((r) => '| ' + r.join(' | ') + ' |'),
-            ].join('\n');
-        copyText(out).then(() => toast(fmt === 'csv' ? '已复制 CSV' : '已复制 Markdown 表格', 1400)).catch(() => toast('复制失败'));
-      }
     }
     return;
   }
@@ -1223,7 +1207,7 @@ async function init() {
     if (api.onMenuAction) api.onMenuAction((act) => {
       if (act === 'settings') toggleSettings(true);
       else if (act === 'new-session') newSessionAction();
-      else if (act === 'kanban' && typeof openKanbanPage === 'function') openKanbanPage();
+      else if (act === 'kanban' && typeof showKanban === 'function') showKanban(true);
     });
     if (api.onFocusTab) api.onFocusTab((tabId) => {
       if (tabId && state.tabs.some((t) => t.id === tabId)) {

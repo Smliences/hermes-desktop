@@ -512,6 +512,7 @@ $('#pv-external').onclick = async () => {
   pane.addEventListener('drop', (e) => {
     dragDepth = 0;
     drop.hidden = true;
+    document.body.classList.remove('dropping');
     if (!hasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();

@@ -336,7 +336,11 @@ window.addEventListener('keydown', (e) => {
     }
     for (const pg of document.querySelectorAll('.subpage')) {
       if (pg.hidden) continue;
-      if (pg.id === 'gateway-page') closeGatewayPage();
+      if (pg.id === 'gateway-page') {
+        const gwConfirm = $('#gw-confirm');
+        if (gwConfirm && !gwConfirm.hidden) { gwConfirm.hidden = true; gwConfirm.innerHTML = ''; }
+        else closeGatewayPage();
+      }
       else if (pg.id === 'kanban-page') {
         // 最上层优先：新建弹窗 → 抽屉内确认卡 → 抽屉更多菜单 → 详情抽屉 → 派发确认卡 → 派发面板 → 整页
         const drawerCard = document.querySelector('#kb-drawer-body .op-confirm');
@@ -369,11 +373,17 @@ function closeAllOverlays() {
   let closed = false;
   ['#pf-menu', '#session-menu', '#storage-pop', '#chip-menu', '#chip-submenu'].forEach((sel) => {
     const el = $(sel);
-    if (el && !el.hidden) { el.hidden = true; closed = true; }
+    if (el && !el.hidden) {
+      if (sel === '#chip-menu' && typeof chipMenuCleanup === 'function') chipMenuCleanup();
+      else el.hidden = true;
+      closed = true;
+    }
   });
   document.querySelectorAll('.subpage .pp-menu').forEach((m) => {
     if (!m.hidden) { m.hidden = true; closed = true; }
   });
+  const pfConfirm = document.querySelector('.pf-switch-confirm');
+  if (pfConfirm) { pfConfirm.remove(); closed = true; }
   const menus = document.querySelectorAll('.set-menu');
   menus.forEach((m) => m.remove());
   if (menus.length) closed = true;

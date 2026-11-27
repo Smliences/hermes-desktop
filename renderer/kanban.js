@@ -326,20 +326,24 @@ function setupKanban() {
     if (logBtn) { kbLoadTaskLog(logBtn.getAttribute('data-kb-log')); return; }
     const refBtn = e.target.closest && e.target.closest('[data-kb-refresh-detail]');
     if (refBtn && KB.detailId) { openKanbanTask(KB.detailId, false); return; }
-    const runBtn = e.target.closest && e.target.closest('[data-kb-run]');
+    const runBtn = e.target.closest && e.target.closest('button[data-kb-run-id]');
     if (runBtn) {
-      const runId = runBtn.getAttribute('data-kb-run');
+      const runId = runBtn.getAttribute('data-kb-run-id');
       const box = $('#kbd-run-' + runId);
       if (box) {
         if (!box.hidden) { box.hidden = true; return; }
         box.hidden = false; box.textContent = '读取运行详情…';
         const a = kbApi();
+        const epoch = KB.detailEpoch;
         if (a && a.kanbanRun) {
           a.kanbanRun(runId, kbParams()).then((r) => {
+            if (KB.detailEpoch !== epoch || !box.isConnected) return;
             if (!r || !r.ok || !r.run) { box.textContent = (r && r.error) || '读取失败'; return; }
             const u = r.run;
             box.textContent = [u.profile && ('profile: ' + u.profile), u.step_key && ('step: ' + u.step_key), u.summary || u.outcome || u.error || ''].filter(Boolean).join(' · ') || '无更多详情';
-          }).catch(() => { box.textContent = '读取失败'; });
+          }).catch(() => { if (KB.detailEpoch === epoch && box.isConnected) box.textContent = '读取失败'; });
+        } else {
+          box.textContent = '当前环境不支持读取运行详情';
         }
       }
       return;

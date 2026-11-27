@@ -304,6 +304,11 @@ function onEvent(evt) {
     }
     case 'error': {
       S.running = false;
+      const last = lastAi();
+      if (last && !last.done) {
+        if (!last.text) S.items.pop();
+        else last.done = true;
+      }
       pushItem({ kind: 'error', text: String(evt.text || '出错了') });
       setStatus('');
       break;
@@ -381,8 +386,11 @@ function decide(it, choice) {
 
 function stop() {
   if (!S.running) return;
+  S.running = false;
+  applyTurnState(false);
   try { api.abort(); } catch { /* ignore */ }
-  setStatus('已请求停止…');
+  setStatus('已停止（再按 Esc 收起）');
+  bump();
 }
 
 /* ---------------- 绑定 ---------------- */
@@ -450,12 +458,13 @@ api.onState((p) => {
   if (!p) return;
   if (p.side) applySide(p.side);
   if (p.fontSize) applyFontSize(p.fontSize);
-  if (typeof p.running === 'boolean') { S.running = p.running; applyTurnState(p.running); }
-  if (S.running) {
-    setStatus('');
-  } else if (typeof p.running === 'boolean') {
-    const last = lastAi();
-    if (last && !last.done) last.done = true;
+  if (typeof p.running === 'boolean') {
+    S.running = p.running;
+    applyTurnState(p.running);
+    if (!p.running) {
+      const last = lastAi();
+      if (last && !last.done) last.done = true;
+    }
     setStatus('');
   }
   bump();
@@ -467,7 +476,7 @@ function applySide(side) {
 }
 function applyFontSize(fs) {
   const n = Number(fs);
-  if (Number.isFinite(n) && n >= 11 && n <= 20) document.body.style.fontSize = `${n}px`;
+  if (Number.isFinite(n) && n >= 10 && n <= 20) document.body.style.fontSize = `${n}px`;
 }
 
 /** 主进程每次「点球 / ⌥⇧H」把面板亮出来都会发这条：光标直接落进输入框，

@@ -231,7 +231,7 @@ $('#palette-input').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') { paletteSel = Math.min(paletteItems.length - 1, paletteSel + 1); renderPalette(); e.preventDefault(); }
   else if (e.key === 'ArrowUp') { paletteSel = Math.max(0, paletteSel - 1); renderPalette(); e.preventDefault(); }
   else if (e.key === 'Enter') { const c = paletteItems[paletteSel]; togglePalette(false); c && c.run(); }
-  else if (e.key === 'Escape') togglePalette(false);
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); togglePalette(false); }
 });
 $('#palette').addEventListener('click', (e) => { if (e.target.id === 'palette') togglePalette(false); });
 
@@ -334,9 +334,11 @@ function openChipMenu(anchor, rows, selectedKey, onPick) {
   };
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
     // Esc 先收二级，再收一级：跟目录树的习惯一致
     const sub = $('#chip-submenu');
-    if (sub && !sub.hidden) { e.stopPropagation(); chipSubClose(); return; }
+    if (sub && !sub.hidden) { chipSubClose(); return; }
     close();
   };
   document.addEventListener('mousedown', onDoc, true);

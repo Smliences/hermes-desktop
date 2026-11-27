@@ -2330,6 +2330,132 @@ async function run() {
     assert.strictEqual(r.text, '恢复后可用');
   });
 
+  section('12. 审核回归单测：心跳 / tool.complete / 推理切换 / 审批 / Gateway .env');
+  const { GatewayConnection: GatewayConnCls } = loaded['gateway-client.js'];
+  const { ChatChannel: ChatChanCls } = loaded['hermes-chat.js'];
+  const gwSvc2 = loaded['hermes-gateway.js'];
+
+  await t('GatewayConnection 心跳发 gateway.ping 且带 this.ws === sock 守卫', () => {
+    const gcSrc = fs.readFileSync(path.join(ROOT, 'main', 'services', 'gateway-client.js'), 'utf8');
+    assert.ok(gcSrc.includes("this.rpc('gateway.ping'"), '心跳必须发 gateway.ping');
+    assert.ok(gcSrc.includes('const sock = this.ws;') && gcSrc.includes('if (this.ws !== sock) return;'), '心跳回调缺少 socket 身份守卫');
+    assert.ok(typeof GatewayConnCls === 'function');
+  });
+
+  await t('tool.complete 解析 p.result 内部错误状态（exit_code / success / error）', async () => {
+    const events = [];
+    const fakeBackend = { generation: 1, token: 't', start: async () => 12345, stop() {} };
+    let gwOpts = null;
+    const fakeGw = {
+      connected: true,
+      eventListeners: new Set(),
+      connect() { setTimeout(() => gwOpts && gwOpts.onStatus({ connected: true }), 5); },
+      onEvent(fn) { this.eventListeners.add(fn); return () => this.eventListeners.delete(fn); },
+      onRequest() {},
+      close() {},
+      async rpc(method) {
+        if (method === 'session.create') return { session_id: 'live-1', stored_session_id: 's-1', info: { model: 'm1' } };
+        if (method === 'prompt.submit') return {};
+        return {};
+      },
+    };
+    const ch = new ChatChanCls('', { backend: fakeBackend, createGateway: (o) => { gwOpts = o; return fakeGw; } });
+    let closeP = new Promise((resolve) => {
+      ch.submit('tab-tc', { query: 'hi' }, {
+        onEvent: (e) => events.push(e),
+        onClose: resolve,
+      });
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    const emit = (type, payload) => {
+      for (const fn of fakeGw.eventListeners) fn({ type, session_id: 'live-1', payload });
+    };
+    emit('tool.complete', { name: 'terminal', tool_id: '1', result: { exit_code: 2 } });
+    emit('tool.complete', { name: 'read_file', tool_id: '2', result: { success: false, error: 'no file' } });
+    emit('tool.complete', { name: 'read_file', tool_id: '3', result: { exit_code: 0, success: true } });
+    emit('message.complete', { text: 'done' });
+    await closeP;
+    const tr = events.filter((e) => e.type === 'tool_result');
+    assert.strictEqual(tr.length, 3);
+    assert.strictEqual(tr[0].is_error, true, 'exit_code !== 0 应判错');
+    assert.strictEqual(tr[1].is_error, true, 'success === false 应判错');
+    assert.strictEqual(tr[2].is_error, false, '正常结果不应判错');
+  });
+
+  await t('hermes-chat 推理切换：slash.exec 失败不缓存且清空 reasoning 可触发同步', async () => {
+    const cmds = [];
+    let failSlash = true;
+    const fakeBackend = { generation: 1, token: 't', start: async () => 12345, stop() {} };
+    let gwOpts = null;
+    const fakeGw = {
+      connected: true,
+      eventListeners: new Set(),
+      connect() { setTimeout(() => gwOpts && gwOpts.onStatus({ connected: true }), 5); },
+      onEvent(fn) { this.eventListeners.add(fn); return () => this.eventListeners.delete(fn); },
+      onRequest() {},
+      close() {},
+      async rpc(method, params) {
+        if (method === 'session.create') return { session_id: 'live-r', stored_session_id: 's-r', info: { model: 'm1' } };
+        if (method === 'slash.exec') {
+          cmds.push(params.command);
+          if (failSlash) throw new Error('slash failed');
+          return {};
+        }
+        if (method === 'prompt.submit') return {};
+        return {};
+      },
+    };
+    const ch = new ChatChanCls('', { backend: fakeBackend, createGateway: (o) => { gwOpts = o; return fakeGw; } });
+    const runTurn = (reasoning) => new Promise((resolve) => {
+      ch.submit('tab-r', { query: 'q', model: 'm1', reasoning }, {
+        onEvent() {},
+        onClose: resolve,
+      });
+      setTimeout(() => {
+        for (const fn of fakeGw.eventListeners) fn({ type: 'message.complete', session_id: 'live-r', payload: { text: 'ok' } });
+      }, 30);
+    });
+    await runTurn('high');
+    await runTurn('low'); // 失败后再次切换（含推理改变）应仍尝试 slash.exec
+    failSlash = false;
+    await runTurn('low');
+    await runTurn('default'); // 清空 reasoning 也应触发同步
+    assert.strictEqual(cmds.length, 3, '应触发 3 次 slash.exec（首轮 create 后第 2 轮失败、第 3 轮重试成功、第 4 轮清空）');
+    assert.strictEqual(cmds[2], '/model m1', '清空 reasoning 应下发不带 --reasoning 的 /model');
+  });
+
+  await t('审批：tabId 不匹配拒收，_denyAllApprovals 触发清理回调', async () => {
+    const cleared = [];
+    const rpcs = [];
+    const fakeBackend = { generation: 1, token: 't', start: async () => 12345, stop() {} };
+    const ch = new ChatChanCls('', { backend: fakeBackend, createGateway: () => ({ connected: true, close() {}, rpc: async (m, p) => { rpcs.push({ m, p }); return {}; } }) });
+    ch.gateway = { connected: true, close() {}, rpc: async (m, p) => { rpcs.push({ m, p }); return {}; } };
+    ch.liveByTab.set('s1', 'tab-A');
+    ch.setApprovalHandler(() => true);
+    ch.setApprovalClearHandler((ids) => cleared.push(...ids));
+    await ch._handleApproval({ session_id: 's1', request_id: 'req-1', tool: 'terminal' });
+    assert.strictEqual(ch.respondApproval('req-1', 'approve', 'tab-B'), false, '跨页签审批应返回 false');
+    assert.strictEqual(ch._pendingApprovals.has('req-1'), true, '跨页签误提交不得删掉挂起审批');
+    ch._denyAllApprovals();
+    assert.deepStrictEqual(cleared, ['req-1'], '_denyAllApprovals 应通知清理挂起审批');
+    assert.strictEqual(ch._pendingApprovals.size, 0);
+  });
+
+  await t('Gateway .env 解析：忽略注释与空引号值，多变量凭据全齐才算配置', () => {
+    const envFile = path.join(hermesRoot, '.env');
+    fs.writeFileSync(envFile, [
+      'TELEGRAM_BOT_TOKEN="" # comment',
+      'FEISHU_APP_ID="cli_123" # comment',
+      '# FEISHU_APP_SECRET=sec_1',
+    ].join('\n'));
+    const ov = gwSvc2.overview();
+    const tg = ov.platforms.find((p) => p.key === 'telegram');
+    const fsPlat = ov.platforms.find((p) => p.key === 'feishu');
+    assert.strictEqual(tg.hasCredentials, false, '空引号加注释不应算作已配置凭据');
+    assert.strictEqual(fsPlat.hasCredentials, false, '飞书缺 FEISHU_APP_SECRET 不应算作凭证齐全');
+    fs.unlinkSync(envFile);
+  });
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
   console.log('\n' + '─'.repeat(56));

@@ -96,13 +96,17 @@ class GatewayConnection {
     this._stopHeartbeat();
     this._hbFails = 0;
     this.heartbeat = setInterval(() => {
-      this.rpc('ping', {}, 10000).then(() => {
+      const sock = this.ws;
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
+      this.rpc('gateway.ping', {}, 10000).then(() => {
+        if (this.ws !== sock) return;
         this._hbFails = 0;
       }).catch(() => {
+        if (this.ws !== sock) return;
         this._hbFails += 1;
-        if (this._hbFails >= 2 && this.ws && !this.closed) {
+        if (this._hbFails >= 2 && this.ws === sock && !this.closed) {
           this._hbFails = 0;
-          try { this.ws.terminate ? this.ws.terminate() : this.ws.close(); } catch { /* ignore */ }
+          try { sock.terminate ? sock.terminate() : sock.close(); } catch { /* ignore */ }
         }
       });
     }, HEARTBEAT_INTERVAL_MS);

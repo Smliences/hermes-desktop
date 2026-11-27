@@ -192,17 +192,31 @@ function kbDragAutoScroll(x, y) {
       return;
     }
   }
-  const board = $('#kb-columns') || $('#kb-scroll');
+  const board = $('#kb-scroll') || $('#kb-columns');
+  KbDrag.vel = 0; KbDrag.scrollEl = null;
+  KbDrag.velY = 0; KbDrag.scrollYEl = null;
   if (board && board.scrollWidth > board.clientWidth + 1) {
     const br = board.getBoundingClientRect();
     if (y >= br.top && y <= br.bottom) {
       KbDrag.vel = Math.round(kbScrollVel(x, br, 56, 14) * 10) / 10;
       KbDrag.scrollEl = board;
-      return;
     }
   }
-  KbDrag.vel = 0;
-  KbDrag.scrollEl = null;
+  if (KbDrag.col && KbDrag.col.el) {
+    const colBody = KbDrag.col.el.querySelector('.kb-col-body');
+    if (colBody && colBody.scrollHeight > colBody.clientHeight + 1) {
+      const cr = colBody.getBoundingClientRect();
+      if (x >= cr.left && x <= cr.right) {
+        if (y >= cr.top - 24 && y < cr.top + 44) {
+          KbDrag.velY = -Math.round(10 * Math.min(1, (cr.top + 44 - y) / 68) * 10) / 10;
+          KbDrag.scrollYEl = colBody;
+        } else if (y <= cr.bottom + 24 && y > cr.bottom - 44) {
+          KbDrag.velY = Math.round(10 * Math.min(1, (y - (cr.bottom - 44)) / 68) * 10) / 10;
+          KbDrag.scrollYEl = colBody;
+        }
+      }
+    }
+  }
 }
 /** 边缘自动滚动的速度（px/帧）：离边缘越近越快，中间与区外都是 0。纯函数，便于数值断言。 */
 function kbScrollVel(x, r, edge, max) {
@@ -218,6 +232,7 @@ function kbDragScrollLoop() {
     if (!KbDrag.on) return;
     const target = KbDrag.scrollEl || $('#kb-dock-workers');
     if (target && KbDrag.vel) target.scrollLeft += KbDrag.vel;
+    if (KbDrag.scrollYEl && KbDrag.velY) KbDrag.scrollYEl.scrollTop += KbDrag.velY;
     KbDrag.raf = requestAnimationFrame(step);
   };
   KbDrag.raf = requestAnimationFrame(step);
@@ -467,7 +482,7 @@ function kbCardHtml(t, colName, opts) {
   const runHtml = st === 'running' ? kbRunStrip(t) : '';
   const dragHint = draggable === '1'
     ? '拖动：落到别的列改状态，落到上方 profile 上改派'
-    : `${st || '该状态'} 不支持拖拽（已归档的卡片不参与拖动）`;
+    : (st === 'archived' ? '已归档的卡片不支持拖拽' : `${st || '该状态'} 卡片当前不支持拖拽`);
   return `<button class="kb-card${KB.detailId === t.id ? ' sel' : ''}" data-kb-task="${esc(t.id)}" data-kb-drag="${draggable}" type="button" title="${esc(t.title || '')}　·　${esc(dragHint)}">
     ${priHtml}
     <div class="kb-card-title">${kbHighlight(t.title || '(无标题)', q)}</div>

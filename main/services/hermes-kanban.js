@@ -89,6 +89,7 @@ const ALL_COLUMNS = Object.freeze([...COLUMNS, 'archived']);
 /** 卡片 / 详情允许透出的字段。未列出的字段（含工作区路径、认领锁、PID）一律丢弃。 */
 const TASK_FIELDS = Object.freeze([
   'id', 'title', 'body', 'status', 'priority', 'assignee', 'tenant', 'created_by',
+  // 注：上游当前 Task 表无 updated_at、CreateTaskBody 不接收 session_id（保留白名单以兼容上游扩展）
   'created_at', 'updated_at', 'started_at', 'completed_at', 'workspace_kind', 'branch_name', 'project_id',
   'session_id', 'result', 'latest_summary', 'comment_count', 'link_counts',
   'progress', 'current_run_started_at', 'max_runtime_seconds', 'model_override',
@@ -348,8 +349,8 @@ function cleanTaskInput(raw) {
   if (effort && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) {
     out.reasoning_effort = effort;
   }
-  const sid = cleanText(o.sessionId || o.session_id, 80);
-  if (sid && /^[A-Za-z0-9_.:-]{1,80}$/.test(sid)) out.session_id = sid;
+  const sid = cleanText(o.sessionId || o.session_id, 128);
+  if (sid && /^[A-Za-z0-9_.:-]{1,128}$/.test(sid)) out.session_id = sid;
   return out;
 }
 /** 编辑任务：只允许修改 title / body / priority 三个内容字段，至少提供一项。 */

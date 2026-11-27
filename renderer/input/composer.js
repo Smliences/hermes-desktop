@@ -58,16 +58,17 @@ function removeAttachment(p) {
 /* ---------- 发送 ---------- */
 /** displayText：命令改写出来的回合要在气泡里显示命令原文（如 `/plan …`），
  *  而真正提交给 agent 的是改写后的 prompt。两者不同就分开传。 */
-async function send(text, displayText) {
-  const tab = activeTab();
+async function send(text, displayText, targetTab) {
+  const tab = targetTab || activeTab();
   if (!tab) return;
+  const visible = tab.id === state.activeTabId;
   text = text.trim(); if (!text) return;
   if (tab.running) {
     if (displayText) return;
     if (!Array.isArray(tab.queued)) tab.queued = [];
     if (tab.queued.length >= 5) { toast('发送队列已满（最多 5 条）', 2000); return; }
     tab.queued.push({ text });
-    $('#input').value = ''; autoGrow(); updateCount(); slashClose();
+    if (visible) { $('#input').value = ''; autoGrow(); updateCount(); slashClose(); }
     toast(`已加入发送队列（待发 ${tab.queued.length} 条）`, 1800);
     return;
   }
@@ -95,26 +96,33 @@ async function send(text, displayText) {
     }
   }
   const shown = String(displayText || text).trim() || text;
-  if (state.view === 'trace') {
+  if (visible && state.view === 'trace') {
     state.view = 'chat';
     document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   }
   const atts = tabAttachments(tab);
-  slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
+  if (visible) slashClose(); // 乐观清空不走 input 事件，指令菜单必须在这里显式收起
   state.sendHistory.push(shown); state.histIdx = state.sendHistory.length; state.histDraft = ''; state.histBrowsing = false;
   tab.items.push({ kind: 'user', text: shown, ts: Date.now(), files: atts.map((a) => a.name) });
-  // 取消在途草稿定时器：否则发送后它仍会以「清空后的输入框」再写一次草稿归属
-  if ($('#input')._draftTimer) { clearTimeout($('#input')._draftTimer); $('#input')._draftTimer = null; }
-  // 立即清空输入框（乐观发送）；放在 await 之后会吞掉用户在这段时间里新敲的内容
-  $('#input').value = ''; autoGrow(); updateCount();
+  if (visible) {
+    // 取消在途草稿定时器：否则发送后它仍会以「清空后的输入框」再写一次草稿归属
+    if ($('#input')._draftTimer) { clearTimeout($('#input')._draftTimer); $('#input')._draftTimer = null; }
+    // 立即清空输入框（乐观发送）；放在 await 之后会吞掉用户在这段时间里新敲的内容
+    $('#input').value = ''; autoGrow(); updateCount();
+  }
   if (typeof clearDraftFor === 'function') clearDraftFor(tab);
   if (tab.title === '新会话') tab.title = shown.slice(0, 24);
   tab.running = true; tab.startedAt = Date.now(); tab.deltas = 0;
   // 回合开始时的累计用量：结算时用它做差，得到「本条消息自己的 token」
   tab.usageBase = (tab.usage && tab.usage.total) || 0;
   tab.showTyping = true; tab.activity = '思考中…';
-  closeSubpages();
-  renderTabs(); renderChat(); scrollBottom(true); setActivity('思考中…'); syncActivityBar();
+  if (visible) {
+    closeSubpages();
+    renderTabs(); renderChat(); scrollBottom(true); setActivity('思考中…'); syncActivityBar();
+  } else {
+    renderTabs();
+  }
+  if (typeof renderSessions === 'function') renderSessions();
   const payload = {
     tabId: tab.id, query: text, sessionId: tab.sessionId || undefined,
     model: state.config.model || undefined, reasoning: state.config.reasoning,
@@ -132,7 +140,8 @@ async function send(text, displayText) {
     } catch (e) {
       tab.items.push({ kind: 'error', text: (e && e.message) || String(e) });
       tab.running = false; tab.showTyping = false;
-    if (!visible) tab.unread = true;
+      if (tab.id !== state.activeTabId) tab.unread = true;
+      if (typeof renderSessions === 'function') renderSessions();
       renderChat(); syncActivityBar(); syncComposerState(); setActivity('空闲');
     }
   } else {
@@ -161,6 +170,7 @@ function handleClose({ tabId, summary }) {
   }
   tab.stoppedByUser = false;
   renderTabs();
+  if (typeof renderSessions === 'function') renderSessions();
   if (visible) {
     renderChat(); updateStatus(); setActivity('空闲');
     syncActivityBar(); syncComposerState();
@@ -172,9 +182,9 @@ function handleClose({ tabId, summary }) {
   }
   refreshSessions($('#session-search').value.trim());
   if (tab.sessionId && hasNative) api.sessionStats(tab.sessionId).then(() => updateStatus()).catch(() => {});
-  if (!s.aborted && visible && Array.isArray(tab.queued) && tab.queued.length) {
+  if (!s.aborted && Array.isArray(tab.queued) && tab.queued.length) {
     const next = tab.queued.shift();
-    if (next && next.text) setTimeout(() => send(next.text), 60);
+    if (next && next.text) setTimeout(() => send(next.text, undefined, tab), 60);
   }
 }
 
@@ -357,10 +367,15 @@ $('#btn-send').onclick = () => send($('#input').value);
 $('#btn-stop').onclick = () => {
   const t = activeTab(); if (!t || !t.running) return;
   // 本地立即复位：不能依赖主进程 close 事件，漏发会永久卡在「正在停止」并挡住后续发送
+  if (t._rafText) { cancelAnimationFrame(t._rafText); t._rafText = 0; }
+  const last = t.items[t.items.length - 1];
+  if (last && last.kind === 'assistant' && !last.done) last.done = true;
+  if (Array.isArray(t.queued)) t.queued = [];
   t.running = false; t.showTyping = false; t.stoppedByUser = true;
   invalidateTurn(t);
   if (hasNative && api.abort) Promise.resolve(api.abort(t.id)).catch(() => {});
-  renderTabs(); renderChat(); updateStatus(); syncActivityBar(); syncComposerState();
+  renderTabs(); if (typeof renderSessions === 'function') renderSessions();
+  renderChat(); updateStatus(); syncActivityBar(); syncComposerState();
   setActivity('已停止'); a11y('本轮已停止'); toast('已停止本回合', 1400);
 };
 const newSessionAction = () => {

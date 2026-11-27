@@ -269,9 +269,9 @@ t('历史投影带出 display_kind / display_metadata，且旧库缺列时安全
   assert.ok(sessSrc.includes('displayKind:') && sessSrc.includes('displayMetadata:'), '返回对象缺少诊断字段');
 });
 t('历史里的 failed_turn 先于普通助手消息匹配，不再显示占位英文', () => {
-  const s = appSrc.indexOf('async function openSession(');
-  const e = appSrc.indexOf('/* ---------- 渲染：聊天流', s);
-  const body = e > s ? appSrc.slice(s, e) : appSrc.slice(s);
+  const sessJs = read('renderer/sidebar/sessions.js');
+  const s = sessJs.indexOf('async function openSession(');
+  const body = sessJs.slice(s);
   assert.ok(body.includes("m.displayKind === 'failed_turn'"), 'openSession 未识别失败轮次');
   assert.ok(body.indexOf("m.displayKind === 'failed_turn'") < body.indexOf("m.role === 'assistant'"),
     'failed_turn 的 role 是 assistant，必须先于普通助手分支匹配');
@@ -1911,7 +1911,7 @@ t('三个入口都能进小球：⌘⇧M 菜单 / 命令面板 /orb / 渲染层 
 
 t('球上的状态点由在途回合 / 待审批数推导，且不把启动瞬间报成故障', () => {
   assert.ok(/busyTurns \+= 1/.test(mainSrc) && /busyTurns = Math\.max\(0, busyTurns - 1\)/.test(mainSrc), '在途回合计数缺失');
-  assert.ok(/pendingApprovals \+= 1/.test(mainSrc), '待审批计数缺失');
+  assert.ok(/pendingApprovals\s*(\+= 1|=\s*activeApprovals\.size)/.test(mainSrc), '待审批计数缺失');
   const body = mainSrc.slice(mainSrc.indexOf('function orbStatus()'), mainSrc.indexOf('function syncOrb'));
   for (const s of ["'approval'", "'busy'", "'offline'", "'idle'"]) assert.ok(body.includes(s), '缺少状态 ' + s);
   assert.ok(!/!== 'ready'/.test(body), 'started/idle 阶段不该亮红点（启动瞬间必然不是 ready）');
@@ -3800,9 +3800,9 @@ t('元素保留在 DOM，切页签 / 打开历史会话 / 树落地都会重新�
   assert.ok(/id="chip-project"[^>]*aria-label=/.test(htmlSrc)
     && /id="chip-project"[^>]*placeholder="选择项目"/.test(htmlSrc), '无障碍名与空值占位不能丢');
   assert.ok(!/\$\('#chip-project'\)\.remove\(/.test(appSrc), '不得从 DOM 移除项目选择器');
-  const _os = appSrc.indexOf('async function openSession(');
-  const _oe = appSrc.indexOf('/* ---------- 渲染：聊天流', _os);
-  const openSess = _oe > _os ? appSrc.slice(_os, _oe) : appSrc.slice(_os);
+  const sessJs = read('renderer/sidebar/sessions.js');
+  const _os = sessJs.indexOf('async function openSession(');
+  const openSess = sessJs.slice(_os);
   assert.ok(openSess.includes('syncComposerProject()'),
     '从项目分组点开已有会话会复用空 tab，不走 setActiveTab，显隐不会更新');
   const setTab = appSrc.slice(appSrc.indexOf('function setActiveTab('), appSrc.indexOf('function closeTab('));
@@ -3816,7 +3816,7 @@ section('3aj. 右侧预览按类型分流：五视图、三层对齐、双主题
 const previewSvc = read('main/services/hermes-preview.js');
 const mockBridgeSrc = read('renderer/mock-bridge.js');
 const _pvStart = appSrc.indexOf('/* ---------- 右侧 rail：预览 | 看板 ---------- */');
-const _pvEnd = appSrc.indexOf('/* ---------- 全局快捷键', _pvStart);
+const _pvEnd = appSrc.indexOf('/* ---------- 危险操作审批', _pvStart);
 const pvApp = (_pvEnd > _pvStart ? appSrc.slice(_pvStart, _pvEnd) : appSrc.slice(_pvStart)) + '\n' + read('renderer/preview/preview.js');
 const pvCss = cssSrc.slice(cssSrc.indexOf('/* 多类型预览：'), cssSrc.indexOf('/* ══════════ 右侧 rail：看板速览'));
 const pvHtml = htmlSrc.slice(htmlSrc.indexOf('<div class="rail-pane" id="preview-pane">'),

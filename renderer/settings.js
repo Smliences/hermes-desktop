@@ -226,7 +226,8 @@ function renderSettingsPanel() {
   if (cancelBtn) cancelBtn.textContent = isGeneral ? '取消' : '关闭';
   if (hintEl) {
     if (!isGeneral) hintEl.textContent = '';
-    else if (!(saveBtn && saveBtn.classList.contains('dirty'))) hintEl.textContent = '更改需保存后生效';
+    else if (saveBtn && saveBtn.classList.contains('dirty')) hintEl.textContent = '有未保存的更改';
+    else hintEl.textContent = '更改需保存后生效';
   }
   if (cat.custom === 'model') { renderModelPanel(panel, cat); return; }
   if (cat.custom === 'profile') { renderProfilePanel(panel, cat); return; }
@@ -383,7 +384,9 @@ async function renderModelPanel(panel, cat) {
         <button class="set-provider-edit" title="只读列表：点击打开配置文件">只读 · 打开配置</button>`;
       row.querySelector('.set-provider-edit').onclick = () => {
         if (isNativeCLI() && typeof api.configOpenFile === 'function') {
-          api.configOpenFile('providers.json').catch(() => toast('请通过 hermes CLI 编辑 ~/.hermes/providers.json', 2400));
+          api.configOpenFile('providersJson').then((r) => {
+            if (!r || !r.ok) toast((r && r.error) || '请通过 hermes CLI 编辑 ~/.hermes/providers.json', 2400);
+          }).catch(() => toast('请通过 hermes CLI 编辑 ~/.hermes/providers.json', 2400));
         } else {
           toast('提供商列表为只读（请通过 hermes CLI 编辑 providers.json）', 2400);
         }
@@ -1316,6 +1319,7 @@ function healthStatusLine(r, ms) {
   return `未取得输出 · ${secs}`;
 }
 async function runHealthCard(check, card, onDone) {
+  const epoch = settingsPanelEpoch;
   const btn = card.querySelector('.hc-run');
   const out = card.querySelector('.hc-out');
   const meta = card.querySelector('.hc-meta');
@@ -1324,6 +1328,7 @@ async function runHealthCard(check, card, onDone) {
   let r;
   try { r = await api.diagnosticsRun(check.key); }
   catch (e) { r = { ok: false, error: String((e && e.message) || e), text: '' }; }
+  if (epoch !== settingsPanelEpoch || !card.isConnected) { if (onDone) onDone(); return; }
   const ms = performance.now() - t0;
   out.textContent = r && r.text ? r.text : (r && r.error) || 'CLI 未返回内容';
   out.hidden = false;
@@ -1400,6 +1405,7 @@ function setupSettings() {
       state.config.yolo = nextMode === '自动批准全部';
       if (hasNative && api.setConfig) api.setConfig({ yolo: state.config.yolo });
       if (typeof syncComposerState === 'function') syncComposerState();
+      if (typeof updateStatus === 'function') updateStatus();
     }
     $('#set-hint').textContent = '已保存并生效';
     toast('设置已保存并生效', 1400);
@@ -1471,9 +1477,9 @@ function askSwitch(name) {
   const btns = document.createElement('div');
   btns.className = 'op-confirm-btns';
   const cancel = document.createElement('button');
-  cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = '取消';
+  cancel.type = 'button'; cancel.className = 'mk-btn'; cancel.textContent = '取消';
   const ok = document.createElement('button');
-  ok.type = 'button'; ok.className = 'btn primary'; ok.textContent = '确认切换';
+  ok.type = 'button'; ok.className = 'mk-btn primary'; ok.textContent = '确认切换';
   cancel.onclick = () => wrap.remove();
   ok.onclick = () => { wrap.remove(); doSwitchProfile(name); };
   wrap.addEventListener('click', (e) => { if (e.target === wrap) wrap.remove(); });

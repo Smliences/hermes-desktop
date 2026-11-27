@@ -44,9 +44,10 @@ $('#landing').addEventListener('click', (e) => {
 function renderChat() {
   const tab = activeTab(); const chat = $('#chat');
   if (!tab) { chat.innerHTML = ''; return; }
+  if (tab._rafText) { cancelAnimationFrame(tab._rafText); tab._rafText = 0; }
   const isTrace = state.view === 'trace';
   const traceItems = isTrace ? tab.items.filter((i) => ['user', 'thinking', 'tool', 'approval', 'command', 'error'].includes(i.kind)) : tab.items;
-  const hasTraceSteps = isTrace && traceItems.some((i) => ['tool', 'approval', 'command', 'error'].includes(i.kind));
+  const hasTraceSteps = isTrace && traceItems.some((i) => ['thinking', 'tool', 'approval', 'command', 'error'].includes(i.kind));
   const items = traceItems;
   const showHeads = !isTrace;
   chat.innerHTML = '';
@@ -184,7 +185,7 @@ function publishOrbContext() {
         model: tab.model || (state.config && state.config.model) || '',
         cwd: tab.cwd || undefined,
         theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
-        fontSize: (state.config && state.config.fontSize) || undefined,
+        fontSize: typeof SettingsStore !== 'undefined' ? SettingsStore.get('fontSize', 16) : 16,
         messages,
       });
     } catch { /* 退出中：主进程已不可达 */ }
@@ -356,7 +357,10 @@ function renderItem(item, header = false, sub = false) {
       : (!running && dur ? `<span class="tmeta tmeta-dur">${esc(dur)}</span>` : '');
     // 详情可能是空串（跑着的命令还没有输出）：那时只留详情头，不塞「暂无」占位
     const detailHTML = toolDetailHTML(item);
-    const pvPath = extractPreviewPaths(JSON.stringify(item.input || {})).pop() || '';
+    const inp = item.input && typeof item.input === 'object' ? item.input : null;
+    const directPath = inp && (inp.file_path || inp.path || inp.target_file || inp.filename);
+    const pvPath = (typeof directPath === 'string' && extractPreviewPaths(directPath)[0])
+      || extractPreviewPaths(JSON.stringify(item.input || {})).pop() || '';
     const pvBtn = pvPath
       ? `<button class="tdh-pv-btn" type="button" data-pv-open="${esc(pvPath)}" title="在右侧预览此文件">在右侧预览</button>`
       : '';
@@ -602,6 +606,7 @@ function routeEvent(evt, explicitTabId) {
       else renderChat();
     }
   } else if (evt.type === 'tool_use') {
+    if (tab._rafText) { cancelAnimationFrame(tab._rafText); tab._rafText = 0; }
     const last = tab.items[tab.items.length - 1];
     if (last && last.kind === 'assistant') last.done = true;
     // 状态行也用人话（「读取 app.js」「执行中… npm test」），比「执行 bash…」好认
@@ -633,6 +638,7 @@ function routeEvent(evt, explicitTabId) {
     tab.usage = evt.usage || null;
     updateStatus();
   } else if (evt.type === 'result') {
+    if (tab._rafText) { cancelAnimationFrame(tab._rafText); tab._rafText = 0; }
     tab.lastResult = evt;
     if (evt.tokens) tab.usage = evt.tokens;
     const last = tab.items[tab.items.length - 1];
@@ -658,6 +664,7 @@ function routeEvent(evt, explicitTabId) {
       tab.items.push({ kind: 'error', text: f.error, failure: f });
     }
     renderTabs(); // 页签上的 running 指示对后台页签也要刷新
+    if (typeof renderSessions === 'function') renderSessions();
     if (visible) { renderChat(); updateStatus(); setActivity('空闲'); syncActivityBar(); }
     if (evt.turnId) state.turnTab.delete(evt.turnId);
   }
