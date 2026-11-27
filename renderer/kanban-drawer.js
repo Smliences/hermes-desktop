@@ -44,6 +44,7 @@ function kbdMoreToggle(open) {
   if (menu) menu.hidden = !on;
 }
 function closeKanbanDrawer() {
+  if (typeof kbStopLogTail === 'function') kbStopLogTail();
   const d = $('#kb-drawer'), m = $('#kb-drawer-mask'), mw = $('#kbd-more-wrap'), nav = $('#kbd-nav');
   kbdMoreToggle(false);
   if (mw) mw.hidden = true;
@@ -403,17 +404,24 @@ async function kbSaveTaskEdit(taskId) {
   }
 }
 
-async function kbLoadTaskLog(taskId) {
+let kbLogTailTimer = null;
+function kbStopLogTail() {
+  if (kbLogTailTimer) { clearInterval(kbLogTailTimer); kbLogTailTimer = null; }
+}
+async function kbLoadTaskLog(taskId, silent = false) {
   const id = String(taskId || '');
   const a = kbApi();
   const meta = $('#kbd-log-meta'), pre = $('#kbd-log-body'), btn = document.querySelector('[data-kb-log]');
-  if (!a || !a.kanbanTaskLog) { toast('此页需要 Hermes 桌面端才能读取日志', 1800); return; }
-  if (btn) btn.disabled = true;
-  if (meta) meta.textContent = '读取日志中…';
+  if (!a || !a.kanbanTaskLog) { if (!silent) toast('此页需要 Hermes 桌面端才能读取日志', 1800); return; }
+  if (!silent) {
+    if (btn) btn.disabled = true;
+    if (meta) meta.textContent = '读取日志中…';
+  }
   try {
     const r = await a.kanbanTaskLog(id, { board: KB.filters.board || '', tail: 32768 });
+    if (KB.detailId !== id || ($('#kb-drawer') && $('#kb-drawer').hidden)) { kbStopLogTail(); return; }
     if (!r || !r.ok) {
-      if (meta) meta.textContent = '读取失败：' + ((r && r.error) || '未知错误');
+      if (!silent && meta) meta.textContent = '读取失败：' + ((r && r.error) || '未知错误');
       return;
     }
     if (!r.exists || !r.content) {
@@ -430,10 +438,21 @@ async function kbLoadTaskLog(taskId) {
       }
     }
     if (btn && btn.isConnected) btn.textContent = '刷新日志';
+    const isRunning = KB.detail && KB.detail.task && KB.detail.task.status === 'running';
+    if (isRunning && pre && !pre.hidden && !kbLogTailTimer) {
+      kbLogTailTimer = setInterval(() => {
+        const d = $('#kb-drawer');
+        const p = $('#kbd-log-body');
+        if (!d || d.hidden || !p || p.hidden || KB.detailId !== id) { kbStopLogTail(); return; }
+        kbLoadTaskLog(id, true);
+      }, 4000);
+    } else if (!isRunning) {
+      kbStopLogTail();
+    }
   } catch (e) {
-    if (meta) meta.textContent = '读取失败：' + ((e && e.message) || '未知错误');
+    if (!silent && meta) meta.textContent = '读取失败：' + ((e && e.message) || '未知错误');
   } finally {
-    if (btn && btn.isConnected) btn.disabled = false;
+    if (!silent && btn && btn.isConnected) btn.disabled = false;
   }
 }
 

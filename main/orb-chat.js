@@ -41,7 +41,14 @@ function createOrbChat(opts) {
   let win = null;
   let loaded = false;
   let draft = '';
-  let savedSize = null;
+  let savedSize = (opts.initialSize && opts.initialSize.width >= 320 && opts.initialSize.height >= 400)
+    ? { width: opts.initialSize.width, height: opts.initialSize.height } : null;
+  let sizeTimer = null;
+  const saveSizeSoon = (sz) => {
+    if (typeof opts.onSizeChange !== 'function') return;
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => { try { opts.onSizeChange(sz); } catch {} }, 200);
+  };
   /** 上次「自动贴球」时球的屏幕坐标：用户手动拖过小窗之后，
    *  只要球没动就尊重用户摆的位置，别每次点开都把人拖回来。 */
   let placedAnchor = null;
@@ -145,6 +152,7 @@ function createOrbChat(opts) {
       if (!win || win.isDestroyed()) return;
       const [w, h] = win.getSize();
       savedSize = { width: w, height: h };
+      saveSizeSoon(savedSize);
       push('orbchat:state', { side: sideOfBall() });
     });
     win.on('closed', () => { win = null; loaded = false; });
@@ -152,8 +160,11 @@ function createOrbChat(opts) {
     return win;
   }
 
-  const onDisplayRemoved = () => { clampIntoView(); };
-  try { screen.on('display-removed', onDisplayRemoved); } catch {}
+  const onDisplayChange = () => { clampIntoView(); };
+  try {
+    screen.on('display-removed', onDisplayChange);
+    screen.on('display-metrics-changed', onDisplayChange);
+  } catch {}
 
   /* ---- IPC（校验 sender：只有这个面板能调） ---- */
   const own = (event) => !!win && !win.isDestroyed() && event.sender === win.webContents;
@@ -240,7 +251,11 @@ function createOrbChat(opts) {
   function pushSync() { return push('orbchat:sync', context()); }
 
   function destroy() {
-    try { screen.removeListener('display-removed', onDisplayRemoved); } catch {}
+    clearTimeout(sizeTimer);
+    try {
+      screen.removeListener('display-removed', onDisplayChange);
+      screen.removeListener('display-metrics-changed', onDisplayChange);
+    } catch {}
     for (const ch of ['orbchat:bootstrap', 'orbchat:send', 'orbchat:abort', 'orbchat:approve']) {
       try { ipcMain.removeHandler(ch); } catch { /* ignore */ }
     }

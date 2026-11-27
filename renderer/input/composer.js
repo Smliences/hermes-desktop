@@ -68,6 +68,7 @@ async function send(text, displayText, targetTab) {
     if (!Array.isArray(tab.queued)) tab.queued = [];
     if (tab.queued.length >= 5) { toast('发送队列已满（最多 5 条）', 2000); return; }
     tab.queued.push({ text });
+    renderQueue();
     if (visible) { $('#input').value = ''; autoGrow(); updateCount(); slashClose(); }
     toast(`已加入发送队列（待发 ${tab.queued.length} 条）`, 1800);
     return;
@@ -184,7 +185,10 @@ function handleClose({ tabId, summary }) {
   if (tab.sessionId && hasNative) api.sessionStats(tab.sessionId).then(() => updateStatus()).catch(() => {});
   if (!s.aborted && Array.isArray(tab.queued) && tab.queued.length) {
     const next = tab.queued.shift();
+    renderQueue();
     if (next && next.text) setTimeout(() => send(next.text, undefined, tab), 60);
+  } else {
+    renderQueue();
   }
 }
 
@@ -222,7 +226,11 @@ function updateStatus() {
   const sid = (tab && tab.sessionId) || '';
   const sessEl = $('#st-session');
   sessEl.textContent = sid ? sid.slice(0, 8) : '—';
-  sessEl.title = sid || '尚未建立会话';
+  sessEl.title = sid ? `${sid}（点击复制）` : '尚未建立会话';
+  sessEl.style.cursor = sid ? 'pointer' : '';
+  sessEl.onclick = sid ? () => {
+    copyText(sid).then(() => toast('已复制会话 ID', 1400)).catch(() => toast('复制失败', 1400));
+  } : null;
   // 用量优先取后端 session.usage（真实口径），退回 result.tokens
   const r = tab && tab.lastResult;
   const u = tab && (tab.usage || (r && r.tokens) || null);
@@ -285,6 +293,29 @@ function updateStatus() {
   const eff = state.config.reasoning && state.config.reasoning !== 'none' ? ' · ' + state.config.reasoning : '';
   $('#chip-model').textContent = (state.config.model || '请选择模型') + eff + ' ⌄';
 }
+function renderQueue() {
+  const bar = $('#queue-bar');
+  if (!bar) return;
+  const tab = activeTab();
+  const q = (tab && Array.isArray(tab.queued)) ? tab.queued : [];
+  bar.textContent = '';
+  if (!q.length) { bar.hidden = true; return; }
+  bar.hidden = false;
+  q.forEach((entry, idx) => {
+    const row = document.createElement('div');
+    row.className = 'queue-item';
+    row.setAttribute('role', 'listitem');
+    const lbl = document.createElement('span');
+    lbl.className = 'qi-text';
+    lbl.textContent = '◷ 排队中：' + String(entry.text || '').replace(/\s+/g, ' ').slice(0, 80);
+    const rm = document.createElement('button');
+    rm.type = 'button'; rm.className = 'qi-x'; rm.textContent = '×';
+    rm.title = '取消排队';
+    rm.onclick = () => { q.splice(idx, 1); renderQueue(); };
+    row.append(lbl, rm);
+    bar.appendChild(row);
+  });
+}
 /** 附件条：空列表整体隐藏，不占用输入框布局高度 */
 function renderAttach() {
   const box = $('#attach-list');
@@ -297,10 +328,19 @@ function renderAttach() {
     const item = document.createElement('span');
     item.className = 'attach-item';
     item.setAttribute('role', 'listitem');
-    const ico = document.createElement('span');
-    ico.className = 'ai-ico';
-    ico.innerHTML = ATTACH_ICON[a.kind] || ATTACH_ICON.file;
-    ico.setAttribute('aria-hidden', 'true');
+    if (a.kind === 'image' && a.path) {
+      const img = document.createElement('img');
+      img.className = 'ai-thumb';
+      img.src = 'file://' + encodeURI(a.path);
+      img.alt = a.name;
+      item.appendChild(img);
+    } else {
+      const ico = document.createElement('span');
+      ico.className = 'ai-ico';
+      ico.innerHTML = ATTACH_ICON[a.kind] || ATTACH_ICON.file;
+      ico.setAttribute('aria-hidden', 'true');
+      item.appendChild(ico);
+    }
     const name = document.createElement('span');
     name.className = 'ai-name'; name.textContent = a.name;
     name.title = a.path;
@@ -308,7 +348,7 @@ function renderAttach() {
     x.type = 'button'; x.className = 'ai-x'; x.textContent = '×';
     x.setAttribute('aria-label', `移除附件 ${a.name}`);
     x.onclick = () => removeAttachment(a.path);
-    item.append(ico, name, x);
+    item.append(name, x);
     box.appendChild(item);
   }
 }
@@ -370,7 +410,7 @@ $('#btn-stop').onclick = () => {
   if (t._rafText) { cancelAnimationFrame(t._rafText); t._rafText = 0; }
   const last = t.items[t.items.length - 1];
   if (last && last.kind === 'assistant' && !last.done) last.done = true;
-  if (Array.isArray(t.queued)) t.queued = [];
+  if (Array.isArray(t.queued)) { t.queued = []; renderQueue(); }
   t.running = false; t.showTyping = false; t.stoppedByUser = true;
   invalidateTurn(t);
   if (hasNative && api.abort) Promise.resolve(api.abort(t.id)).catch(() => {});
@@ -641,9 +681,23 @@ document.addEventListener('click', (e) => {
 $('#btn-attach').onclick = () => $('#file-input').click();
 $('#input').addEventListener('paste', (e) => {
   const files = e.clipboardData && e.clipboardData.files ? Array.from(e.clipboardData.files) : [];
-  if (!files.length) return;
   const paths = files.map(pathOfFile).filter(Boolean);
-  if (paths.length) { e.preventDefault(); addAttachments(paths); }
+  if (paths.length) { e.preventDefault(); addAttachments(paths); return; }
+  const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
+  const imgItem = items.find((it) => it.kind === 'file' && /^image\//i.test(it.type || ''));
+  if (!imgItem || typeof api.saveClipboardImage !== 'function') return;
+  const blob = imgItem.getAsFile();
+  if (!blob) return;
+  e.preventDefault();
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await api.saveClipboardImage(String(reader.result || ''));
+      if (r && r.ok && r.path) addAttachments([r.path]);
+      else toast((r && r.error) || '截图粘贴失败', 2000);
+    } catch { toast('截图粘贴失败', 2000); }
+  };
+  reader.readAsDataURL(blob);
 });
 $('#file-input').addEventListener('change', (e) => {
   const files = Array.from(e.target.files || []);

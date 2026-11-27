@@ -623,19 +623,30 @@ function renderMarket() {
     $('#mk-foot').textContent = '在线技能源需要网络；若 CLI 在终端能跑通，请检查网络代理后重试。可复制上方命令到终端验证。';
     return;
   }
-  if (!mk.items.length) {
-    box.innerHTML = '<div class="mk-empty">没有匹配的条目。换个关键词，或切换来源试试。</div>';
+  let list = mk.items.slice();
+  const flt = ($('#mk-filter') && $('#mk-filter').value) || 'all';
+  if (flt === 'installed') list = list.filter((it) => !!it.installed);
+  else if (flt === 'uninstalled') list = list.filter((it) => !it.installed);
+  else if (flt === 'updates') list = list.filter((it) => mk.updates.has(it.name || it.id));
+  const srt = ($('#mk-sort') && $('#mk-sort').value) || 'default';
+  if (srt === 'name') list.sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+  else if (srt === 'installed') list.sort((a, b) => (b.installed ? 1 : 0) - (a.installed ? 1 : 0));
+  if (!list.length) {
+    box.innerHTML = '<div class="mk-empty">没有匹配的条目。换个关键词，或切换筛选/来源试试。</div>';
     $('#mk-foot').textContent = '';
     return;
   }
-  const shown = mk.items.slice(0, mk.limit);
-  box.innerHTML = shown.map((it, i) => mkCardHTML(it, i)).join('') +
-    (mk.items.length > mk.limit
-      ? `<button class="mk-chip" data-act="more" style="grid-column:1/-1;height:32px">显示更多（还有 ${mk.items.length - mk.limit} 条）</button>` : '');
-  $('#mk-foot').textContent = `共 ${mk.items.length} 条 · 显示 ${shown.length} 条 · ${mk.ms}ms · 安装/卸载会调用 hermes CLI，完成后自动刷新本机列表`;
+  const shown = list.slice(0, mk.limit);
+  box.innerHTML = shown.map((it) => mkCardHTML(it, mk.items.indexOf(it))).join('') +
+    (list.length > mk.limit
+      ? `<button class="mk-chip" data-act="more" style="grid-column:1/-1;height:32px">显示更多（还有 ${list.length - mk.limit} 条）</button>` : '');
+  $('#mk-foot').textContent = `共 ${list.length} 条 · 显示 ${shown.length} 条 · ${mk.ms}ms · 安装/卸载会调用 hermes CLI，完成后自动刷新本机列表`;
 }
 async function mkSearch(q, { force = false } = {}) {
   if (mk.busy) return;
+  const fEl = $('#mk-filter'), sEl = $('#mk-sort');
+  if (fEl && !fEl._bound) { fEl._bound = true; fEl.onchange = () => renderMarket(); }
+  if (sEl && !sEl._bound) { sEl._bound = true; sEl.onchange = () => renderMarket(); }
   q = String(q == null ? '' : q).trim();
   mk.query = q; mk.error = ''; mk.limit = 48; mk.confirm = null; mk.armed.clear();
   mk.expanded.clear(); mk.inspect.clear();

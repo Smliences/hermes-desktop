@@ -57,8 +57,34 @@ function nearBottom() {
   return f.scrollHeight - f.scrollTop - f.clientHeight < 56;
 }
 
-/** 极简 Markdown：只处理围栏代码块与行内 code，其余按纯文本 + 保留换行。
- *  用 textContent 落地，任何模型输出都不会变成可执行 HTML。 */
+/** 轻量安全 Markdown：围栏代码块 / 行内 code / 粗体 / 链接 / 列表，全部经 DOM 节点写入。 */
+function appendInline(parent, text) {
+  const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const tok = m[0];
+    if (tok.startsWith('`')) {
+      const c = document.createElement('code');
+      c.textContent = tok.slice(1, -1);
+      parent.appendChild(c);
+    } else if (tok.startsWith('**')) {
+      const b = document.createElement('strong');
+      b.textContent = tok.slice(2, -2);
+      parent.appendChild(b);
+    } else {
+      const a = document.createElement('a');
+      a.textContent = m[2];
+      a.href = m[3];
+      a.target = '_blank';
+      a.rel = 'noopener';
+      parent.appendChild(a);
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
 function renderText(el, text) {
   const src = String(text == null ? '' : text);
   src.split(/```/).forEach((part, i) => {
@@ -69,17 +95,25 @@ function renderText(el, text) {
       return;
     }
     if (!part) return;
-    const seg = document.createElement('span');
-    part.split(/(`[^`\n]+`)/).forEach((s) => {
-      if (/^`[^`\n]+`$/.test(s)) {
-        const c = document.createElement('code');
-        c.textContent = s.slice(1, -1);
-        seg.appendChild(c);
-      } else if (s) {
-        seg.appendChild(document.createTextNode(s));
+    const lines = part.split('\n');
+    let listEl = null;
+    const flushList = () => { if (listEl) { el.appendChild(listEl); listEl = null; } };
+    lines.forEach((line, li) => {
+      const ul = line.match(/^\s*[-*]\s+(.+)$/);
+      const ol = !ul && line.match(/^\s*\d+[.)]\s+(.+)$/);
+      if (ul || ol) {
+        const tag = ul ? 'ul' : 'ol';
+        if (!listEl || listEl.tagName.toLowerCase() !== tag) { flushList(); listEl = document.createElement(tag); }
+        const item = document.createElement('li');
+        appendInline(item, (ul || ol)[1]);
+        listEl.appendChild(item);
+        return;
       }
+      flushList();
+      if (li > 0 && !lines[li - 1].match(/^\s*(?:[-*]|\d+[.)])\s+/)) el.appendChild(document.createTextNode('\n'));
+      appendInline(el, line);
     });
-    el.appendChild(seg);
+    flushList();
   });
 }
 

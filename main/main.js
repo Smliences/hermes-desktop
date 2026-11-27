@@ -433,8 +433,18 @@ function boot() {
    *  所以在主窗口还没 ready 之前不会弹出空面板。 */
   function ensureOrbChat() {
     if (orbChat) return orbChat;
+    const orbSizeFile = path.join(app.getPath('userData'), 'orb-chat-size.json');
+    let initialOrbSize = null;
+    try {
+      const raw = JSON.parse(fs.readFileSync(orbSizeFile, 'utf8'));
+      if (raw && Number(raw.width) >= 320 && Number(raw.height) >= 400) {
+        initialOrbSize = { width: Number(raw.width), height: Number(raw.height) };
+      }
+    } catch {}
     orbChat = createOrbChat({
       log,
+      initialSize: initialOrbSize,
+      onSizeChange: (sz) => { try { fs.writeFileSync(orbSizeFile, JSON.stringify(sz), 'utf8'); } catch {} },
       getAnchor: () => (orb && orb.isVisible() ? orb.bounds() : null),
       getContext: () => ({
         tabId: orbCtx ? orbCtx.tabId : '',
@@ -636,6 +646,18 @@ function boot() {
   handle('hermes:send', (e, payload) => {
     const p = payload || {};
     return submitTurn(p.tabId, p);
+  });
+  handle('chat:saveClipboardImage', async (_e, dataUrl) => {
+    const m = String(dataUrl || '').match(/^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/);
+    if (!m) return { ok: false, error: '不支持的图片格式' };
+    const buf = Buffer.from(m[2], 'base64');
+    if (!buf.length || buf.length > 20 * 1024 * 1024) return { ok: false, error: '图片体积超限' };
+    const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+    const dir = path.join(app.getPath('temp'), 'hermes-clipboard');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `clip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`);
+    fs.writeFileSync(file, buf);
+    return { ok: true, path: file };
   });
 
   handle('hermes:abort', (_e, tabId) => { chat.abort(tabId); return true; });

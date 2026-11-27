@@ -41,6 +41,7 @@ $('#landing').addEventListener('click', (e) => {
   if (fn) fn();
 });
 
+let traceFilter = 'all';
 function renderChat() {
   const tab = activeTab(); const chat = $('#chat');
   if (!tab) { chat.innerHTML = ''; return; }
@@ -48,9 +49,34 @@ function renderChat() {
   const isTrace = state.view === 'trace';
   const traceItems = isTrace ? tab.items.filter((i) => ['user', 'thinking', 'tool', 'approval', 'command', 'error'].includes(i.kind)) : tab.items;
   const hasTraceSteps = isTrace && traceItems.some((i) => ['thinking', 'tool', 'approval', 'command', 'error'].includes(i.kind));
-  const items = traceItems;
+  const items = (isTrace && traceFilter !== 'all')
+    ? traceItems.filter((i) => i.kind === traceFilter || (traceFilter === 'error' && i.kind === 'tool' && i.isError))
+    : traceItems;
   const showHeads = !isTrace;
   chat.innerHTML = '';
+  if (isTrace && hasTraceSteps) {
+    const counts = {
+      all: traceItems.filter((i) => i.kind !== 'user').length,
+      tool: traceItems.filter((i) => i.kind === 'tool').length,
+      error: traceItems.filter((i) => i.kind === 'error' || (i.kind === 'tool' && i.isError)).length,
+      approval: traceItems.filter((i) => i.kind === 'approval').length,
+    };
+    const bar = document.createElement('div');
+    bar.className = 'trace-bar';
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', '轨迹筛选');
+    const defs = [['all', '全部'], ['tool', '工具'], ['error', '错误'], ['approval', '审批']];
+    bar.innerHTML = defs.map(([k, lbl]) =>
+      `<button type="button" class="trace-pill${traceFilter === k ? ' active' : ''}" data-tf="${k}">${lbl} <span>${counts[k]}</span></button>`
+    ).join('');
+    bar.onclick = (e) => {
+      const b = e.target.closest && e.target.closest('[data-tf]');
+      if (!b) return;
+      traceFilter = b.dataset.tf;
+      renderChat();
+    };
+    chat.appendChild(bar);
+  }
   if (isTrace && !hasTraceSteps) {
     const empty = document.createElement('div');
     empty.className = 'trace-empty';

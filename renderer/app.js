@@ -315,6 +315,7 @@ function setActiveTab(id, silent) {
   document.querySelectorAll('.vt').forEach((b) => b.classList.toggle('active', b.dataset.view === 'chat'));
   renderTabs(); renderChat(); renderSessions(); updateStatus();
   if (typeof renderAttach === 'function') renderAttach();
+  if (typeof renderQueue === 'function') renderQueue();
   syncComposerProject(); // 项目下拉按当前页签的 cwd 回填
   if (typeof restoreDraftFor === 'function') restoreDraftFor(state.tabs.find((x) => x.id === id));
   if (!silent && hasNative) api.tabState(id).then((st) => {

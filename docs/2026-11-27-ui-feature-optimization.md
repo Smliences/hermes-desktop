@@ -508,21 +508,21 @@
 ### P1 — 核心体验、跨端联动与一致性升级
 
 - [x] **主进程原生通知与菜单**：接入 Electron `Notification` + `app.dock.bounce()`（审批/对话/看板终态）；持久化主窗几何；补齐 macOS Edit 菜单 `undo/redo/cut` 与崩溃兜底（`main/main.js`）
-- [ ] **侧栏去冗余与状态可视化**：合并重复「新会话」/「搜索」入口；侧栏会话行展示运行中/待审批/未读状态；日期改用 `last_active || started_at`；活动项目高亮与移出项目选项（`renderer/index.html`、`renderer/app.js`）（注：活动项目高亮与移出项目选项待补）
+- [x] **侧栏去冗余与状态可视化**：合并重复「新会话」/「搜索」入口；侧栏会话行展示运行中/待审批/未读状态；日期改用 `last_active || started_at`；活动项目高亮与移出项目选项（`renderer/index.html`、`renderer/app.js`、`renderer/sidebar/sessions.js`）
 - [x] **跨页一致性与 Esc 栈**：统一 `.rail-head` 高度为 40px；统一主按钮与弹窗圆角；调深 `--meta-fg` 达 AA 4.5:1；`Escape` 单层命中 `return`；替换两处 `window.confirm()`（`renderer/app.js`、`renderer/settings.js`）
 - [x] **设置页心智统一**：仅在 `general` 保留保存/取消并修 `#set-hint` 残留；`approvalMode` 真正接入新会话；异步面板补 `settingsPanelEpoch` 守卫（`renderer/settings.js`）
 - [x] **紧凑看板与预览增强**：修复 `.rkb-dot` 失色（`renderer/kanban-board.js`）；修复 `rail-resize.js` 缩窗后恢复偏好宽（`renderer/rail-resize.js`）；预览条新增历史导航与清空/后退前进按钮
 - [x] **工具卡与 Markdown 修复**：命令细节展示完整命令行、记录 `userToggled`、修正 `toolExtra` 增删行、Diff 补 `+`/`−`；行内代码占位防正则污染、移除重复复制监听（`renderer/app.js`、`renderer/chat/markdown.js`）
-- [ ] **轨迹视图升级**：补空态引导、保留提问轮次/推理/审批/命令上下文、增设筛选汇总条、发消息自动切回对话（`renderer/app.js`）（注：筛选汇总条待补）
-- [ ] **对话 ↔ 看板 ↔ 预览联动**：消息条/会话菜单「转为看板任务」（预填并传 `session_id`）；工具详情直达右侧预览；看板抽屉 Markdown 渲染、放开正文 20000 上限与运行日志自动 tail（`renderer/kanban-drawer.js`、`renderer/kanban-modal.js`）（注：运行日志自动 tail 待补）
-- [ ] **输入效率与附件隔离**：`attachments` 按页签隔离；剪贴板粘贴文件附件；运行中消息排队（Queue）；上下文 `>80%` 一键 `/compress`；解除侧栏搜索 200 条求交截断（`renderer/app.js`）（注：截图粘贴/缩略图/队列 UI/复制会话 ID 待补）
-- [ ] **插件/市场闭环**：锁定核心技能 `hermes-agent`；市场详情透出 `known_issues` 原文、装后引导「立即启用」（调用 `pluginsSetEnabled`）（`renderer/market-plugins.js`）（注：筛选排序/局部更新/`showPlugin`/已安装卸载待补）
+- [x] **轨迹视图升级**：补空态引导、保留提问轮次/推理/审批/命令上下文、增设筛选汇总条、发消息自动切回对话（`renderer/app.js`、`renderer/chat/stream.js`）
+- [x] **对话 ↔ 看板 ↔ 预览联动**：消息条/会话菜单「转为看板任务」（预填并传 `session_id`）；工具详情直达右侧预览；看板抽屉 Markdown 渲染、放开正文 20000 上限与运行日志自动 tail（`renderer/kanban-drawer.js`、`renderer/kanban-modal.js`）
+- [x] **输入效率与附件隔离**：`attachments` 按页签隔离；剪贴板粘贴文件/截图附件与缩略图；运行中消息排队展示与取消；上下文 `>80%` 一键 `/compress`；点击复制会话 ID；解除侧栏搜索 200 条求交截断（`renderer/app.js`、`renderer/input/composer.js`）
+- [x] **插件/市场闭环**：锁定核心技能 `hermes-agent`；市场详情透出 `known_issues` 原文、筛选排序与装后引导「立即启用」（调用 `pluginsSetEnabled`）（`renderer/market-plugins.js`）
 - [x] **性能与并发优化**：流式 `text` rAF 节流；插件页去 $O(N^2)$ + 搜索防抖；`hermes-sessions.js` 缓存表结构与合并统计 SQL；WS 心跳失败重连与 `reasoning_content` 透出
 
 ### P2 — 能力深化与工程清债
 
-- [ ] **富文本与小窗深化**：代码语法高亮、长代码块折叠、表格 Markdown/CSV 复制；小窗 `moved` 自动翻连接轨、拔屏坐标收敛、尺寸持久化、小窗复制按钮（`renderer/orb-chat.js`、`main/orb-chat.js`）（注：小窗尺寸落盘/拔屏监听/基础 Markdown 待补）
+- [x] **富文本与小窗深化**：代码语法高亮、长代码块折叠、表格 Markdown/CSV 复制；小窗 `moved` 自动翻连接轨、拔屏/分辨率变化收敛、尺寸持久化落盘、小窗复制按钮与基础 Markdown（`renderer/orb-chat.js`、`main/orb-chat.js`）
 - [x] **设置页深层功能**：Cron 常用调度预设与格式校验（清理无效 `doctor` 调用）；模型提供商明示只读并支持快捷打开配置文件；看板拖拽边缘滚动（`renderer/settings.js`、`renderer/kanban-board.js`）
 - [x] **架构拆分与去 `zoom`**：移除 `#sidebar`/`#iconrail` `zoom: 1.1` 并升级 `#sb-resize`；渐进拆分 `core/utils.js` 与 `chat/markdown.js`；改造 `test-contracts.js` 支持子目录聚合（完整拆分其余模块与 CSS 去重可按需继续迭代）
-- [ ] **遗留资产清债**：清理废弃 `node-pty` / `fix-pty-perm.js` / `asarUnpack`；补齐 `mock-bridge.js` 接口桩（注：`node-pty` 已清理，`mock-bridge.js` 剩余方法桩待补）
+- [x] **遗留资产清债**：清理废弃 `node-pty` / `fix-pty-perm.js` / `asarUnpack`（含 `package-lock.json`）；补齐 `mock-bridge.js` 接口桩
 - [x] **【解冻后储备】Gateway 页改良**：支持多 Profile 配置路径、修正 `.env` 空值与已配置统计、接入 `gwCliStatus()` 与内联排错输出、`resolveHermesBin()` 统一探测

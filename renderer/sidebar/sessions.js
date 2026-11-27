@@ -303,6 +303,8 @@ function renderSessions(q = '') {
   // 展开后按页显示（首屏 5 条，「再显示」每次 +50）；空项目展开显示「暂无会话」。
   const byId = new Map(state.sessions.map((s) => [s.id, s]));
   const liveIds = new Set(byId.keys());
+  const activeTabObj = activeTab();
+  const activePid = (activeTabObj && activeTabObj.sessionId && sessionProjectId(activeTabObj.sessionId)) || '';
   let shownProject = false;
   for (const p of projects) {
     shownProject = true;
@@ -314,7 +316,7 @@ function renderSessions(q = '') {
     const rows = rowsAll.slice(0, shown);
     const rest = Math.max(0, rowsAll.length - rows.length);
     const gl = document.createElement('li');
-    gl.className = 's-group s-proj';
+    gl.className = 's-group s-proj' + (pid === activePid ? ' active' : '');
     gl.dataset.pid = pid;
     gl.setAttribute('role', 'presentation');
     const safePath = esc(p.path || '');
@@ -540,9 +542,11 @@ function openMoveToProjectMenu(s, onBack) {
   const cur = sessionProjectId(s.id);
   const targets = (state.projectsTree || []).filter((p) => !p.isNoProject && !p.isAuto &&
     String(p.id || '') !== cur && String(p.path || '').startsWith('/'));
-  const rows = targets.length
+  const homeDir = (state.env && state.env.home && String(state.env.home).startsWith('/')) ? state.env.home : '';
+  const leaveBtn = (cur && homeDir) ? `<button data-move-out="1" title="${esc(homeDir)}">📤 移出项目（回到默认目录）</button>` : '';
+  const rows = (targets.length
     ? targets.map((p, i) => `<button data-move="${i}" title="${esc(p.path || '')}">📁 ${esc(p.label || p.id)}</button>`).join('')
-    : '<button disabled>没有其他可移入的项目</button>';
+    : (leaveBtn ? '' : '<button disabled>没有其他可移入的项目</button>')) + leaveBtn;
   m.innerHTML = '<button data-act="move-back">‹ 返回</button>' +
     '<div class="sess-menu-label" title="会换掉会话的工作目录，之后的消息在目标项目目录里跑">移到项目</div>' + rows;
   // 二级页比一级高：往下溢出时整体上移，避免贴着窗口底边被裁
@@ -557,6 +561,21 @@ function openMoveToProjectMenu(s, onBack) {
     const b = e.target.closest && e.target.closest('button');
     if (!b || b.disabled) return;
     if (b.dataset.act === 'move-back') { onBack(); return; }
+    if (b.dataset.moveOut === '1') {
+      closeSessionMenu();
+      toast('正在移出项目…', 1800);
+      let r = null;
+      try { r = await api.moveSession(s.id, homeDir); }
+      catch (err) { r = { ok: false, error: (err && err.message) || String(err) }; }
+      if (!r || !r.ok) { toast('移出失败：' + ((r && r.error) || '未知错误'), 3600); return; }
+      for (const t of (state.tabs || [])) {
+        if (t.sessionId === s.id) t.cwd = r.cwd || homeDir;
+      }
+      await refreshSessions(currentSearch());
+      syncComposerProject();
+      toast('已移出项目', 2200);
+      return;
+    }
     if (b.dataset.move == null) return;
     const p = targets[Number(b.dataset.move)];
     if (!p) return;

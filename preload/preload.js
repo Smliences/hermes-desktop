@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   env: () => ipcRenderer.invoke('hermes:env'),
   // Electron 32+ 已移除 File.path，拖拽 / 文件选择只能走 webUtils 取真实绝对路径
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
+  saveClipboardImage: (dataUrl) => ipcRenderer.invoke('chat:saveClipboardImage', String(dataUrl || '')),
   send: (payload) => ipcRenderer.invoke('hermes:send', payload),
   abort: (tabId) => ipcRenderer.invoke('hermes:abort', tabId),
   tabState: (tabId) => ipcRenderer.invoke('hermes:tabState', tabId),
