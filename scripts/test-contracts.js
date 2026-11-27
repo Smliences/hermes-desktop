@@ -52,11 +52,11 @@ const KB_APP_FILES = [
 ];
 const RENDERER_SUBDIRS = ['core', 'chat', 'sidebar', 'preview', 'input', 'shortcuts'];
 const appSrc = [
+  ...RENDERER_SUBDIRS.flatMap((d) => readTree(`renderer/${d}`, '.js')),
   'renderer/app.js',
   'renderer/market-plugins.js',
   'renderer/settings.js',
   ...KB_APP_FILES,
-  ...RENDERER_SUBDIRS.flatMap((d) => readTree(`renderer/${d}`, '.js')),
 ].map(read).join('\n');
 const htmlSrc = read('renderer/index.html');
 const cssSrc = [
