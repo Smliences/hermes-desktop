@@ -80,20 +80,20 @@ async function send(text, displayText, targetTab) {
   if (!displayText) {
     const hit = resolveSlashCommand(text);
     if (hit) {
-      $('#input').value = ''; autoGrow(); updateCount(); slashClose();
-      return runSlashCommand(hit.row, hit.arg, hit.row.aliasHit || hit.row.cmd);
+      if (visible) { $('#input').value = ''; autoGrow(); updateCount(); slashClose(); }
+      return runSlashCommand(hit.row, hit.arg, hit.row.aliasHit || hit.row.cmd, tab);
     }
     const m = text.match(/^(\/[A-Za-z0-9][A-Za-z0-9_.:-]*)(\s+[\s\S]*)?$/);
     if (m && !cliCatalog.ok) {
       // 目录还在路上：别把 /compact 当正文发出去，也别默默吞掉 —— 说清楚在等什么
       loadCliCatalog();
-      toast('命令目录还在加载，稍等一下再按 Enter', 2400);
+      if (visible) toast('命令目录还在加载，稍等一下再按 Enter', 2400);
       return;
     }
     if (cliCatalog.ok && m) {
-      $('#input').value = ''; autoGrow(); updateCount(); slashClose();
+      if (visible) { $('#input').value = ''; autoGrow(); updateCount(); slashClose(); }
       return runSlashCommand({ cmd: m[1], desc: '', source: 'cli', argMode: null, sub: [], scope: '' },
-        (m[2] || '').trim(), m[1]);
+        (m[2] || '').trim(), m[1], tab);
     }
   }
   const shown = String(displayText || text).trim() || text;
@@ -141,9 +141,13 @@ async function send(text, displayText, targetTab) {
     } catch (e) {
       tab.items.push({ kind: 'error', text: (e && e.message) || String(e) });
       tab.running = false; tab.showTyping = false;
-      if (tab.id !== state.activeTabId) tab.unread = true;
+      renderTabs();
+      if (tab.id !== state.activeTabId) {
+        tab.unread = true;
+      } else {
+        renderChat(); syncActivityBar(); syncComposerState(); setActivity('空闲');
+      }
       if (typeof renderSessions === 'function') renderSessions();
-      renderChat(); syncActivityBar(); syncComposerState(); setActivity('空闲');
     }
   } else {
     window.__mockAPI.__sendDemo(payload, (evt) => {
@@ -186,7 +190,7 @@ function handleClose({ tabId, summary }) {
   if (!s.aborted && Array.isArray(tab.queued) && tab.queued.length) {
     const next = tab.queued.shift();
     renderQueue();
-    if (next && next.text) setTimeout(() => send(next.text, undefined, tab), 60);
+    if (next && next.text) setTimeout(() => { if (state.tabs.includes(tab)) send(next.text, undefined, tab); }, 60);
   } else {
     renderQueue();
   }
@@ -331,7 +335,7 @@ function renderAttach() {
     if (a.kind === 'image' && a.path) {
       const img = document.createElement('img');
       img.className = 'ai-thumb';
-      img.src = 'file://' + encodeURI(a.path);
+      img.src = 'file://' + encodeURI(a.path).replace(/#/g, '%23').replace(/\?/g, '%3F');
       img.alt = a.name;
       item.appendChild(img);
     } else {

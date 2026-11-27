@@ -1186,7 +1186,8 @@ function boot() {
       model: typeof ctx.model === 'string' ? ctx.model.slice(0, 80) : '',
       cwd: typeof ctx.cwd === 'string' ? ctx.cwd : undefined,
       theme: ctx.theme === 'dark' ? 'dark' : 'light',
-      fontSize: Number.isFinite(Number(ctx.fontSize)) ? Math.max(10, Math.min(20, Number(ctx.fontSize))) : undefined,
+      fontSize: (ctx.fontSize != null && ctx.fontSize !== '' && Number.isFinite(Number(ctx.fontSize)))
+        ? Math.max(10, Math.min(20, Number(ctx.fontSize))) : undefined,
       messages: Array.isArray(ctx.messages) ? ctx.messages.slice(-14).map((m) => ({
         role: m && m.role === 'user' ? 'user' : 'assistant',
         text: String((m && m.text) || '').slice(0, 4000),
@@ -1281,8 +1282,12 @@ function boot() {
         accelerator: 'CmdOrCtrl+W',
         click: () => {
           const focused = BrowserWindow.getFocusedWindow();
-          if (orbChat && orbChat.isOpen() && focused && focused !== mainWindow) {
+          if (orbChat && orbChat.ownsWindow(focused)) {
             orbChat.close();
+            return;
+          }
+          if (orb && orb.ownsWindow(focused)) {
+            if (orbChat && orbChat.isOpen()) orbChat.close();
             return;
           }
           if (focused && focused !== mainWindow) { focused.close(); return; }

@@ -2335,11 +2335,99 @@ async function run() {
   const { ChatChannel: ChatChanCls } = loaded['hermes-chat.js'];
   const gwSvc2 = loaded['hermes-gateway.js'];
 
-  await t('GatewayConnection 心跳发 gateway.ping 且带 this.ws === sock 守卫', () => {
-    const gcSrc = fs.readFileSync(path.join(ROOT, 'main', 'services', 'gateway-client.js'), 'utf8');
-    assert.ok(gcSrc.includes("this.rpc('gateway.ping'"), '心跳必须发 gateway.ping');
-    assert.ok(gcSrc.includes('const sock = this.ws;') && gcSrc.includes('if (this.ws !== sock) return;'), '心跳回调缺少 socket 身份守卫');
-    assert.ok(typeof GatewayConnCls === 'function');
+  await t('GatewayConnection 心跳发 gateway.ping 且带 this.ws === sock 守卫并在连续失败时断连', async () => {
+    const methods = [];
+    const gw = new GatewayConnCls({ port: 12345, token: 't', heartbeatIntervalMs: 15 });
+    const sock1 = { readyState: 1, terminated: false, terminate() { this.terminated = true; } };
+    const sock2 = { readyState: 1, terminated: false, terminate() { this.terminated = true; } };
+    let rejFirst = null;
+    let firstFired = false;
+    gw.ws = sock1;
+    gw.rpc = (method) => {
+      methods.push(method);
+      if (!firstFired) {
+        firstFired = true;
+        return new Promise((_, reject) => { rejFirst = reject; });
+      }
+      return Promise.resolve({});
+    };
+    try {
+      gw._startHeartbeat();
+      const deadline1 = Date.now() + 300;
+      while (!firstFired && Date.now() < deadline1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.ok(firstFired, '心跳定时器未触发 RPC');
+      assert.strictEqual(methods[0], 'gateway.ping', '心跳必须发 gateway.ping');
+      // 切换到新 socket 后再让旧 socket 的 ping reject：绝不能误杀 sock1 或累加失败计数
+      gw.ws = sock2;
+      rejFirst(new Error('stale socket ping timeout'));
+      await new Promise((r) => setTimeout(r, 20));
+      assert.strictEqual(sock1.terminated, false, '旧 socket 迟到 reject 不应 terminate sock1');
+      assert.strictEqual(gw._hbFails, 0, '旧 socket 的失败不应污染新 socket 的 _hbFails');
+
+      // 连续两次 ping 失败应 terminate 当前活跃 socket
+      gw._stopHeartbeat();
+      gw.ws = sock2;
+      gw._hbFails = 0;
+      gw.rpc = (method) => {
+        methods.push(method);
+        return Promise.reject(new Error('ping timeout'));
+      };
+      gw._startHeartbeat();
+      const deadline2 = Date.now() + 400;
+      while (!sock2.terminated && Date.now() < deadline2) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(methods.filter((m) => m === 'gateway.ping').length >= 3);
+      assert.strictEqual(sock2.terminated, true, '连续两次心跳失败应终止当前活跃 socket');
+    } finally {
+      gw._stopHeartbeat();
+    }
+  });
+
+  await t('ChatChannel WS 断线超时后收尾在途回合：触发 onError 并清理挂起审批', async () => {
+    const errors = [];
+    const cleared = [];
+    const fakeBackend = { generation: 1, token: 't', start: async () => 12345, stop() {} };
+    let gwOpts = null;
+    const fakeGw = {
+      connected: true,
+      eventListeners: new Set(),
+      connect() { setTimeout(() => gwOpts && gwOpts.onStatus({ connected: true }), 5); },
+      onEvent(fn) { this.eventListeners.add(fn); return () => this.eventListeners.delete(fn); },
+      onRequest() {},
+      close() {},
+      async rpc(method) {
+        if (method === 'session.create') return { session_id: 'live-disc', stored_session_id: 's-disc', info: { model: 'm1' } };
+        if (method === 'prompt.submit') return {};
+        return {};
+      },
+    };
+    const ch = new ChatChanCls('', { backend: fakeBackend, createGateway: (o) => { gwOpts = o; return fakeGw; }, wsDisconnectTimeoutMs: 40 });
+    ch.setApprovalHandler(() => true);
+    ch.setApprovalClearHandler((ids) => cleared.push(...ids));
+    const closeP = new Promise((resolve) => {
+      ch.submit('tab-disc', { query: 'hi' }, {
+        onEvent() {},
+        onError: (e) => errors.push(e.message),
+        onClose: resolve,
+      });
+    });
+    const deadline = Date.now() + 400;
+    while (!ch.activeTurns.has('live-disc') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.ok(ch.activeTurns.has('live-disc'), '测试准备失败：在途回合未建立');
+    await ch._handleApproval({ session_id: 'live-disc', request_id: 'req-disc', tool: 'terminal' });
+    fakeGw.connected = false;
+    gwOpts.onStatus({ connected: false });
+    const summary = await closeP;
+    assert.strictEqual(summary.exitCode, 1, '断线超时收尾应带错误退出码');
+    assert.ok(errors.length >= 1 && errors[0].includes('断开'), '断线超时必须触发 onError 通知前端');
+    assert.deepStrictEqual(cleared, ['req-disc'], '断线超时必须清理挂起审批');
+    assert.strictEqual(ch.activeTurns.size, 0);
+    assert.strictEqual(ch.liveByTab.size, 0);
   });
 
   await t('tool.complete 解析 p.result 内部错误状态（exit_code / success / error）', async () => {
@@ -2448,12 +2536,15 @@ async function run() {
       'FEISHU_APP_ID="cli_123" # comment',
       '# FEISHU_APP_SECRET=sec_1',
     ].join('\n'));
-    const ov = gwSvc2.overview();
-    const tg = ov.platforms.find((p) => p.key === 'telegram');
-    const fsPlat = ov.platforms.find((p) => p.key === 'feishu');
-    assert.strictEqual(tg.hasCredentials, false, '空引号加注释不应算作已配置凭据');
-    assert.strictEqual(fsPlat.hasCredentials, false, '飞书缺 FEISHU_APP_SECRET 不应算作凭证齐全');
-    fs.unlinkSync(envFile);
+    try {
+      const ov = gwSvc2.overview();
+      const tg = ov.platforms.find((p) => p.key === 'telegram');
+      const fsPlat = ov.platforms.find((p) => p.key === 'feishu');
+      assert.strictEqual(tg.hasCredentials, false, '空引号加注释不应算作已配置凭据');
+      assert.strictEqual(fsPlat.hasCredentials, false, '飞书缺 FEISHU_APP_SECRET 不应算作凭证齐全');
+    } finally {
+      try { fs.unlinkSync(envFile); } catch {}
+    }
   });
 
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

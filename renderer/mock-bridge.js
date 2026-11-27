@@ -64,7 +64,6 @@
     onOrbApprovalResolved() { return () => {}; },
     onMenuAction() { return () => {}; },
     onFocusTab() { return () => {}; },
-    notifyDesktop() { return false; },
     async abort() {},
     onEvent(fn) { listener.event = fn; return () => {}; },
     onError(fn) { listener.close = fn; return () => {}; },

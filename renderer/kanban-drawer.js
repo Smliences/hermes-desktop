@@ -62,6 +62,7 @@ async function openKanbanTask(id, silent) {
   kbdMoreToggle(false);
   const a = kbApi();
   const my = ++KB.detailEpoch;
+  if ((!silent || KB.detailId !== id) && typeof kbStopLogTail === 'function') kbStopLogTail();
   KB.detailId = id;
   KB.focusId = id;
   kbSyncDrawerNav();
@@ -405,11 +406,16 @@ async function kbSaveTaskEdit(taskId) {
 }
 
 let kbLogTailTimer = null;
+let kbLogTailTaskId = '';
+let kbLogTailInFlight = false;
 function kbStopLogTail() {
   if (kbLogTailTimer) { clearInterval(kbLogTailTimer); kbLogTailTimer = null; }
+  kbLogTailTaskId = '';
+  kbLogTailInFlight = false;
 }
 async function kbLoadTaskLog(taskId, silent = false) {
   const id = String(taskId || '');
+  if (silent && kbLogTailInFlight) return;
   const a = kbApi();
   const meta = $('#kbd-log-meta'), pre = $('#kbd-log-body'), btn = document.querySelector('[data-kb-log]');
   if (!a || !a.kanbanTaskLog) { if (!silent) toast('此页需要 Hermes 桌面端才能读取日志', 1800); return; }
@@ -417,6 +423,7 @@ async function kbLoadTaskLog(taskId, silent = false) {
     if (btn) btn.disabled = true;
     if (meta) meta.textContent = '读取日志中…';
   }
+  kbLogTailInFlight = true;
   try {
     const r = await a.kanbanTaskLog(id, { board: KB.filters.board || '', tail: 32768 });
     if (KB.detailId !== id || ($('#kb-drawer') && $('#kb-drawer').hidden)) { kbStopLogTail(); return; }
@@ -439,19 +446,24 @@ async function kbLoadTaskLog(taskId, silent = false) {
     }
     if (btn && btn.isConnected) btn.textContent = '刷新日志';
     const isRunning = KB.detail && KB.detail.task && KB.detail.task.status === 'running';
-    if (isRunning && pre && !pre.hidden && !kbLogTailTimer) {
-      kbLogTailTimer = setInterval(() => {
-        const d = $('#kb-drawer');
-        const p = $('#kbd-log-body');
-        if (!d || d.hidden || !p || p.hidden || KB.detailId !== id) { kbStopLogTail(); return; }
-        kbLoadTaskLog(id, true);
-      }, 4000);
+    if (isRunning && pre && !pre.hidden) {
+      if (kbLogTailTimer && kbLogTailTaskId !== id) kbStopLogTail();
+      if (!kbLogTailTimer) {
+        kbLogTailTaskId = id;
+        kbLogTailTimer = setInterval(() => {
+          const d = $('#kb-drawer');
+          const p = $('#kbd-log-body');
+          if (!d || d.hidden || !p || p.hidden || KB.detailId !== id) { kbStopLogTail(); return; }
+          kbLoadTaskLog(id, true);
+        }, 4000);
+      }
     } else if (!isRunning) {
       kbStopLogTail();
     }
   } catch (e) {
     if (!silent && meta) meta.textContent = '读取失败：' + ((e && e.message) || '未知错误');
   } finally {
+    kbLogTailInFlight = false;
     if (!silent && btn && btn.isConnected) btn.disabled = false;
   }
 }

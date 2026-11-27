@@ -155,15 +155,23 @@ function resolveSlashCommand(text) {
  * 失败也给出卡片：网关只放行审过的命令，被拒时它会给「改用哪条命令」的提示。
  */
 async function runSlashCommand(row, argText, typedName) {
-  const tab = activeTab();
+  const targetTab = arguments[3] || null;
+  const tab = targetTab || activeTab();
   if (!tab) return;
   if (row.source === 'local') {
+    if (targetTab && tab.id !== state.activeTabId) return;
     const fn = typeof row.run === 'function' ? row.run : (COMMANDS.find((c) => c.cmd === row.cmd) || {}).run;
     if (typeof fn === 'function') fn();
     return;
   }
-  if (tab.running) { toast('本回合还在进行，命令要等它结束', 2200); return; }
-  if (!tab.sessionId) { toast('这个会话还没有建立：先发一条消息，再用命令', 2600); return; }
+  if (tab.running) {
+    if (tab.id === state.activeTabId) toast('本回合还在进行，命令要等它结束', 2200);
+    return;
+  }
+  if (!tab.sessionId) {
+    if (tab.id === state.activeTabId) toast('这个会话还没有建立：先发一条消息，再用命令', 2600);
+    return;
+  }
 
   const arg = String(argText || '').trim();
   const full = arg ? `${row.cmd} ${arg}` : row.cmd;
@@ -172,7 +180,8 @@ async function runSlashCommand(row, argText, typedName) {
   const isCompress = /^\/(compress|compact)$/i.test(row.cmd);
   const item = { kind: 'command', cmd: shown, state: 'running', text: '', ts: Date.now() };
   tab.items.push(item);
-  renderChat(); scrollBottom(true);
+  if (tab.id === state.activeTabId) { renderChat(); scrollBottom(true); }
+  else { renderTabs(); }
 
   let res = null;
   try { res = await api.cliCommandExec({ sessionId: tab.sessionId, command: full }); }
@@ -192,8 +201,8 @@ async function runSlashCommand(row, argText, typedName) {
   if (res && res.ok && (res.type === 'send' || res.type === 'skill') && res.text) {
     const idx = tab.items.indexOf(item);
     if (idx >= 0) tab.items.splice(idx, 1);
-    renderChat();
-    if (!tab.running) send(res.text, res.display || full);
+    if (tab.id === state.activeTabId) renderChat();
+    if (!tab.running) send(res.text, res.display || full, tab);
     return;
   }
 

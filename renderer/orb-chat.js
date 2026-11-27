@@ -340,8 +340,12 @@ function onEvent(evt) {
       S.running = false;
       const last = lastAi();
       if (last && !last.done) {
-        if (!last.text) S.items.pop();
-        else last.done = true;
+        if (!last.text) {
+          const idx = S.items.indexOf(last);
+          if (idx >= 0) S.items.splice(idx, 1);
+        } else {
+          last.done = true;
+        }
       }
       pushItem({ kind: 'error', text: String(evt.text || '出错了') });
       setStatus('');

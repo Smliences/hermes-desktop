@@ -234,6 +234,10 @@ function createOrb(opts) {
     return !!(win && !win.isDestroyed() && win.isVisible());
   }
 
+  function ownsWindow(w) {
+    return !!(w && win && !win.isDestroyed() && w === win);
+  }
+
   /** 迷你聊天窗要靠它贴着球摆位（返回屏幕坐标，不是相对坐标） */
   function bounds() {
     if (!win || win.isDestroyed()) return null;
@@ -251,7 +255,7 @@ function createOrb(opts) {
     win = null;
   }
 
-  return { show, hide, isVisible, bounds, setStatus, destroy, BALL, WIN };
+  return { show, hide, isVisible, ownsWindow, bounds, setStatus, destroy, BALL, WIN };
 }
 
 module.exports = { createOrb, BALL, WIN };

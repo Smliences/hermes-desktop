@@ -43,6 +43,7 @@ class GatewayConnection {
     this.eventListeners = new Set(); // fn({type, payload, session_id, seq})
     this.requestHandler = null; // fn({method, params}) => result
     this.heartbeat = null;
+    this.heartbeatIntervalMs = Number(opts.heartbeatIntervalMs) > 0 ? Number(opts.heartbeatIntervalMs) : HEARTBEAT_INTERVAL_MS;
     this.reconnectTimer = null;
     this.backoffMs = 1000;
     this.closed = false;
@@ -109,7 +110,7 @@ class GatewayConnection {
           try { sock.terminate ? sock.terminate() : sock.close(); } catch { /* ignore */ }
         }
       });
-    }, HEARTBEAT_INTERVAL_MS);
+    }, this.heartbeatIntervalMs);
     if (this.heartbeat.unref) this.heartbeat.unref();
   }
 

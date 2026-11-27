@@ -12,7 +12,7 @@
  * 窗口参数的坑与球一致（见 orb.js）：不加 panel 类型、acceptFirstMouse、
  * 透明 + 无边框，圆角由 CSS 裁。
  */
-const { BrowserWindow, ipcMain, screen } = require('electron');
+const { BrowserWindow, ipcMain, screen, shell } = require('electron');
 const path = require('path');
 
 const W = 380;
@@ -23,6 +23,7 @@ const DRAFT_MAX = 4000;
 const TEXT_MAX = 8000;
 
 const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
+const safeExternal = (u) => typeof u === 'string' && (/^https:\/\//i.test(u) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(u));
 
 /**
  * @param {object} opts
@@ -44,10 +45,16 @@ function createOrbChat(opts) {
   let savedSize = (opts.initialSize && opts.initialSize.width >= 320 && opts.initialSize.height >= 400)
     ? { width: opts.initialSize.width, height: opts.initialSize.height } : null;
   let sizeTimer = null;
+  let sizeDirty = false;
   const saveSizeSoon = (sz) => {
     if (typeof opts.onSizeChange !== 'function') return;
+    sizeDirty = true;
     clearTimeout(sizeTimer);
-    sizeTimer = setTimeout(() => { try { opts.onSizeChange(sz); } catch {} }, 200);
+    sizeTimer = setTimeout(() => {
+      sizeTimer = null;
+      sizeDirty = false;
+      try { opts.onSizeChange(sz); } catch {}
+    }, 200);
   };
   /** 上次「自动贴球」时球的屏幕坐标：用户手动拖过小窗之后，
    *  只要球没动就尊重用户摆的位置，别每次点开都把人拖回来。 */
@@ -137,6 +144,11 @@ function createOrbChat(opts) {
       },
     });
     win.setMenu(null);
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      if (safeExternal(url)) shell.openExternal(url);
+      else log.warn('orbchat', 'blocked window.open', { url: String(url || '').slice(0, 120) });
+      return { action: 'deny' };
+    });
     win.setAlwaysOnTop(true, 'pop-up-menu', 1);
     try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* 非 macOS */ }
     loaded = false;
@@ -244,6 +256,10 @@ function createOrbChat(opts) {
     return !!(win && !win.isDestroyed() && win.isVisible());
   }
 
+  function ownsWindow(w) {
+    return !!(w && win && !win.isDestroyed() && w === win);
+  }
+
   function pushEvent(evt) { return push('orbchat:event', evt); }
   function pushApproval(req) { return push('orbchat:approval', req); }
   function pushApprovalResolved(p) { return push('orbchat:approval-resolved', p); }
@@ -251,7 +267,11 @@ function createOrbChat(opts) {
   function pushSync() { return push('orbchat:sync', context()); }
 
   function destroy() {
-    clearTimeout(sizeTimer);
+    if (sizeTimer) { clearTimeout(sizeTimer); sizeTimer = null; }
+    if (sizeDirty && savedSize && typeof opts.onSizeChange === 'function') {
+      sizeDirty = false;
+      try { opts.onSizeChange(savedSize); } catch {}
+    }
     try {
       screen.removeListener('display-removed', onDisplayChange);
       screen.removeListener('display-metrics-changed', onDisplayChange);
@@ -264,7 +284,7 @@ function createOrbChat(opts) {
     loaded = false;
   }
 
-  return { open, close, isOpen, pushEvent, pushApproval, pushApprovalResolved, pushState, pushSync, destroy, W, H };
+  return { open, close, isOpen, ownsWindow, pushEvent, pushApproval, pushApprovalResolved, pushState, pushSync, destroy, W, H };
 }
 
 module.exports = { createOrbChat };

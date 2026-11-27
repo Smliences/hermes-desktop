@@ -292,7 +292,18 @@ const state = {
 const hasNative = typeof hermesAPI !== 'undefined';
 const api = hasNative ? hermesAPI : window.__mockAPI;
 
+function syncApprovalModeFromSettings() {
+  if (typeof settingsRead !== 'function') return;
+  const apMode = settingsRead().approvalMode;
+  if (apMode === undefined) return;
+  const wantYolo = apMode === '自动批准全部';
+  if (!!state.config.yolo !== wantYolo) {
+    state.config.yolo = wantYolo;
+    if (hasNative && api.setConfig) api.setConfig({ yolo: wantYolo });
+  }
+}
 function newTab(sessionId = null, title = '新会话', silent = false) {
+  if (!sessionId) syncApprovalModeFromSettings();
   const tab = { id: 'tab_' + uid(), sessionId, title, model: '', running: false, items: [], startedAt: 0, lastResult: null, deltas: 0 };
   state.tabs.push(tab);
   setActiveTab(tab.id, silent);
@@ -1148,6 +1159,7 @@ async function init() {
   // 先铺骨架：下面 env / 会话列表都要等后端，空白侧栏会被误读成「没有历史会话」
   try { renderSessions(''); } catch {}
   try { const env = await api.env(); state.env = env; state.config = { ...state.config, ...env.config }; } catch {}
+  syncApprovalModeFromSettings();
   // env-chip 已按需求移除（侧栏左下角改为齿轮按钮），仅保留 state.env 数据
   await refreshSessions();
   ensureSidebarTree(); // 首屏树若撞上后端冷启失败，后台补拉，不阻塞首屏

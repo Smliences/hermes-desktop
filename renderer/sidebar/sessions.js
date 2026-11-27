@@ -316,7 +316,7 @@ function renderSessions(q = '') {
     const rows = rowsAll.slice(0, shown);
     const rest = Math.max(0, rowsAll.length - rows.length);
     const gl = document.createElement('li');
-    gl.className = 's-group s-proj' + (pid === activePid ? ' active' : '');
+    gl.className = 's-group s-proj' + (activePid && pid === activePid ? ' active' : '');
     gl.dataset.pid = pid;
     gl.setAttribute('role', 'presentation');
     const safePath = esc(p.path || '');

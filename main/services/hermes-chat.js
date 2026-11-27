@@ -419,6 +419,9 @@ class ChatChannel {
     this._epochStamp = 0;     // 每次后端失效递增；在途连接靠它判定自己是否已过期
     this._connectTimeoutMs = Number(opts.connectTimeoutMs) > 0 ? Number(opts.connectTimeoutMs) : 20000;
     this._abortGraceMs = Number(opts.abortGraceMs) > 0 ? Number(opts.abortGraceMs) : 10000;
+    this._wsDisconnectTimeoutMs = Number(opts.wsDisconnectTimeoutMs) > 0 ? Number(opts.wsDisconnectTimeoutMs) : 5000;
+    this._wsDisconnectTimer = null;
+    this._gwConnectListeners = new Set();
     /** 连接状态变化回调：{state, port, connected, epoch}。主进程负责转发给渲染层。 */
     this._onStatusCb = typeof opts.onStatus === 'function' ? opts.onStatus : () => {};
     this._gatewayFactory = typeof opts.createGateway === 'function'
@@ -557,6 +560,7 @@ class ChatChannel {
   /** 应用启动时预热后端（不阻塞窗口） */
   startBackend() { this.backend.start().catch((e) => log.error('chat', `backend prewarm: ${e.message}`)); }
   stopBackend() {
+    if (this._wsDisconnectTimer) { clearTimeout(this._wsDisconnectTimer); this._wsDisconnectTimer = null; }
     // 切换 profile 会让所有在途审批失效：先拒绝，避免旧会话悬挂
     this._denyAllApprovals();
     this.backend.stop();
@@ -592,6 +596,7 @@ class ChatChannel {
 
   /** 后端换代 / 掉线：关连接、废活会话、清空排队，避免重连旧端口或把旧 liveId 打给新后端。 */
   _invalidateBackend(reason) {
+    if (this._wsDisconnectTimer) { clearTimeout(this._wsDisconnectTimer); this._wsDisconnectTimer = null; }
     this._epochStamp += 1;
     this._denyAllApprovals();
     if (this.gateway) { try { this.gateway.close(); } catch {} this.gateway = null; }
@@ -642,16 +647,18 @@ class ChatChannel {
         for (const fn of [...this._gwConnectListeners]) { try { fn(); } catch {} }
         this._gwConnectListeners.clear();
       }
-      if (this._onGwConnect) this._onGwConnect();
     } else if (st && st.connected === false && !this._wsDisconnectTimer) {
       this._wsDisconnectTimer = setTimeout(() => {
         this._wsDisconnectTimer = null;
         if (this.gateway && this.gateway.connected) return;
+        this._denyAllApprovals();
         for (const turn of [...this.activeTurns.values()]) {
+          if (turn.finished) continue;
+          try { turn.cb.onError && turn.cb.onError(new Error('gateway 连接已断开，本轮未完成，请重试')); } catch {}
           turn._finish({ error: 'gateway 连接已断开', exitCode: 1 });
         }
         this._resetLiveSessions();
-      }, 5000);
+      }, this._wsDisconnectTimeoutMs);
       if (this._wsDisconnectTimer.unref) this._wsDisconnectTimer.unref();
     }
     this._emitStatus(!!(st && st.connected));
@@ -737,7 +744,7 @@ class ChatChannel {
         gw.connect();
         if (gw.connected) resolveConn();
         const timer = setTimeout(() => rejectConn(new Error('gateway WS 连接超时')), this._connectTimeoutMs);
-        try { await connReady; } finally { clearTimeout(timer); this._onGwConnect = null; }
+        try { await connReady; } finally { clearTimeout(timer); this._gwConnectListeners.delete(resolveConn); }
         // 等待期间后端换过代：这条连接指向旧端口/旧 token，绝不能挂上去
         if (stamp !== this._epochStamp) throw new Error('hermes serve 已重启，连接作废，请重试');
         this.gateway = gw;
