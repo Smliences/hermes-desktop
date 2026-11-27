@@ -28,11 +28,19 @@ const assert = require('assert');
 
 const mainSrc = read('main/main.js');
 const preloadSrc = read('preload/preload.js');
+const KB_APP_FILES = [
+  'renderer/kanban-core.js',
+  'renderer/kanban-board.js',
+  'renderer/kanban-drawer.js',
+  'renderer/kanban-dispatch.js',
+  'renderer/kanban-modal.js',
+  'renderer/kanban.js',
+];
 const appSrc = [
   'renderer/app.js',
   'renderer/market-plugins.js',
   'renderer/settings.js',
-  'renderer/kanban.js',
+  ...KB_APP_FILES,
 ].map(read).join('\n');
 const htmlSrc = read('renderer/index.html');
 const cssSrc = read('renderer/styles.css');
@@ -980,7 +988,7 @@ section('3r. Kanban 看板：受控读写 + 派发、token 不出主进程、代
 const kbSrc = read('main/services/hermes-kanban.js');
 // 切片锚点用注释标题而不是某个常量名：常量重构改名时不会让整段断言静默失空
 const KB_ANCHOR = 'Kanban 看板（CLI 原生任务队列）';
-const kbAppSrc = read('renderer/kanban.js');
+const kbAppSrc = KB_APP_FILES.map(read).join('\n');
 const kbCss = cssSrc.slice(cssSrc.indexOf('Kanban 看板（CLI 原生任务队列）'));
 
 t('四层接线齐备：页面 DOM、两个入口、IPC、preload、renderer', () => {
@@ -4372,6 +4380,28 @@ t('列折叠 44px 竖条、抽屉内 ‹ › / ↑↓ 切卡、整列虚线落�
     '空列拖拽落点未复用 KB_STATUS_ACTION 文案');
   assert.ok(kbCss.includes('body.kb-dragging .kb-col[data-group]:not([data-group="archived"])'),
     '拖拽时未对可落点整列做虚线高亮');
+});
+
+section('3ao. Kanban 第三期：模块拆分与空状态模板复用');
+t('kanban.js 按功能拆分为 6 个独立脚本且按依赖顺序挂载在 index.html', () => {
+  const vm = require('vm');
+  let cursor = -1;
+  for (const rel of KB_APP_FILES) {
+    const base = path.basename(rel);
+    const tag = `<script src="${base}"></script>`;
+    const idx = htmlSrc.indexOf(tag);
+    assert.ok(idx > cursor, `${base} 未按顺序挂载在 index.html`);
+    cursor = idx;
+    new vm.Script(read(rel), { filename: rel });
+  }
+});
+
+t('renderKanbanBody 的网格与列视图复用 kbEmptyStateHtml', () => {
+  const bodyFn = kbAppSrc.slice(kbAppSrc.indexOf('function renderKanbanBody('), kbAppSrc.indexOf('function kbHasActiveFilters('));
+  assert.ok(kbAppSrc.includes('function kbEmptyStateHtml('), '缺少复用的 kbEmptyStateHtml');
+  assert.ok(bodyFn.includes('kbEmptyStateHtml(total, shown, true)') && bodyFn.includes('kbEmptyStateHtml(total, shown, false)'),
+    '网格与列视图未共用 kbEmptyStateHtml');
+  assert.strictEqual((bodyFn.match(/这个看板还没有任务/g) || []).length, 0, 'renderKanbanBody 内仍残留重复空状态文案');
 });
 
 console.log('\n' + '─'.repeat(56));
