@@ -10,12 +10,12 @@
  * 开关：skills.disabled 是 config.yaml 里的扁平列表，直接做行级编辑即可，
  *       零子进程、毫秒级；失败时回退到官方 Python 写入路径。
  */
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const yamlCfg = require('./hermes-config-yaml');
 const profile = require('./hermes-profile');
 const { resolveHermesBin, safeArg } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
 // 与 agent/skill_utils.ESSENTIAL_SKILLS 对齐：核心技能不允许停用
@@ -97,17 +97,10 @@ function resolveRuntime() {
 function runPython(script, argv = [], { timeout = 30000 } = {}) {
   const rt = resolveRuntime();
   if (!rt) return Promise.resolve({ code: -1, stdout: '', stderr: 'hermes 运行时未找到' });
-  return new Promise((resolve) => {
-    try {
-      const p = spawn(rt.python, ['-I', '-c', script, ...argv], { cwd: rt.root, timeout, env: profile.env() });
-      let stdout = '', stderr = '';
-      p.stdout.on('data', (d) => { stdout += d; });
-      p.stderr.on('data', (d) => { stderr += d; });
-      p.on('close', (code) => resolve({ code, stdout, stderr }));
-      p.on('error', (err) => resolve({ code: -1, stdout, stderr: String(err) }));
-    } catch (err) {
-      resolve({ code: -1, stdout: '', stderr: String(err) });
-    }
+  return runSpawn(rt.python, ['-I', '-c', script, ...argv], {
+    cwd: rt.root,
+    timeout,
+    env: profile.env(),
   });
 }
 
@@ -172,7 +165,7 @@ print(json.dumps({'skills': skills, 'disabled': disabled}, ensure_ascii=False))
  * revalidate=true 表示「先给缓存、同时一定重拉一次」。
  * stale=true 表示返回的是旧数据、后台正在刷新。
  */
-async function listSkills({ force = false, revalidate = false } = {}) {
+async function listSkills({ force = false, revalidate = false, cachedOnly = false } = {}) {
   if (!force) {
     const mem = _cache || readDisk();
     if (mem) {
@@ -181,6 +174,7 @@ async function listSkills({ force = false, revalidate = false } = {}) {
       if (stale || revalidate) refresh().catch(() => {});
       return { ok: true, skills: mem.skills, disabled: mem.disabled, cached: true, stale, ageMs: age };
     }
+    if (cachedOnly) return { ok: true, skills: [], disabled: [], cached: false, stale: true, pending: true };
   }
   const r = await refresh();
   if (r.ok) return { ok: true, skills: r.skills, disabled: r.disabled, cached: false, stale: false, ageMs: 0 };

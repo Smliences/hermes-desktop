@@ -13,11 +13,11 @@
  * - create 带 --use（官方 createProject({ use: true })），建完即成活动项目；
  * - 想法文本按官方 writeProjectIdea 落到主文件夹 IDEA.md（wx 不覆盖既有文件）。
  */
-const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 
 /** 项目 slug 与看板 slug 同一字符集（CLI 侧生成时也是这个约定）。 */
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -144,28 +144,15 @@ function writeProjectIdea(dir, idea) {
 
 /** 统一的 execFile 执行器：超时强杀、stdout/stderr 截断、错误收敛成一行。 */
 function runArgv(argv, label) {
-  return new Promise((resolve) => {
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: `${label}超时（hermes project 未在 40s 内返回）` });
-    }, 40000);
-    try {
-      child = execFile(resolveHermesBin(), argv, {
-        timeout: 40000, maxBuffer: 1024 * 1024, env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout, stderr) => {
-        const text = String(stdout || '').trim().slice(0, 2000);
-        if (err) {
-          const msg = String((stderr || '').trim() || (err && err.message) || err).split('\n')[0];
-          return finish({ ok: false, error: msg || '操作失败', text });
-        }
-        finish({ ok: true, text });
-      });
-      child.on('error', (e) => finish({ ok: false, error: String(e) }));
-    } catch (e) { finish({ ok: false, error: String(e) }); }
-  });
+  return runExecFile(resolveHermesBin(), argv, {
+    timeout: 40000,
+    killGraceMs: 2000,
+    maxBuffer: 1024 * 1024,
+    maxStdout: 2000,
+    trimStdout: true,
+    env: profile.env({ NO_COLOR: '1' }),
+    timeoutError: `${label}超时（hermes project 未在 40s 内返回）`,
+  }).then((r) => (r.ok ? { ok: true, text: r.text } : { ok: false, error: r.error || '操作失败', text: r.text }));
 }
 
 /** 代跑 `hermes project create …`。成功与否都以 CLI 的 stdout/stderr 为准。 */

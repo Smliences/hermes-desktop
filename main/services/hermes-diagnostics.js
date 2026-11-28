@@ -11,12 +11,12 @@
  *   - 不做「不可靠结构化解析」：CLI 输出是给人看的文本，随版本会变。
  *     这里原样返回（转义由渲染层负责），只附带最少的元信息。
  */
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
 const MAX_OUTPUT = 12000;
@@ -46,42 +46,25 @@ function allowed(key) {
     && Array.isArray(COMMANDS[key]) ? COMMANDS[key] : null;
 }
 
-function runOnce(key) {
+async function runOnce(key) {
   const argv = allowed(key);
   if (!argv) return { ok: false, error: '不支持的诊断命令', text: '' };
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    // spawn 的 timeout 只发 SIGTERM；Python CLI 可能忽略它，导致慢命令
-    // 永久占住串行队列。这里加一个 SIGKILL 兜底，保证队列一定会被释放。
-    let child = null;
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, code: -1, timedOut: true, text: '', error: '诊断命令超时', at: Date.now() });
-    }, (TIMEOUTS[key] || 15000) + 3000);
-    try {
-      const args = profile.cliArgs(argv.slice());
-      const p = spawn(HERMES_BIN, args, {
-        timeout: TIMEOUTS[key] || 15000,
-        env: profile.env({ NO_COLOR: '1' }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      child = p;
-      let stdout = '', stderr = '';
-      p.stdout.on('data', (d) => { if (stdout.length < MAX_OUTPUT) stdout += d; });
-      p.stderr.on('data', (d) => { if (stderr.length < MAX_OUTPUT) stderr += d; });
-      p.on('close', (code) => {
-        const text = (stdout + (stderr ? (stdout ? '\n' : '') + stderr : ''))
-          .replace(/\r/g, '').slice(0, MAX_OUTPUT).trim();
-        // 注意：doctor 发现「待办建议」时会返回退出码 1，但输出是完整的。
-        // ok 只表示进程正常结束并给出了输出，不等于「配置完美无问题」。
-        finish({ ok: code === 0, hasOutput: !!text, code, text, at: Date.now() });
-      });
-      p.on('error', (err) => finish({ ok: false, error: String(err), text: '', at: Date.now() }));
-    } catch (err) {
-      finish({ ok: false, error: String(err), text: '', at: Date.now() });
-    }
+  const args = profile.cliArgs(argv.slice());
+  const r = await runSpawn(HERMES_BIN, args, {
+    timeout: TIMEOUTS[key] || 15000,
+    killGraceMs: 3000,
+    hardGraceMs: 5000,
+    maxOutput: MAX_OUTPUT,
+    env: profile.env({ NO_COLOR: '1' }),
   });
+  if (r.timedOut) {
+    return { ok: false, code: -1, timedOut: true, text: '', error: '诊断命令超时', at: Date.now() };
+  }
+  const text = (r.stdout + (r.stderr ? (r.stdout ? '\n' : '') + r.stderr : ''))
+    .replace(/\r/g, '').slice(0, MAX_OUTPUT).trim();
+  // 注意：doctor 发现「待办建议」时会返回退出码 1，但输出是完整的。
+  // ok 只表示进程正常结束并给出了输出，不等于「配置完美无问题」。
+  return { ok: r.code === 0, hasOutput: !!text, code: r.code, text, at: Date.now() };
 }
 
 /** 只读执行一个白名单诊断命令。非法 key 在 spawn 之前就被拒绝。 */

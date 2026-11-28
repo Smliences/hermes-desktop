@@ -17,13 +17,13 @@
  *       consent 与 PM 的 selection 事务，直接改 YAML 会绕过这些校验。为避免
  *       连点导致并发 CLI 互相覆盖，写操作经串行队列，并由渲染层做乐观更新。
  */
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const yamlCfg = require('./hermes-config-yaml');
 const { resolveRuntime } = require('./hermes-skills');
 const profile = require('./hermes-profile');
 const { resolveHermesBin, safeArg } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
 // 新鲜期：这段时间内连后台刷新都不触发（避免每次开页面都白烧一遍 CLI）
@@ -87,17 +87,9 @@ function writeDisk() {
 }
 
 function run(args, { timeout = 30000 } = {}) {
-  return new Promise((resolve) => {
-    try {
-      const p = spawn(HERMES_BIN, profile.cliArgs(args), { timeout, env: profile.env({ NO_COLOR: '1' }) });
-      let stdout = '', stderr = '';
-      p.stdout.on('data', (d) => { stdout += d; });
-      p.stderr.on('data', (d) => { stderr += d; });
-      p.on('close', (code) => resolve({ code, stdout, stderr }));
-      p.on('error', (err) => resolve({ code: -1, stdout, stderr: String(err) }));
-    } catch (err) {
-      resolve({ code: -1, stdout: '', stderr: String(err) });
-    }
+  return runSpawn(HERMES_BIN, profile.cliArgs(args), {
+    timeout,
+    env: profile.env({ NO_COLOR: '1' }),
   });
 }
 
@@ -230,7 +222,7 @@ function refresh() {
  * revalidate=true 表示「先给缓存、同时一定重拉一次」（装/卸插件之后用）。
  * 返回里的 stale 表示「这是旧数据，后台正在刷新」，渲染层据此给轻提示。
  */
-async function listPlugins({ force = false, revalidate = false } = {}) {
+async function listPlugins({ force = false, revalidate = false, cachedOnly = false } = {}) {
   if (!force) {
     const mem = _cache || readDisk();
     if (mem) {
@@ -239,6 +231,7 @@ async function listPlugins({ force = false, revalidate = false } = {}) {
       if (stale || revalidate) refresh().catch(() => {});   // 后台刷新，不等
       return { ok: true, plugins: mem.plugins, cached: true, stale, ageMs: age };
     }
+    if (cachedOnly) return { ok: true, plugins: [], cached: false, stale: true, pending: true };
   }
   const r = await refresh();
   if (r.ok) return { ok: true, plugins: r.plugins, cached: false, stale: false, ageMs: 0 };

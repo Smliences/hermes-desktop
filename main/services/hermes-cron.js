@@ -13,9 +13,9 @@
  *     四类写操作一律要求调用方先展示确认卡（服务层不判断 UI，但只放行固定 op）。
  *   - 写操作后回读 `cron list --all` 确认终态；回读失败返回 warning 而非假装失败。
  */
-const { execFile } = require('child_process');
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 const log = require('./logger');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
@@ -39,32 +39,12 @@ function enqueue(job) {
 function strip(s) { return String(s || '').replace(ANSI_RE, ''); }
 
 function exec(argv, { timeout = TIMEOUT_MS } = {}) {
-  return new Promise((resolve) => {
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: '命令超时', text: '' });
-    }, timeout + 3000);
-    try {
-      child = execFile(HERMES_BIN, profile.cliArgs(argv), {
-        timeout,
-        maxBuffer: 8 * 1024 * 1024,
-        env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout, stderr) => {
-        const text = strip(stdout).slice(0, MAX_OUTPUT);
-        if (err) {
-          const lines = strip(stderr).split('\n').map((x) => x.trim()).filter(Boolean);
-          return finish({ ok: false, text, error: lines.length ? lines[lines.length - 1] : String(err.message).split('\n')[0] });
-        }
-        finish({ ok: true, text });
-      });
-      child.on('error', (e) => finish({ ok: false, text: '', error: String(e) }));
-      if (child.stdin) child.stdin.end();
-    } catch (e) {
-      finish({ ok: false, text: '', error: String(e) });
-    }
+  return runExecFile(HERMES_BIN, profile.cliArgs(argv), {
+    timeout,
+    maxStdout: MAX_OUTPUT,
+    env: profile.env({ NO_COLOR: '1' }),
+    stripColor: true,
+    timeoutError: '命令超时',
   });
 }
 

@@ -606,7 +606,8 @@ function kbSyncAdvSelects() {
   fillSkills(state.skills);
   if ((!Array.isArray(state.skills) || !state.skills.length) && api && api.skillsList) {
     api.skillsList().then((r) => {
-      if (r && r.ok && Array.isArray(r.items)) { state.skills = r.items; fillSkills(r.items); }
+      const list = r && r.ok ? (Array.isArray(r.skills) ? r.skills : (Array.isArray(r.items) ? r.items : null)) : null;
+      if (list) { state.skills = list; fillSkills(list); }
     }).catch(() => {});
   }
 

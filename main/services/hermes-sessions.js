@@ -7,13 +7,14 @@
  * sqlite3 CLI（-readonly -json）只读访问。CLI 不支持绑定参数，故采用
  * 全内联 SQL：数值经 Number 白名单化，字符串经 lit() 单引号转义防注入。
  */
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin, safeArg } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 const log = require('./logger');
 const getDB = () => profile.dbPath();
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
@@ -225,16 +226,11 @@ async function deleteSession(sessionId) {
   const id = String(sessionId || '');
   if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return { ok: false, error: '会话 ID 不合法' };
   if ((await sessionExists(id)) === false) return { ok: false, error: '会话不存在（可能已被删除）' };
-  const r = await new Promise((resolve) => {
-    try {
-      const p = spawn(HERMES_BIN, profile.cliArgs(['sessions', 'delete', '--yes', id]), { timeout: 30000, env: profile.env({ NO_COLOR: '1' }) });
-      let out = '', err = '';
-      p.stdout.on('data', (d) => { out += d; });
-      p.stderr.on('data', (d) => { err += d; });
-      p.on('close', (code) => resolve({ code, out: out.trim(), err: err.trim() }));
-      p.on('error', (e) => resolve({ code: -1, out: '', err: String(e.message || e) }));
-    } catch (e) { resolve({ code: -1, out: '', err: String(e.message || e) }); }
+  const raw = await runSpawn(HERMES_BIN, profile.cliArgs(['sessions', 'delete', '--yes', id]), {
+    timeout: 30000,
+    env: profile.env({ NO_COLOR: '1' }),
   });
+  const r = { code: raw.code, out: raw.stdout.trim(), err: raw.stderr.trim() };
   const gone = (await sessionExists(id)) === false;
   if (gone) return { ok: true, output: r.out.slice(0, 200) };
   const msg = (r.err || r.out || `exit ${r.code}`).split('\n')[0];

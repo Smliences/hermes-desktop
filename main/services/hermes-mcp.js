@@ -19,11 +19,11 @@
  * 「userData 磁盘缓存 + stale-while-revalidate」，与插件 / 技能 / 工具集一致；
  * 但 **添加 / 移除后的回读永不读缓存**，`test` 每次都真连。
  */
-const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 const yamlCfg = require('./hermes-config-yaml');
 const log = require('./logger');
 
@@ -115,38 +115,15 @@ function enqueue(job) {
 }
 function strip(s) { return String(s || '').replace(ANSI_RE, ''); }
 
-/** 所有 CLI 调用统一 execFile + 串行队列；input 用于喂交互式默认值。 */
+/** 所有 CLI 调用统一经无 shell execFile + 串行队列；input 用于喂交互式默认值。 */
 function exec(argv, { timeout = TIMEOUT_MS, input = '' } = {}) {
-  return new Promise((resolve) => {
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: '命令超时', text: '' });
-    }, timeout + 3000);
-    try {
-      child = execFile(HERMES_BIN, profile.cliArgs(argv), {
-        timeout,
-        maxBuffer: 8 * 1024 * 1024,
-        env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout, stderr) => {
-        const text = strip(stdout).slice(0, MAX_OUTPUT);
-        if (err) {
-          const lines = strip(stderr).split('\n').map((x) => x.trim()).filter(Boolean);
-          return finish({ ok: false, text, error: lines.length ? lines[lines.length - 1] : String(err.message).split('\n')[0] });
-        }
-        finish({ ok: true, text });
-      });
-      child.on('error', (e) => finish({ ok: false, text: '', error: String(e) }));
-      // 显式关闭 stdin：非 TTY 下让 input() 立即读到 EOF，不依赖默认管道行为
-      if (child.stdin) {
-        if (input) child.stdin.write(input);
-        child.stdin.end();
-      }
-    } catch (e) {
-      finish({ ok: false, text: '', error: String(e) });
-    }
+  return runExecFile(HERMES_BIN, profile.cliArgs(argv), {
+    timeout,
+    maxStdout: MAX_OUTPUT,
+    env: profile.env({ NO_COLOR: '1' }),
+    input,
+    stripColor: true,
+    timeoutError: '命令超时',
   });
 }
 

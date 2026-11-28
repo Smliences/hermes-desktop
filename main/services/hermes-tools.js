@@ -15,12 +15,12 @@
  * 与插件 / 技能页同款「userData 磁盘缓存 + stale-while-revalidate」——缓存命中毫秒
  * 返回，过期先给旧数据再后台重拉；**开关后的回读永不读缓存**，保证状态是真的。
  */
-const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 const yamlCfg = require('./hermes-config-yaml');
 const log = require('./logger');
 
@@ -87,31 +87,11 @@ function writeDisk() {
 }
 
 function exec(argv) {
-  return new Promise((resolve) => {
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: '工具命令超时', text: '' });
-    }, TIMEOUT_MS + 3000);
-    try {
-      child = execFile(HERMES_BIN, profile.cliArgs(argv), {
-        timeout: TIMEOUT_MS,
-        maxBuffer: 8 * 1024 * 1024,
-        env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout, stderr) => {
-        const text = String(stdout || '').slice(0, MAX_OUTPUT);
-        if (err) {
-          const lines = String(stderr || '').split('\n').map((x) => x.trim()).filter(Boolean);
-          return finish({ ok: false, text, error: lines.length ? lines[lines.length - 1] : String(err.message).split('\n')[0] });
-        }
-        finish({ ok: true, text });
-      });
-      child.on('error', (err) => finish({ ok: false, text: '', error: String(err) }));
-    } catch (err) {
-      finish({ ok: false, text: '', error: String(err) });
-    }
+  return runExecFile(HERMES_BIN, profile.cliArgs(argv), {
+    timeout: TIMEOUT_MS,
+    maxStdout: MAX_OUTPUT,
+    env: profile.env({ NO_COLOR: '1' }),
+    timeoutError: '工具命令超时',
   });
 }
 

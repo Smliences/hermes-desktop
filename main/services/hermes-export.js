@@ -12,13 +12,13 @@
  *   - 不传 --no-redact：默认保留 CLI 的密钥脱敏。
  *   - 单文件上限 32MB；导出超时 60s 后子进程被强杀。
  */
-const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 const log = require('./logger');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
@@ -33,22 +33,16 @@ function validSessionId(id) {
   return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(id);
 }
 
-function runExport(argv) {
-  return new Promise((resolve, reject) => {
-    execFile(HERMES_BIN, profile.cliArgs(argv), {
-      timeout: TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024,
-      env: profile.env({ NO_COLOR: '1' }),
-    }, (err, stdout, stderr) => {
-      if (err) {
-        // CLI 把人类可读原因写在 stderr；取最后一行非空内容作为错误信息
-        const lines = String(stderr || '').split('\n').map((x) => x.trim()).filter(Boolean);
-        const msg = lines.length ? lines[lines.length - 1] : String(err.message).split('\n')[0];
-        return reject(new Error(msg || '导出失败'));
-      }
-      resolve(String(stdout || ''));
-    });
+async function runExport(argv) {
+  const r = await runExecFile(HERMES_BIN, profile.cliArgs(argv), {
+    timeout: TIMEOUT_MS,
+    maxBuffer: 8 * 1024 * 1024,
+    maxStdout: 0,
+    env: profile.env({ NO_COLOR: '1' }),
+    timeoutError: '导出超时',
   });
+  if (!r.ok) throw new Error(r.error || '导出失败');
+  return r.text;
 }
 
 function firstWithExt(dir, ext) {

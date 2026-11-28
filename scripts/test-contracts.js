@@ -470,11 +470,13 @@ t('doctor 退出码 1 不当作失败，且明确不自动修复 / 不真实探�
   assert.ok(diagSrc.includes("doctor: 60000"), 'doctor 实测约 41s，超时余量不足会假失败');
   assert.ok(diagSrc.includes("'--fix'") === false, '服务层不得带 --fix');
 });
-t('慢命令有 SIGKILL 兜底，不会永久占住串行队列', () => {
-  assert.ok(diagSrc.includes("child.kill('SIGKILL')"), '缺少强杀兜底');
+const execSrc = read('main/services/hermes-exec.js');
+t('慢命令有真实 SIGKILL 兜底，不会因 child.killed 死锁永久占住串行队列', () => {
+  assert.ok(diagSrc.includes('runSpawn('), '诊断命令未走统一子进程执行器 hermes-exec');
   assert.ok(diagSrc.includes('timedOut: true'), '超时未返回明确状态');
-  assert.ok(diagSrc.includes("stdio: ['ignore'"), 'stdin 未关闭，交互式命令可能挂住');
-  assert.ok(diagSrc.includes('let done = false') && diagSrc.includes('finish('), '完成态未去重，可能重复 resolve');
+  assert.ok(execSrc.includes('child.exitCode === null && child.signalCode === null'), '缺少真实存活判定（!child.killed 会被 SIGTERM 骗过）');
+  assert.ok(execSrc.includes("SIGKILL") && execSrc.includes("stdio = ['ignore', 'pipe', 'pipe']"), '缺少 SIGKILL 或默认忽略 stdin');
+  assert.ok(execSrc.includes('let settled = false') && execSrc.includes('let done = false'), '完成态未去重，可能重复 resolve');
 });
 t('健康检查卡片样式可收缩，双主题 token 无硬编码色', () => {
   const seg = cssSrc.slice(cssSrc.indexOf('.hc-actions'), cssSrc.indexOf('#set-panel .pf-note'));
@@ -756,9 +758,9 @@ t('导出格式是白名单，渲染层只能传键名', () => {
   assert.ok(/FORMATS = Object\.freeze\(\{ md: '\.md', html: '\.html', jsonl: '\.jsonl' \}\)/.test(exportSrc), '导出格式白名单被改动或放宽');
   assert.ok(exportSrc.includes("if (!ext) return { ok: false, error: '不支持的导出格式' }"), '缺少未知格式的拒绝分支');
 });
-t('会话 id 过正则白名单，且走 execFile 不经 shell', () => {
+t('会话 id 过正则白名单，且走无 shell execFile', () => {
   assert.ok(/function validSessionId/.test(exportSrc), '缺少 sessionId 校验');
-  assert.ok(exportSrc.includes('execFile('), '必须用 execFile（无 shell）');
+  assert.ok(exportSrc.includes('runExecFile(') && execSrc.includes('execFile('), '必须经 hermes-exec 走无 shell execFile');
   assert.ok(!/exec\(|execSync\(|shell:\s*true/.test(exportSrc), '导出链路出现了 shell 执行');
 });
 t('导出目标路径由主进程保存对话框决定，渲染层拿不到任意可写路径', () => {
@@ -867,15 +869,13 @@ t('搜索结果点进会话时带上查询词，直接落到命中处', () => {
 
 section('3o. MCP 服务器管理：白名单 argv、只读测试、写后回读');
 const mcpSrc = read('main/services/hermes-mcp.js');
-t('CLI 调用统一 execFile 无 shell、带 -p profile、串行队列 + 超时强杀', () => {
-  // 内部封装函数也叫 exec（本地 Promise 包装），因此不按函数名判 shell，
-  // 而是核对 child_process 只解构了 execFile，且没有任何 shell / 同步执行入口。
-  assert.ok(/const \{ execFile \} = require\('child_process'\)/.test(mcpSrc), 'child_process 引入了 execFile 之外的执行入口');
-  assert.ok(/execFile\(HERMES_BIN, profile\.cliArgs\(argv\)/.test(mcpSrc), '未用 execFile + 数组 argv 调用 CLI');
-  assert.ok(!/execSync\(|shell:\s*true|spawn\(|require\('child_process'\)\.exec/.test(mcpSrc), 'MCP 链路出现 shell / 同步执行');
+t('CLI 调用统一经 hermes-exec 无 shell execFile、带 -p profile、串行队列 + 超时强杀', () => {
+  // hermes-mcp 经 hermes-exec.runExecFile 调度 CLI，自身不得引入任何 shell / 同步 / spawn 执行入口。
+  assert.ok(mcpSrc.includes('runExecFile(HERMES_BIN, profile.cliArgs(argv)'), '未走 hermes-exec.runExecFile + 数组 argv 调用 CLI');
+  assert.ok(!/execSync\(|shell:\s*true|spawn\(|require\('child_process'\)/.test(mcpSrc), 'MCP 链路出现 shell / 同步 / 直接子进程执行');
   assert.ok(/profile\.cliArgs\(argv\)/.test(mcpSrc), '未带 -p <profile>，会读到 CLI 的 sticky 默认');
   assert.ok(/let queue = Promise\.resolve\(\)/.test(mcpSrc) && /function enqueue\(/.test(mcpSrc), '缺少串行队列');
-  assert.ok(/SIGKILL/.test(mcpSrc) && /function exec\(/.test(mcpSrc), '缺少超时强杀兜底');
+  assert.ok(execSrc.includes('SIGKILL') && /function exec\(/.test(mcpSrc), '缺少超时强杀兜底');
 });
 t('服务器名/URL 白名单：拒绝 file://、任意内网 http 与 shell 元字符', () => {
   assert.ok(/const NAME_RE = /.test(mcpSrc) && /const HTTPS_RE = /.test(mcpSrc), '缺少名称/URL 正则');
@@ -929,7 +929,7 @@ t('动作是固定白名单，任务 id / 调度 / 文本都在 spawn 前校验'
   assert.ok(/CONTROL_RE/.test(cronSrc), '缺少控制字符过滤');
   assert.ok(!/execSync\(|shell:\s*true/.test(cronSrc), 'cron 链路出现 shell 执行');
   assert.ok(/profile\.cliArgs\(argv\)/.test(cronSrc), '未带 -p <profile>');
-  assert.ok(/SIGKILL/.test(cronSrc) && /let queue = Promise\.resolve\(\)/.test(cronSrc), '缺少串行队列与超时强杀');
+  assert.ok(cronSrc.includes('runExecFile(') && execSrc.includes('SIGKILL') && /let queue = Promise\.resolve\(\)/.test(cronSrc), '缺少串行队列与超时强杀');
 });
 t('写操作后回读 cron list --all，并返回结构化任务列表', () => {
   assert.ok(/await exec\(\['cron', 'list', '--all'\]\)/.test(cronSrc), '回读不是 --all 真实列表');

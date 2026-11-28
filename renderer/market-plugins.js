@@ -863,6 +863,10 @@ if (hasNative && api.onCatalogUpdated) {
     const kind = p.kind;
     const page = $(kind === 'skills' ? '#skills-page' : '#plugins-page');
     loadLive(kind, page, { quiet: true });
+    if (!$('#market-page').hidden && mk.kind === kind && !mk.busy) {
+      for (const k of [...mkCache.keys()]) { if (k.startsWith(kind + '|')) mkCache.delete(k); }
+      mkSearch(mk.query);
+    }
   });
 }
 

@@ -36,8 +36,8 @@ const section = (s) => console.log('\n' + s);
 
 const MODULES = [
   'gateway-client.js', 'hermes-backend.js', 'hermes-bin.js', 'hermes-chat.js',
-  'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-gateway.js', 'hermes-kanban.js',
-  'hermes-kanban-mode.js', 'hermes-market.js',
+  'hermes-config-yaml.js', 'hermes-config.js', 'hermes-diagnostics.js', 'hermes-exec.js',
+  'hermes-gateway.js', 'hermes-kanban.js', 'hermes-kanban-mode.js', 'hermes-market.js',
   'hermes-plugins.js', 'hermes-preview.js', 'hermes-profile.js', 'hermes-sessions.js',
   'hermes-skills.js', 'hermes-commands.js', 'logger.js',
 ];
@@ -301,24 +301,46 @@ async function run() {
     const dataDir = profile.dataDir();
     const prof = profile.current();
     const cacheFile = path.join(dataDir, 'market-plugins-catalog.json');
+    const plugCacheFile = path.join(dataDir, 'catalog-plugins.json');
+    const hermesPlugins = loaded['hermes-plugins.js'];
     const items = [
       { id: 'alpha-plug', name: 'alpha-plug', description: 'Slack bridge', source: 'Hermes 精选目录', category: 'chat', maintainer: 'core' },
       { id: 'beta-plug', name: 'beta-plug', description: 'GitHub helper', source: 'Hermes 精选目录', category: 'dev', maintainer: 'community' },
     ];
+    hermesPlugins.invalidate();
+    market.invalidate();
     fs.writeFileSync(cacheFile, JSON.stringify({ profile: prof, at: Date.now(), items }));
+    fs.writeFileSync(plugCacheFile, JSON.stringify({
+      profile: prof, at: Date.now(),
+      plugins: [{ name: 'alpha-plug', configKey: 'alpha-plug', enabled: true }],
+    }));
     try {
       const rAll = await market.search('plugins', '');
       assert.strictEqual(rAll.ok, true);
       assert.strictEqual(rAll.cached, true);
       assert.strictEqual(rAll.stale, false);
       assert.strictEqual(rAll.items.length, 2);
+      assert.strictEqual(rAll.items.find((x) => x.id === 'alpha-plug').installed, true);
+      assert.strictEqual(rAll.items.find((x) => x.id === 'beta-plug').installed, false);
       const rHit = await market.search('plugins', 'slack');
       assert.strictEqual(rHit.ok, true);
       assert.strictEqual(rHit.cached, true);
       assert.strictEqual(rHit.items.length, 1);
       assert.strictEqual(rHit.items[0].id, 'alpha-plug');
+      // 即使未生成 catalog-plugins.json，命中目录磁盘缓存也必须立即返回而不得阻塞 CLI
+      try { fs.unlinkSync(plugCacheFile); } catch {}
+      hermesPlugins.invalidate();
+      const rColdInstalled = await market.search('plugins', '', { refreshInstalled: false });
+      assert.strictEqual(rColdInstalled.ok, true);
+      assert.strictEqual(rColdInstalled.cached, true);
+      assert.strictEqual(rColdInstalled.items.length, 2);
+      // 切 profile 后 market.invalidate() 必须清空旧目录缓存
+      market.invalidate();
     } finally {
+      hermesPlugins.invalidate();
+      market.invalidate();
       try { fs.unlinkSync(cacheFile); } catch {}
+      try { fs.unlinkSync(plugCacheFile); } catch {}
     }
   });
 
@@ -428,6 +450,8 @@ async function run() {
       assert.ok(r.error.includes('不支持'), '错误信息不明确');
     }
   });
+  const execSvc = loaded['hermes-exec.js'];
+  const execSrc = fs.readFileSync(path.join(ROOT, 'main', 'services', 'hermes-exec.js'), 'utf8');
   await t('子进程恒带 -p <profile>，带超时与输出上限', () => {
     assert.ok(diagSrc.includes('profile.cliArgs('), '未走 profile.cliArgs（缺 -p）');
     assert.ok(diagSrc.includes('resolveHermesBin()'), '未统一解析 CLI 路径');
@@ -437,11 +461,18 @@ async function run() {
     assert.ok(diagSrc.includes('queue'), '缺少串行队列');
     assert.ok(!/writeFile|unlink|rmSync|renameSync/.test(diagSrc), '诊断服务不得写文件');
   });
-  await t('慢命令超时会强杀并明确降级，不把队列永久占住', () => {
-    assert.ok(diagSrc.includes("child.kill('SIGKILL')"), '缺少强杀兜底');
+  await t('慢命令超时真实 SIGKILL 强杀忽略 SIGTERM 的子进程，不把队列永久占住', async () => {
+    assert.ok(diagSrc.includes('runSpawn('), '诊断命令未走 hermes-exec.runSpawn');
     assert.ok(diagSrc.includes('timedOut: true'), '超时结果未标注');
-    assert.ok(diagSrc.includes("stdio: ['ignore'"), '未关闭 stdin');
-    assert.ok(diagSrc.includes('let done = false'), '完成态未去重');
+    assert.ok(execSrc.includes('child.exitCode === null && child.signalCode === null'), '未用 exitCode/signalCode 判定进程存活');
+    assert.ok(execSrc.includes("stdio = ['ignore', 'pipe', 'pipe']"), '未默认关闭 stdin');
+    // 真实进程行为回归：子进程吞掉 SIGTERM 时，SIGKILL 兜底必须仍能杀掉并收敛（不得被 child.killed=true 跳过）
+    const stub = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    const rExec = await execSvc.runExecFile(process.execPath, ['-e', stub], { timeout: 80, killGraceMs: 60 });
+    assert.strictEqual(rExec.ok, false);
+    assert.strictEqual(rExec.timedOut, true);
+    const rSpawn = await execSvc.runSpawn(process.execPath, ['-e', stub], { timeout: 80, killGraceMs: 60, hardGraceMs: 500 });
+    assert.strictEqual(rSpawn.timedOut, true);
   });
   await t('doctor 超时余量足够（实测约 41s），且退出码 1 仍保留输出', () => {
     assert.ok(diag.TIMEOUTS === undefined || true); // TIMEOUTS 未导出，用源码核对

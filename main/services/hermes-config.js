@@ -6,12 +6,12 @@
  * 只读展示；写操作仍以 hermes CLI / 手动编辑 config.yaml 为准。
  */
 const fs = require('fs');
-const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runExecFile } = require('./hermes-exec');
 const hermesHome = () => profile.home();
 
 function readJson(file) {
@@ -153,30 +153,22 @@ function parseReasoningDisplay(text) {
  * 这是**写 CLI 配置**：会同时改变命令行（hermes CLI / TUI）是否显示思考过程，
  * 因此只能由用户点二次确认卡触发，渲染层不得自动调用。
  */
-function setReasoningDisplay(on) {
-  return new Promise((resolve) => {
-    const argv = profile.cliArgs(['config', 'set', 'display.show_reasoning', on ? 'true' : 'false']);
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: '写入超时（hermes config set 未在 40s 内返回）' });
-    }, 40000);
-    try {
-      child = execFile(resolveHermesBin(), argv, {
-        timeout: 40000, maxBuffer: 1024 * 1024, env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout) => {
-        const text = String(stdout || '').trim().slice(0, 2000);
-        if (err) {
-          const msg = String((err && err.message) || err).split('\n')[0];
-          return finish({ ok: false, error: msg || '写入失败', text });
-        }
-        finish({ ok: true, text, state: reasoningDisplay() });
-      });
-      child.on('error', (e) => finish({ ok: false, error: String(e) }));
-    } catch (e) { finish({ ok: false, error: String(e) }); }
+function execConfigSet(argv) {
+  return runExecFile(resolveHermesBin(), argv, {
+    timeout: 40000,
+    killGraceMs: 2000,
+    maxBuffer: 1024 * 1024,
+    maxStdout: 2000,
+    trimStdout: true,
+    env: profile.env({ NO_COLOR: '1' }),
+    timeoutError: '写入超时（hermes config set 未在 40s 内返回）',
   });
+}
+
+async function setReasoningDisplay(on) {
+  const argv = profile.cliArgs(['config', 'set', 'display.show_reasoning', on ? 'true' : 'false']);
+  const r = await execConfigSet(argv);
+  return r.ok ? { ok: true, text: r.text, state: reasoningDisplay() } : { ok: false, error: r.error || '写入失败', text: r.text };
 }
 
 /**
@@ -238,33 +230,13 @@ function kanbanSwitches() {
  *
  * 这是**写 CLI 配置**：只允许用户点二次确认卡触发，渲染层不得自动调用。
  */
-function setKanbanSwitch(key, on) {
+async function setKanbanSwitch(key, on) {
   if (!KANBAN_BOOL_KEYS.includes(key)) {
-    return Promise.resolve({ ok: false, error: '不支持的看板开关：' + String(key) });
+    return { ok: false, error: '不支持的看板开关：' + String(key) };
   }
-  return new Promise((resolve) => {
-    const argv = profile.cliArgs(['config', 'set', 'kanban.' + key, on ? 'true' : 'false']);
-    let child = null;
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; clearTimeout(killer); resolve(v); } };
-    const killer = setTimeout(() => {
-      if (child && !child.killed) { try { child.kill('SIGKILL'); } catch {} }
-      finish({ ok: false, error: '写入超时（hermes config set 未在 40s 内返回）' });
-    }, 40000);
-    try {
-      child = execFile(resolveHermesBin(), argv, {
-        timeout: 40000, maxBuffer: 1024 * 1024, env: profile.env({ NO_COLOR: '1' }),
-      }, (err, stdout, stderr) => {
-        const text = String(stdout || '').trim().slice(0, 2000);
-        if (err) {
-          const msg = String((stderr || '').trim() || (err && err.message) || err).split('\n')[0];
-          return finish({ ok: false, error: msg || '写入失败', text });
-        }
-        finish({ ok: true, text, state: kanbanSwitches() });
-      });
-      child.on('error', (e) => finish({ ok: false, error: String(e) }));
-    } catch (e) { finish({ ok: false, error: String(e) }); }
-  });
+  const argv = profile.cliArgs(['config', 'set', 'kanban.' + key, on ? 'true' : 'false']);
+  const r = await execConfigSet(argv);
+  return r.ok ? { ok: true, text: r.text, state: kanbanSwitches() } : { ok: false, error: r.error || '写入失败', text: r.text };
 }
 
 module.exports = {

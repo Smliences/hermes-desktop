@@ -12,10 +12,10 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
 
 const profile = require('./hermes-profile');
 const { resolveHermesBin } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 const curHome = () => profile.home();
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
 
@@ -173,17 +173,17 @@ function overview() {
   };
 }
 
-function run(args, timeout = 60000) {
-  return new Promise((resolve) => {
-    try {
-      const p = spawn(HERMES_BIN, profile.cliArgs(args), { timeout, env: profile.env({ NO_COLOR: '1' }) });
-      let stdout = '', stderr = '';
-      p.stdout.on('data', (d) => { stdout += d; });
-      p.stderr.on('data', (d) => { stderr += d; });
-      p.on('close', (code) => resolve({ ok: code === 0, code, output: (stdout + stderr).trim() }));
-      p.on('error', (err) => resolve({ ok: false, error: String(err), output: '' }));
-    } catch (err) { resolve({ ok: false, error: String(err), output: '' }); }
+async function run(args, timeout = 60000) {
+  const r = await runSpawn(HERMES_BIN, profile.cliArgs(args), {
+    timeout,
+    env: profile.env({ NO_COLOR: '1' }),
   });
+  return {
+    ok: !r.timedOut && r.code === 0,
+    code: r.code,
+    output: (r.stdout + r.stderr).trim(),
+    error: r.timedOut ? '命令超时' : undefined,
+  };
 }
 
 /** 只允许白名单操作；start/stop/restart 会操作系统服务，UI 需二次确认 */

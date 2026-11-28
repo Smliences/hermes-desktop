@@ -696,7 +696,7 @@ function boot() {
     const cfg = loadConfig();
     if (!cfg.model) cfg.model = hermesYamlModel();
     return { hermesBin: bin, hermesFound: fs.existsSync(bin) || bin === 'hermes', version,
-      dbOk, dbPath: sessions.getDB(), config: cfg, profile: profile.current() };
+      dbOk, dbPath: sessions.getDB(), home: os.homedir(), config: cfg, profile: profile.current() };
   }, { config: { model: '', reasoning: 'none', yolo: false } });
 
   /* 提交一个回合。主窗口（hermes:send）与迷你聊天窗（orbchat:send）共用这一条，

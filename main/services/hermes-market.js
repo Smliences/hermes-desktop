@@ -11,7 +11,6 @@
  * 用户配置。写操作只对白名单 op 开放，identifier 经字符校验且用 spawn 数组
  * 传参（不经 shell），不会变成额外 CLI 选项或命令注入。
  */
-const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -19,6 +18,7 @@ const hermesPlugins = require('./hermes-plugins');
 const hermesSkills = require('./hermes-skills');
 const profile = require('./hermes-profile');
 const { resolveHermesBin, safeArg } = require('./hermes-bin');
+const { runSpawn } = require('./hermes-exec');
 const log = require('./logger');
 
 const HERMES_BIN = process.env.HERMES_BIN || resolveHermesBin();
@@ -42,41 +42,19 @@ const _skillCache = new Map();  // key -> { items, at }
 const setEmitter = (fn) => { _emit = typeof fn === 'function' ? fn : null; };
 const progress = (phase, text) => { if (_emit) { try { _emit({ phase, text }); } catch {} } };
 
-function run(args, timeout) {
-  return new Promise((resolve) => {
-    let out = '', err = '', settled = false, hb = null, killTimer = null, hardTimer = null;
-    const done = (r) => {
-      if (settled) return;
-      settled = true;
-      if (hb) clearInterval(hb);
-      clearTimeout(killTimer); clearTimeout(hardTimer);
-      resolve(r);
-    };
-    let p;
-    try {
-      p = spawn(HERMES_BIN, profile.cliArgs(args), { timeout, env: profile.env({ NO_COLOR: '1', TERM: 'dumb' }) });
-    } catch (e) {
-      return done({ code: -1, stdout: '', stderr: String(e), timedOut: false });
-    }
-    // spawn 的 timeout 只发 SIGTERM；git clone / 网络挂起的子进程可能忽略它，
-    // 导致 close 永不触发、串行队列被永久堵死。这里补 SIGKILL 与硬超时兜底。
-    if (timeout) {
-      killTimer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, timeout + 2000);
-      hardTimer = setTimeout(() => {
-        log.warn('market', `hard timeout: ${args.slice(0, 3).join(' ')}`);
-        done({ code: -1, stdout: out, stderr: err + '\n执行超时（已强制结束）', timedOut: true });
-      }, timeout + 5000);
-    }
-    let elapsed = 0;
-    hb = setInterval(() => {
-      elapsed += 8;
-      progress('busy', `仍在执行 hermes ${args.slice(0, 2).join(' ')}… ${elapsed}s`);
-    }, 8000);
-    p.stdout.on('data', (d) => { out += d; });
-    p.stderr.on('data', (d) => { err += d; });
-    p.on('close', (code) => done({ code, stdout: out, stderr: err, timedOut: code === null }));
-    p.on('error', (e) => done({ code: -1, stdout: out, stderr: err + '\n' + String(e), timedOut: false }));
+async function run(args, timeout) {
+  const r = await runSpawn(HERMES_BIN, profile.cliArgs(args), {
+    timeout,
+    killGraceMs: 2000,
+    hardGraceMs: 5000,
+    env: profile.env({ NO_COLOR: '1', TERM: 'dumb' }),
+    heartbeatMs: 8000,
+    onHeartbeat: (elapsed) => progress('busy', `仍在执行 hermes ${args.slice(0, 2).join(' ')}… ${elapsed}s`),
   });
+  if (r.timedOut && r.stderr.includes('执行超时（已强制结束）')) {
+    log.warn('market', `hard timeout: ${args.slice(0, 3).join(' ')}`);
+  }
+  return r;
 }
 
 /** 串行排队：同一时间只跑一条 CLI 命令，避免并发写坏 config.yaml。 */
@@ -179,15 +157,24 @@ function digest(r, limit = 900) {
   return text.slice(-limit);
 }
 
-async function installedNames(kind) {
+/** 作废内存中的市场目录与搜索缓存（切 Profile 时调用，避免读回旧数据）。 */
+function invalidate() {
+  _pluginCatalog = null;
+  _diskTriedProfile = null;
+  _skillCache.clear();
+}
+
+async function installedNames(kind, { cachedOnly = false, triggerRefresh = true } = {}) {
   const set = new Set();
   try {
     if (kind === 'plugins') {
-      const r = await hermesPlugins.listPlugins();
+      const r = await hermesPlugins.listPlugins({ cachedOnly });
       (r.plugins || []).forEach((p) => { set.add(p.name); if (p.configKey) set.add(p.configKey); });
+      if (cachedOnly && r.pending && triggerRefresh) hermesPlugins.listPlugins().catch(() => {});
     } else {
-      const r = await hermesSkills.listSkills();
+      const r = await hermesSkills.listSkills({ cachedOnly });
       (r.skills || []).forEach((s) => set.add(s.name));
+      if (cachedOnly && r.pending && triggerRefresh) hermesSkills.listSkills().catch(() => {});
     }
   } catch {}
   return set;
@@ -232,12 +219,13 @@ async function search(kind, query, opts = {}) {
   const t0 = Date.now();
   const prof = profile.current();
   const force = !!opts.force;
+  const refreshInstalled = opts.refreshInstalled !== false;
 
   if (kind === 'plugins') {
     const args = ['plugins', 'search', ...(q ? [q] : []), '--json'];
     const cached = !force ? readPluginDisk(prof) : null;
     if (cached) {
-      const installed = await installedNames('plugins');
+      const installed = await installedNames('plugins', { cachedOnly: true, triggerRefresh: refreshInstalled });
       const items = attachInstalled(filterPluginItems(cached.items, q), installed);
       const stale = Date.now() - cached.at > PLUGIN_TTL;
       if (stale) refreshPluginCatalog(prof, { background: true });
@@ -255,7 +243,7 @@ async function search(kind, query, opts = {}) {
   if (!force && _skillCache.has(skillKey)) {
     const entry = _skillCache.get(skillKey);
     if (Date.now() - entry.at < SKILL_TTL) {
-      const installed = await installedNames('skills');
+      const installed = await installedNames('skills', { cachedOnly: true, triggerRefresh: refreshInstalled });
       const items = attachInstalled(entry.items.map((it) => ({ ...it })), installed);
       return { ok: true, kind, query: q, items, ms: Date.now() - t0, cached: true, args: ['skills', 'search', q, '--json'] };
     }
@@ -356,4 +344,4 @@ async function checkUpdates(kind) {
   });
 }
 
-module.exports = { search, action, actionArgs, checkUpdates, setEmitter, SOURCES: [...SOURCES] };
+module.exports = { search, action, actionArgs, checkUpdates, setEmitter, invalidate, SOURCES: [...SOURCES] };
