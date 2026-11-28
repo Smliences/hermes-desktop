@@ -114,10 +114,12 @@ function boot() {
   let orbChatLastRunning = null;  // 上一次推给小窗的回合态，避免每次 syncOrb 重复推
   let allowNativeMinimize = false;
   let busyTurns = 0;
+  const busyByTab = new Map();
   let pendingApprovals = 0;
   /** 主窗口渲染层上报的当前会话上下文（tabId / 标题 / 最近消息 / 主题）。
    *  迷你窗靠它绑定「同一个会话」，所以它由渲染层推、主进程只做缓存。 */
   let orbCtx = null;
+  const isOrbTabBusy = () => !!(orbCtx && orbCtx.tabId && (busyByTab.get(orbCtx.tabId) || 0) > 0);
 
   const winStatePath = () => path.join(app.getPath('userData'), 'window-state.json');
   function loadWinState() {
@@ -242,8 +244,9 @@ function boot() {
       try { app.dock.setBadge(pendingApprovals > 0 ? String(pendingApprovals) : ''); } catch {}
     }
     if (orb) orb.setStatus(orbSnapshot());
-    if (orbChat && orbChat.isOpen() && (busyTurns > 0) !== orbChatLastRunning) {
-      pushOrbChatRunning(busyTurns > 0);
+    const tabBusy = isOrbTabBusy();
+    if (orbChat && orbChat.isOpen() && tabBusy !== orbChatLastRunning) {
+      pushOrbChatRunning(tabBusy);
     }
     const chatOpen = !!(orbChat && orbChat.isOpen());
     const hotkeyOnly = !!(orbAccess && orbAccess.prefs().mode === 'hotkey');
@@ -455,7 +458,7 @@ function boot() {
         fontSize: orbCtx && orbCtx.fontSize,
         messages: (orbCtx && orbCtx.messages) || [],
         approvals: Array.from(activeApprovals.values()).filter((a) => !orbCtx || !a.tabId || a.tabId === orbCtx.tabId),
-        running: busyTurns > 0,
+        running: isOrbTabBusy(),
       }),
       onSubmit: (text) => {
         if (!orbCtx || !orbCtx.tabId) return { ok: false, error: '还没有可用的会话，先回主窗口发一条' };
@@ -601,6 +604,7 @@ function boot() {
     orbActive = false;
     if (orbChat) orbChat.close();
     if (orb) orb.hide();
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -707,7 +711,8 @@ function boot() {
     // 否则丢弃 —— session.create 兜底 homedir，绝不把伪造路径交给 CLI。
     if (typeof p.cwd !== 'string' || !path.isAbsolute(p.cwd) || !fs.existsSync(p.cwd)) p.cwd = undefined;
     busyTurns += 1;
-    pushOrbChatRunning(true);
+    if (tabId) busyByTab.set(tabId, (busyByTab.get(tabId) || 0) + 1);
+    if (!orbCtx || orbCtx.tabId === tabId) pushOrbChatRunning(true);
     syncOrb();
     chat.submit(tabId, {
       query: p.query, sessionId: p.sessionId, model: p.model, reasoning: p.reasoning,
@@ -731,7 +736,12 @@ function boot() {
       },
       onClose: (summary) => {
         busyTurns = Math.max(0, busyTurns - 1);
-        pushOrbChatRunning(busyTurns > 0, { summary: summary || null });
+        if (tabId) {
+          const left = (busyByTab.get(tabId) || 0) - 1;
+          if (left > 0) busyByTab.set(tabId, left);
+          else busyByTab.delete(tabId);
+        }
+        if (!orbCtx || orbCtx.tabId === tabId) pushOrbChatRunning(isOrbTabBusy(), { summary: summary || null });
         syncOrb();
         safeSend('hermes:close', { tabId, summary });
         const failed = summary && (summary.aborted || summary.error || (summary.exitCode != null && summary.exitCode !== 0));
@@ -765,7 +775,11 @@ function boot() {
     return { ok: true, path: file };
   });
 
-  handle('hermes:abort', (_e, tabId) => { chat.abort(tabId); return true; });
+  handle('hermes:abort', (_e, tabId, opts) => {
+    if (opts && opts.close) chat.closeTab(tabId);
+    else chat.abort(tabId);
+    return true;
+  });
   handle('hermes:tabState', (_e, tabId) => chat.getTabState(tabId));
   // 后端连接状态：读快照 + 手动重连（掉线时侧栏状态点可点）
   handle('chat:status', () => chat.statusSnapshot());
@@ -1148,6 +1162,7 @@ function boot() {
       hermesSkills.invalidate();
       hermesTools.invalidate();
       hermesMcp.invalidate();
+      hermesMarket.invalidate();
       hermesCommands.invalidate(); // 命令目录按 profile 隔离，切了就作废
       yamlCfg.rewatch();
       chat.startBackend();
@@ -1275,8 +1290,7 @@ function boot() {
   }
   handle('hermes:approval-respond', (_e, payload) => {
     const p = payload || {};
-    respondApproval(p.requestId, p.choice, p.tabId);
-    return true;
+    return respondApproval(p.requestId, p.choice, p.tabId);
   });
 
   /* 主窗口渲染层上报当前会话上下文（节流后的快照）。
@@ -1299,7 +1313,7 @@ function boot() {
         done: !m || m.done !== false,
       })) : [],
     };
-    if (orbChat && orbChat.isOpen()) orbChat.pushSync();
+    if (orbChat && orbChat.isOpen()) { orbChat.pushSync(); syncOrb(); }
   });
 
   // 小球模式：命令面板 / 菜单之外的第三个入口（渲染层主动收起）

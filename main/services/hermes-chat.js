@@ -20,6 +20,7 @@ const path = require('path');
 const { HermesBackend, resolveHermesBin, DEFAULT_HERMES } = require('./hermes-backend');
 const { GatewayConnection } = require('./gateway-client');
 const profile = require('./hermes-profile');
+const hermesCommands = require('./hermes-commands');
 const log = require('./logger');
 
 /** 树投影里的项目 id（slug / p_xxx / 绝对路径）只允许这些字符，且不许 .. 跳出。 */
@@ -592,6 +593,7 @@ class ChatChannel {
     this.liveByTab.clear();
     this.activeTurns.clear();
     for (const tab of this.tabs.values()) tab.liveId = '';
+    hermesCommands.invalidateLiveSessions();
   }
 
   /** 后端换代 / 掉线：关连接、废活会话、清空排队，避免重连旧端口或把旧 liveId 打给新后端。 */
@@ -890,6 +892,16 @@ class ChatChannel {
       try { q.callbacks.onClose && q.callbacks.onClose({ aborted: true, exitCode: 130 }); } catch {}
     }
     if (tab.current) tab.current.abort();
+  }
+
+  /** 页签关闭：中止在途回合与排队，并释放主进程 Map 与 liveId 映射，避免长期运行泄漏。 */
+  closeTab(tabId) {
+    if (!tabId) return;
+    this.abort(tabId);
+    for (const [lid, tid] of this.liveByTab) {
+      if (tid === tabId) this.liveByTab.delete(lid);
+    }
+    this.tabs.delete(tabId);
   }
 
   abortAll() { for (const tabId of this.tabs.keys()) this.abort(tabId); }

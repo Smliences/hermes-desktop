@@ -481,9 +481,8 @@ function renderItem(item, header = false, sub = false) {
   } else if (item.kind === 'approval') {
     el.className = 'msg msg-approval';
     const actions = item.choice
-      ? `<span class="ap-done ${item.choice === 'deny' ? 'no' : 'yes'}">${item.choice === 'deny' ? '已拒绝' : '已允许'}</span>`
+      ? `<span class="ap-done ${item.choice === 'deny' ? 'no' : 'yes'}">${item.choice === 'deny' ? (item.expired ? '已超时/已失效' : '已拒绝') : '已允许'}</span>`
       : `<button type="button" class="ap-btn ap-allow" data-ap="approve">允许</button>
-         <button type="button" class="ap-btn ap-always" data-ap="always">始终允许</button>
          <button type="button" class="ap-btn ap-deny" data-ap="deny">拒绝</button>`;
     el.innerHTML = `<div class="approval-card">
       <div class="ap-head"><span class="ap-dot"></span><b>需要确认危险操作</b></div>
@@ -604,7 +603,7 @@ function routeEvent(evt, explicitTabId) {
   }
   if (evt.type === 'system' && evt.subtype === 'init') {
     if (evt.session_id && !tab.sessionId) { tab.sessionId = evt.session_id; refreshSessions($('#session-search').value.trim()); }
-    if (evt.model) { tab.model = evt.model; updateStatus(); }
+    if (evt.model) { tab.model = evt.model; if (visible) updateStatus(); }
   } else if (evt.type === 'text') {
     let last = tab.items[tab.items.length - 1];
     if (!last || last.kind !== 'assistant' || last.done) {
@@ -692,7 +691,7 @@ function routeEvent(evt, explicitTabId) {
   } else if (evt.type === 'usage') {
     // 后端 session.usage（回合中按间隔推送 / resume 初值）：token、tps、上下文占用
     tab.usage = evt.usage || null;
-    updateStatus();
+    if (visible) updateStatus();
   } else if (evt.type === 'result') {
     if (tab._rafText) { cancelAnimationFrame(tab._rafText); tab._rafText = 0; }
     tab.lastResult = evt;

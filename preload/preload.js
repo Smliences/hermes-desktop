@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('hermesAPI', {
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
   saveClipboardImage: (dataUrl) => ipcRenderer.invoke('chat:saveClipboardImage', String(dataUrl || '')),
   send: (payload) => ipcRenderer.invoke('hermes:send', payload),
-  abort: (tabId) => ipcRenderer.invoke('hermes:abort', tabId),
+  abort: (tabId, opts) => ipcRenderer.invoke('hermes:abort', tabId, opts),
   tabState: (tabId) => ipcRenderer.invoke('hermes:tabState', tabId),
   // 后端连接状态（不含 token）：读快照、手动重连、订阅变化
   backendStatus: () => ipcRenderer.invoke('chat:status'),

@@ -747,6 +747,10 @@ async function openSession(sessionId) {
     const inp = $('#input');
     if (inp && inp._draftTimer) { clearTimeout(inp._draftTimer); inp._draftTimer = null; }
     if (typeof saveDraftFor === 'function') saveDraftFor(cur);
+    cur.attachments = [];
+    cur.queued = [];
+    if (typeof renderAttach === 'function') renderAttach();
+    if (typeof renderQueue === 'function') renderQueue();
   }
   // loading 标记阻止连点两次复用同一个空 tab，导致两份历史互相覆盖
   const tab = reuse ? cur : newTab(sessionId, '新会话', true);

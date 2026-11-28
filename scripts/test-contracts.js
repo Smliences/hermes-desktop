@@ -2203,7 +2203,7 @@ t('连接轨只在主进程下发 running=true 时呼吸，走既有 orbchat:sta
   }
   const evtBody = ocJsSrc.slice(ocJsSrc.indexOf('function onEvent'), ocJsSrc.indexOf('/* ---------------- 发送'));
   assert.ok(!/dataset\.running|applyTurnState/.test(evtBody), '不得根据本地事件流自造回合态');
-  assert.ok(/running: busyTurns > 0/.test(mainSrc), '主进程快照必须带真实在途回合数');
+  assert.ok(/running: isOrbTabBusy\(\)/.test(mainSrc) && /busyByTab/.test(mainSrc), '主进程快照必须按聚焦页签统计真实在途回合数');
   assert.ok(/function pushOrbChatRunning\(/.test(mainSrc) && /pushOrbChatRunning\(true\)/.test(mainSrc));
   assert.ok(/orbchat:state/.test(ocPreSrc) && /pushState/.test(ocSrc), '不新增 IPC 通道');
 });

@@ -50,6 +50,8 @@ let _inflight = null;
 const _liveByStored = new Map();
 
 function invalidate() { _cache = null; _inflight = null; _liveByStored.clear(); }
+/** 仅清理活会话 id 映射（serve 重启但未切 profile 时调用，目录缓存仍可复用）。 */
+function invalidateLiveSessions() { _liveByStored.clear(); }
 
 /** 命令名白名单：它是从后端拿的字符串，进 DOM 前仍要保证形状干净。 */
 const CMD_RE = /^\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
@@ -245,4 +247,4 @@ async function exec(gw, { sessionId, command } = {}) {
   }
 }
 
-module.exports = { catalog, exec, invalidate, normalizeCatalog, DESKTOP_OWN };
+module.exports = { catalog, exec, invalidate, invalidateLiveSessions, normalizeCatalog, DESKTOP_OWN };

@@ -180,9 +180,17 @@ function createOrb(opts) {
     return win;
   }
 
-  /* ---- IPC ---- */
+  /* ---- IPC & 多屏适配 ---- */
   const own = (event) => win && !win.isDestroyed() && event.sender === win.webContents;
-  ipcMain.on('orb:drag', (event, p) => {
+  const onDisplayChange = () => {
+    if (!win || win.isDestroyed()) return;
+    const pos = clampToDisplay(win.getBounds());
+    win.setPosition(pos.x, pos.y);
+  };
+  screen.on('display-removed', onDisplayChange);
+  screen.on('display-metrics-changed', onDisplayChange);
+
+  const onDrag = (event, p) => {
     if (!own(event) || !p) return;
     const x = Number(p.x);
     const y = Number(p.y);
@@ -195,23 +203,28 @@ function createOrb(opts) {
     }
     const target = clampToDisplay({ x, y });
     win.setPosition(Math.round(target.x), Math.round(target.y));
-  });
-  ipcMain.on('orb:dragend', (event) => {
+  };
+  const onDragEnd = (event) => {
     if (!own(event)) return;
     dragging = false;
     savePos();   // 立即写盘，不等定时器
-  });
-  ipcMain.on('orb:click', (event) => {
+  };
+  const onClick = (event) => {
     if (!own(event)) return;
     (opts.onClick || opts.onRestore)();
-  });
-  ipcMain.on('orb:restore', (event) => { if (own(event)) opts.onRestore(); });
-  ipcMain.on('orb:menu', (event) => {
+  };
+  const onRestore = (event) => { if (own(event)) opts.onRestore(); };
+  const onMenu = (event) => {
     if (!own(event)) return;
     Promise.resolve(contextMenu()).catch((err) => {
       log.warn('orb', 'menu failed', { err: String((err && err.message) || err) });
     });
-  });
+  };
+  ipcMain.on('orb:drag', onDrag);
+  ipcMain.on('orb:dragend', onDragEnd);
+  ipcMain.on('orb:click', onClick);
+  ipcMain.on('orb:restore', onRestore);
+  ipcMain.on('orb:menu', onMenu);
 
   function show(next) {
     status = next || status;
@@ -251,6 +264,15 @@ function createOrb(opts) {
 
   function destroy() {
     dragging = false;
+    try {
+      screen.removeListener('display-removed', onDisplayChange);
+      screen.removeListener('display-metrics-changed', onDisplayChange);
+    } catch {}
+    ipcMain.removeListener('orb:drag', onDrag);
+    ipcMain.removeListener('orb:dragend', onDragEnd);
+    ipcMain.removeListener('orb:click', onClick);
+    ipcMain.removeListener('orb:restore', onRestore);
+    ipcMain.removeListener('orb:menu', onMenu);
     if (win && !win.isDestroyed()) win.destroy();
     win = null;
   }

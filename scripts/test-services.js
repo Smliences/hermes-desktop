@@ -2578,6 +2578,35 @@ async function run() {
     }
   });
 
+  await t('ChatChannel.closeTab 与后端重启联动清理 liveId / 斜杠缓存', async () => {
+    const fakeBackend = { generation: 1, token: 't', start: async () => 12345, stop() {} };
+    const ch = new ChatChanCls('', { backend: fakeBackend, createGateway: () => ({ connected: true, close() {}, rpc: async () => ({}) }) });
+    ch.tabs.set('tab-x', { queue: [], current: null, sessionId: 's-x', liveId: 'l-x', storedId: 's-x', model: '' });
+    ch.liveByTab.set('l-x', 'tab-x');
+    ch.closeTab('tab-x');
+    assert.strictEqual(ch.tabs.has('tab-x'), false, '关闭页签必须从 ChatChannel.tabs 清理');
+    assert.strictEqual(ch.liveByTab.has('l-x'), false, '关闭页签必须清理 liveByTab 映射');
+
+    // _resetLiveSessions 必须触发 hermes-commands.invalidateLiveSessions()
+    const cmdMod = loaded['hermes-commands.js'];
+    let slashCalls = 0;
+    const mockGw = {
+      connected: true,
+      async rpc(method, params) {
+        if (method === 'session.resume') return { session_id: 'live-cmd-' + slashCalls };
+        if (method === 'slash.exec') { slashCalls += 1; return { type: 'exec', output: 'ok:' + params.session_id }; }
+        return {};
+      },
+    };
+    const r1 = await cmdMod.exec(mockGw, { sessionId: 'stored-cmd', command: '/status' });
+    assert.strictEqual(r1.ok, true);
+    assert.strictEqual(r1.text, 'ok:live-cmd-0');
+    ch._resetLiveSessions();
+    const r2 = await cmdMod.exec(mockGw, { sessionId: 'stored-cmd', command: '/status' });
+    assert.strictEqual(r2.ok, true);
+    assert.strictEqual(r2.text, 'ok:live-cmd-1', '_resetLiveSessions 后应重取 liveId 而非沿用旧映射');
+  });
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
   console.log('\n' + '─'.repeat(56));

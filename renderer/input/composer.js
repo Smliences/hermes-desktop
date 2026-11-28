@@ -67,7 +67,9 @@ async function send(text, displayText, targetTab) {
     if (displayText) return;
     if (!Array.isArray(tab.queued)) tab.queued = [];
     if (tab.queued.length >= 5) { toast('发送队列已满（最多 5 条）', 2000); return; }
-    tab.queued.push({ text });
+    const queuedAtts = tabAttachments(tab).slice();
+    tab.queued.push({ text, attachments: queuedAtts });
+    if (queuedAtts.length) { tab.attachments = []; renderAttach(); }
     renderQueue();
     if (visible) { $('#input').value = ''; autoGrow(); updateCount(); slashClose(); }
     toast(`已加入发送队列（待发 ${tab.queued.length} 条）`, 1800);
@@ -181,16 +183,20 @@ function handleClose({ tabId, summary }) {
     syncActivityBar(); syncComposerState();
     a11y(s.aborted ? '本轮已停止' : '本轮回复已完成');
   }
-  // 窗口在后台时给一条系统通知（Electron renderer 原生支持，权限未授予则静默跳过）
-  if (document.hidden && !s.aborted && typeof Notification !== 'undefined') {
-    try { if (Notification.permission === 'granted') new Notification('Hermes', { body: '本轮回复已完成' }); } catch {}
-  }
+  // 非聚焦完成通知已统一由主进程 notifyDesktop 发送（带点击回焦与 orb 态判断），避免双弹
   refreshSessions($('#session-search').value.trim());
   if (tab.sessionId && hasNative) api.sessionStats(tab.sessionId).then(() => updateStatus()).catch(() => {});
   if (!s.aborted && Array.isArray(tab.queued) && tab.queued.length) {
     const next = tab.queued.shift();
     renderQueue();
-    if (next && next.text) setTimeout(() => { if (state.tabs.includes(tab)) send(next.text, undefined, tab); }, 60);
+    if (next && next.text) setTimeout(() => {
+      if (!state.tabs.includes(tab)) return;
+      if (Array.isArray(next.attachments) && next.attachments.length) {
+        tab.attachments = next.attachments;
+        renderAttach();
+      }
+      send(next.text, undefined, tab);
+    }, 60);
   } else {
     renderQueue();
   }
@@ -311,7 +317,8 @@ function renderQueue() {
     row.setAttribute('role', 'listitem');
     const lbl = document.createElement('span');
     lbl.className = 'qi-text';
-    lbl.textContent = '◷ 排队中：' + String(entry.text || '').replace(/\s+/g, ' ').slice(0, 80);
+    const attCount = Array.isArray(entry.attachments) ? entry.attachments.length : 0;
+    lbl.textContent = '◷ 排队中：' + String(entry.text || '').replace(/\s+/g, ' ').slice(0, 80) + (attCount ? ` · 📎${attCount}` : '');
     const rm = document.createElement('button');
     rm.type = 'button'; rm.className = 'qi-x'; rm.textContent = '×';
     rm.title = '取消排队';

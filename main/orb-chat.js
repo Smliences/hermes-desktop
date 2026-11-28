@@ -14,6 +14,7 @@
  */
 const { BrowserWindow, ipcMain, screen, shell } = require('electron');
 const path = require('path');
+const { WIN: ORB_WIN } = require('./orb');
 
 const W = 380;
 const H = 520;
@@ -63,7 +64,7 @@ function createOrbChat(opts) {
   /** 兜底锚点：球窗口意外不在时，贴主屏右下角（和球的默认位置一致） */
   function defaultAnchor() {
     const a = screen.getPrimaryDisplay().workArea;
-    return { x: a.x + a.width - 68 - 24, y: a.y + Math.round(a.height * 0.62), width: 68, height: 68 };
+    return { x: a.x + a.width - ORB_WIN - 24, y: a.y + Math.round(a.height * 0.62), width: ORB_WIN, height: ORB_WIN };
   }
 
   /** 贴着球摆：球在屏幕左半边就开在右边，反之开在左边；垂直方向对齐球心 */
@@ -103,7 +104,7 @@ function createOrbChat(opts) {
     const anchor = opts.getAnchor() || defaultAnchor();
     if (!win || win.isDestroyed()) return 'right';
     const b = win.getBounds();
-    const ballCenter = anchor.x + (anchor.width || 68) / 2;
+    const ballCenter = anchor.x + (anchor.width || ORB_WIN) / 2;
     return ballCenter >= b.x + b.width / 2 ? 'right' : 'left';
   }
 
@@ -225,8 +226,8 @@ function createOrbChat(opts) {
     const p = payload || {};
     const choice = p.choice === 'deny' ? 'deny' : p.choice === 'always' ? 'always' : 'approve';
     if (!p.requestId) return { ok: false, error: '缺少 requestId' };
-    opts.onApprove(String(p.requestId), choice);
-    return { ok: true };
+    const ok = opts.onApprove(String(p.requestId), choice);
+    return ok ? { ok: true } : { ok: false, error: '审批已超时或已处理' };
   });
 
   ipcMain.on('orbchat:close', (event) => { if (own(event)) close(); });

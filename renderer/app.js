@@ -340,8 +340,13 @@ function setActiveTab(id, silent) {
 }
 function closeTab(id) {
   const i = state.tabs.findIndex((t) => t.id === id);
+  if (i < 0) return;
   const tab = state.tabs[i];
-  if (tab?.running && hasNative) api.abort(id);
+  if (tab._rafText) { cancelAnimationFrame(tab._rafText); tab._rafText = 0; }
+  for (const [tid, tb] of state.turnTab) {
+    if (tb === id) state.turnTab.delete(tid);
+  }
+  if (hasNative && api.abort) api.abort(id, { close: true });
   state.tabs.splice(i, 1);
   if (!state.tabs.length) newTab();
   else if (state.activeTabId === id) setActiveTab(state.tabs[Math.max(0, i - 1)].id);
@@ -1121,7 +1126,16 @@ function resolveApproval(item, choice, silent) {
   item.choice = choice === 'deny' ? 'deny' : 'approve';
   item.always = choice === 'always';
   if (hasNative && api.approvalRespond) {
-    Promise.resolve(api.approvalRespond({ requestId: item.requestId, choice, tabId: item.tabId })).catch(() => {});
+    Promise.resolve(api.approvalRespond({ requestId: item.requestId, choice, tabId: item.tabId }))
+      .then((ok) => {
+        if (ok === false) {
+          item.choice = 'deny';
+          item.expired = true;
+          if (item.tabId === state.activeTabId) renderChat();
+          if (!silent) toast('该审批已超时或已在小窗处理', 2200);
+        }
+      })
+      .catch(() => {});
   }
   if (item.tabId === state.activeTabId) renderChat();
   if (!silent) toast(choice === 'deny' ? '已拒绝该操作' : '已允许该操作', 1500);

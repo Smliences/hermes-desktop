@@ -655,7 +655,13 @@ function decide(it, choice) {
   if (!it || it.choice) return;
   it.choice = choice === 'deny' ? 'deny' : 'approve';
   bump();
-  try { api.approve(it.requestId, choice); } catch { /* 主进程已过期 */ }
+  Promise.resolve(api.approve(it.requestId, choice)).then((r) => {
+    if (r && r.ok === false) {
+      it.choice = 'deny';
+      setStatus(r.error || '审批已超时或已处理', true);
+      bump();
+    }
+  }).catch(() => {});
 }
 
 function stop() {
