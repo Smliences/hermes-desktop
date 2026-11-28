@@ -100,13 +100,27 @@ t('package.json main 指向真实入口', () => {
   assert(pkg.main && exists(pkg.main), 'main 入口不存在：' + pkg.main);
 });
 
-t('index.html 引用的本地脚本 / 样式 / 图片都存在', () => {
-  const html = read('renderer/index.html');
-  const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1])
-    .filter((u) => !/^(https?:|data:|#|blob:|mailto:)/.test(u));
-  for (const r of refs) {
-    const rel = path.join('renderer', r.replace(/^\.\//, ''));
-    assert(exists(rel), 'index.html 引用了不存在的资源：' + r);
+t('HTML 入口引用的本地脚本 / 样式 / 图片都存在，且无孤立静态资源', () => {
+  const refs = new Set();
+  for (const page of ['renderer/index.html', 'renderer/orb.html', 'renderer/orb-chat.html']) {
+    assert(exists(page), '缺少渲染层入口页面：' + page);
+    const html = read(page);
+    const localRefs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1])
+      .filter((u) => !/^(https?:|data:|#|blob:|mailto:)/.test(u));
+    for (const r of localRefs) {
+      const rel = path.normalize(path.join('renderer', r.replace(/^\.\//, '')));
+      assert(exists(rel), `${page} 引用了不存在的资源：${r}`);
+      refs.add(rel);
+    }
+  }
+  const assetsDir = path.join(ROOT, 'renderer/assets');
+  if (fs.existsSync(assetsDir)) {
+    const codeText = [...fs.readdirSync(path.join(ROOT, 'renderer/chat'))].map((f) => read(path.join('renderer/chat', f))).join('\n')
+      + read('renderer/app.js');
+    for (const name of fs.readdirSync(assetsDir)) {
+      const rel = path.join('renderer/assets', name);
+      assert(refs.has(rel) || codeText.includes(`assets/${name}`), '存在未被引用的孤立资源：' + rel);
+    }
   }
 });
 

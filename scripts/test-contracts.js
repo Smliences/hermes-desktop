@@ -50,7 +50,7 @@ const KB_APP_FILES = [
   'renderer/kanban-modal.js',
   'renderer/kanban.js',
 ];
-const RENDERER_SUBDIRS = ['core', 'sidebar', 'chat', 'preview', 'input', 'shortcuts'];
+const RENDERER_SUBDIRS = ['core', 'sidebar', 'chat', 'preview', 'input', 'shortcuts', 'settings'];
 const appSrc = [
   ...RENDERER_SUBDIRS.flatMap((d) => readTree(`renderer/${d}`, '.js')),
   'renderer/app.js',
