@@ -34,7 +34,12 @@ function highlightCode(lang, raw) {
   if (!l || l === 'text' || l === 'txt' || l === 'log') return esc(raw);
   const hashCmt = /^(py|python|sh|bash|zsh|shell|yaml|yml|toml|rb|ruby|r|pl|perl|conf|ini|dockerfile|makefile)$/.test(l);
   const slashCmt = /^(js|javascript|ts|typescript|jsx|tsx|mjs|cjs|c|cpp|cc|cxx|h|hpp|java|go|rs|rust|css|scss|less|json|jsonc|swift|kt|kotlin|php)$/.test(l);
-  const re = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|--[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\\n])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b)/g;
+  const parts = [];
+  if (slashCmt) parts.push('\\/\\/[^\\n]*', '\\/\\*[\\s\\S]*?\\*\\/');
+  if (hashCmt) parts.push('#[^\\n]*');
+  if (l === 'sql') parts.push('--[^\\n]*');
+  parts.push('"(?:\\\\.|[^"\\\\\\n])*"', "'(?:\\\\.|[^'\\\\\\n])*'", '`(?:\\\\.|[^`\\\\\\n])*`', '\\b\\d+(?:\\.\\d+)?\\b', '\\b[A-Za-z_]\\w*\\b');
+  const re = new RegExp(`(${parts.join('|')})`, 'g');
   let out = '';
   let last = 0;
   let m;

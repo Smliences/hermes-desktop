@@ -1350,6 +1350,22 @@ function boot() {
     setTimeout(fitWindowToDisplay, 300);
     screen.on('display-metrics-changed', () => setTimeout(fitWindowToDisplay, 300));
     screen.on('display-removed', () => setTimeout(fitWindowToDisplay, 300));
+    // 异步清理超过 24 小时的剪贴板临时截图，避免 temp/hermes-clipboard 只增不减
+    const clipCleanTimer = setTimeout(async () => {
+      try {
+        const dir = path.join(app.getPath('temp'), 'hermes-clipboard');
+        const names = await fs.promises.readdir(dir);
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        await Promise.all(names.map(async (name) => {
+          const p = path.join(dir, name);
+          try {
+            const st = await fs.promises.stat(p);
+            if (st.isFile() && st.mtimeMs < cutoff) await fs.promises.unlink(p);
+          } catch {}
+        }));
+      } catch {}
+    }, 5000);
+    if (clipCleanTimer.unref) clipCleanTimer.unref();
   });
   app.on('window-all-closed', () => { chat.abortAll(); if (process.platform !== 'darwin') app.quit(); });
   app.on('will-quit', () => {

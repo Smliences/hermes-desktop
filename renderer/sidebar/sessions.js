@@ -116,9 +116,9 @@ function sessionItemEl(s, { query = '', snippet = '' } = {}) {
     (snippet ? `<span class="s-snippet">${hlMark(snippet, query)}</span>` : '') + `</span>` +
     `<span class="s-actions" role="button" tabindex="0" aria-label="会话操作" title="会话操作">⋯</span>` +
     `<span class="s-meta">${s.pinned ? '⌁ ' : ''}${when}</span>`;
-  // 从搜索结果点进来：把查询词带进会话内查找，直接落到命中位置并高亮，
+  // 从搜索结果点进来 / 键盘回车：把查询词带进会话内查找，直接落到命中位置并高亮，
   // 省掉「打开会话 → 再自己搜一次」的往返。
-  li.onclick = () => {
+  const activate = () => {
     const carry = s.fulltext ? query : '';
     const p = openSession(s.id);
     if (carry && p && typeof p.then === 'function') {
@@ -129,9 +129,10 @@ function sessionItemEl(s, { query = '', snippet = '' } = {}) {
       });
     }
   };
+  li.onclick = activate;
   li.onkeydown = (e) => {
     if (e.target !== li) return; // 让 ⋯ 自己处理，避免冒泡后重复触发
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSession(s.id); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
   };
   const acts = li.querySelector('.s-actions');
   acts.onclick = (e) => { e.stopPropagation(); openSessionMenu(s, acts); };

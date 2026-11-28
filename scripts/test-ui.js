@@ -1009,21 +1009,22 @@ let CHROME_BIN = null;
   console.log('\nS18 富文本高亮折叠、预览历史与消息排队');
   const s18Md = await cdp.ev(`(() => {
     const longCode = Array.from({ length: 35 }, (_, i) => 'const x' + i + ' = ' + i + ';').join('\\n');
-    const html = renderMarkdown('\`\`\`js\\n' + longCode + '\\n\`\`\`\\n\\n| A | B |\\n| --- | --- |\\n| 1 | 2 |');
+    const html = renderMarkdown('\`\`\`js\\n' + longCode + '\\n\`\`\`\\n\\n\`\`\`css\\n.box { color: #3f3e39; z-index: 2; font-family: "Inter"; }\\n\`\`\`\\n\\n| A | B |\\n| --- | --- |\\n| 1 | 2 |');
     const box = document.createElement('div');
     box.innerHTML = html;
     document.querySelector('#chat').appendChild(box);
     const codeEl = box.querySelector('.md-code');
     const foldBtn = box.querySelector('.md-code-fold');
     const hasKw = !!box.querySelector('.hl-kw');
+    const cssNum = !!box.querySelectorAll('.md-code pre')[1]?.querySelector('.hl-num');
     const collapsedBefore = !!codeEl && codeEl.classList.contains('collapsed');
     if (foldBtn) foldBtn.click();
     const collapsedAfter = !!codeEl && codeEl.classList.contains('collapsed');
     const tblBtns = [...box.querySelectorAll('.md-table-copy')].map((b) => b.dataset.fmt);
     box.remove();
-    return { hasKw, collapsedBefore, collapsedAfter, tblBtns };
+    return { hasKw, cssNum, collapsedBefore, collapsedAfter, tblBtns };
   })()`);
-  ok('超 30 行代码块默认折叠、支持语法高亮与展开/收起切换', s18Md.hasKw && s18Md.collapsedBefore && !s18Md.collapsedAfter, JSON.stringify(s18Md));
+  ok('超 30 行代码块默认折叠、支持语法高亮与展开/收起切换（CSS #色值不吞行尾）', s18Md.hasKw && s18Md.cssNum && s18Md.collapsedBefore && !s18Md.collapsedAfter, JSON.stringify(s18Md));
   ok('GFM 表格渲染 Markdown 与 CSV 复制按钮', s18Md.tblBtns.includes('md') && s18Md.tblBtns.includes('csv'), JSON.stringify(s18Md.tblBtns));
 
   await cdp.ev(`(async () => { toggleRail(true); setRailTab('preview'); await loadPreviewInput('/tmp/demo/report.md'); await loadPreviewInput('/tmp/demo/data.csv'); })()`);

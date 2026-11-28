@@ -2607,6 +2607,67 @@ async function run() {
     assert.strictEqual(r2.text, 'ok:live-cmd-1', '_resetLiveSessions 后应重取 liveId 而非沿用旧映射');
   });
 
+  await t('Gateway configPlatforms 兼容多缩进 / Tab / 行尾注释与布尔简写', () => {
+    const cfgFile = path.join(hermesRoot, 'config.yaml');
+    const prevCfg = fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile, 'utf8') : null;
+    fs.writeFileSync(cfgFile, [
+      'platforms: # header comment',
+      '    telegram:',
+      '        enabled: true # keep running',
+      '\tdiscord: false',
+      '    slack:',
+      '      enabled: false',
+      'other_section:',
+      '  telegram: false',
+    ].join('\n'));
+    try {
+      const ov = gwSvc2.overview();
+      const byKey = new Map(ov.platforms.map((p) => [p.key, p]));
+      assert.strictEqual(byKey.get('telegram').declared, true);
+      assert.strictEqual(byKey.get('telegram').enabled, true);
+      assert.strictEqual(byKey.get('discord').declared, true);
+      assert.strictEqual(byKey.get('discord').enabled, false);
+      assert.strictEqual(byKey.get('slack').declared, true);
+      assert.strictEqual(byKey.get('slack').enabled, false);
+    } finally {
+      if (prevCfg === null) { try { fs.unlinkSync(cfgFile); } catch {} }
+      else fs.writeFileSync(cfgFile, prevCfg);
+    }
+  });
+
+  if (sqliteReady) {
+    await t('listSessions 按 last_activity_at 倒序且兼容旧库缺列，storageStats 计入 WAL', async () => {
+      const prevDB = process.env.HERMES_DB;
+      const actDB = path.join(tmp, 'activity-state.db');
+      execFileSync('sqlite3', [actDB, [
+        'CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, display_name TEXT, title_source TEXT, model TEXT, message_count INTEGER, input_tokens INTEGER, output_tokens INTEGER, started_at REAL, ended_at REAL, last_activity_at REAL, end_reason TEXT, source TEXT, pinned INTEGER, archived INTEGER, hidden INTEGER);',
+        'CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT);',
+        "INSERT INTO sessions(id,title,started_at,ended_at,last_activity_at,pinned) VALUES('s-old-start','OldStartRecentAct',100,100,900,0);",
+        "INSERT INTO sessions(id,title,started_at,ended_at,last_activity_at,pinned) VALUES('s-new-start','NewStartOldAct',500,500,600,0);",
+      ].join('')], { stdio: 'ignore' });
+      process.env.HERMES_DB = actDB;
+      const rows = await sessions.listSessions({ limit: 10 });
+      assert.strictEqual(rows[0].id, 's-old-start', '应按 last_activity_at 倒序排在最前');
+      fs.writeFileSync(actDB + '-wal', Buffer.alloc(1024));
+      fs.writeFileSync(actDB + '-shm', Buffer.alloc(512));
+      const st = await sessions.storageStats();
+      assert.ok(st.walBytes >= 1536, 'storageStats 应统计 -wal / -shm 体积');
+      assert.ok(st.dbBytes >= fs.statSync(actDB).size + 1536, 'dbBytes 应包含主库与 WAL/SHM');
+
+      const legacyDB = path.join(tmp, 'legacy-list.db');
+      execFileSync('sqlite3', [legacyDB, [
+        'CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, display_name TEXT, title_source TEXT, model TEXT, message_count INTEGER, input_tokens INTEGER, output_tokens INTEGER, started_at REAL, ended_at REAL, end_reason TEXT, source TEXT, pinned INTEGER, archived INTEGER, hidden INTEGER);',
+        'CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT);',
+        "INSERT INTO sessions(id,title,started_at,ended_at,pinned) VALUES('s-leg','Legacy',200,400,0);",
+      ].join('')], { stdio: 'ignore' });
+      process.env.HERMES_DB = legacyDB;
+      const legRows = await sessions.listSessions({ limit: 10 });
+      assert.strictEqual(legRows.length, 1);
+      assert.strictEqual(legRows[0].id, 's-leg');
+      process.env.HERMES_DB = prevDB;
+    });
+  }
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
   console.log('\n' + '─'.repeat(56));

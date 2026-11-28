@@ -43,11 +43,27 @@ function sqliteExec(sql, db) {
   });
 }
 
+let _sessColsDb = '';
+let _sessColsSet = null;
+async function sessionColumns(db) {
+  const target = db || getDB();
+  if (_sessColsSet && _sessColsDb === target) return _sessColsSet;
+  const info = await sqliteExec('PRAGMA table_info(sessions)', target);
+  const s = new Set(info.map((r) => r.name));
+  if (s.size) { _sessColsDb = target; _sessColsSet = s; }
+  return s;
+}
+
 /** 列出最近会话。profileName 只接受合法且真实存在的名字，用于「球菜单」
  *  在不切换当前 profile 的前提下读其它实例的会话（纯只读、白名单路径）。 */
 async function listSessions({ limit = 50, search = '', profileName = '' } = {}) {
   const db = profileName && profile.validName(profileName) && profile.exists(profileName)
     ? profile.dbPath(profileName) : getDB();
+  const cols = await sessionColumns(db);
+  if (!cols.size) return [];
+  const lastExpr = cols.has('last_activity_at')
+    ? 'COALESCE(NULLIF(s.last_activity_at,0), NULLIF(s.ended_at,0), s.started_at, 0)'
+    : 'COALESCE(NULLIF(s.ended_at,0), s.started_at, 0)';
   // 只按标题/ID 过滤；正文命中走 FTS（searchMessages），避免 messages LIKE 全表扫（实测 849ms）
   const where = search
     ? `WHERE s.id LIKE ${lit('%' + search + '%')}
@@ -62,10 +78,10 @@ async function listSessions({ limit = 50, search = '', profileName = '' } = {}) 
             COALESCE(s.title_source,'') AS title_source,
             s.model, s.message_count,
             s.input_tokens, s.output_tokens, s.started_at, s.ended_at,
-            COALESCE(s.ended_at, s.started_at) AS last_active, s.end_reason, s.source,
+            ${lastExpr} AS last_active, s.end_reason, s.source,
             COALESCE(s.pinned,0) AS pinned, COALESCE(s.archived,0) AS archived, COALESCE(s.hidden,0) AS hidden
      FROM sessions s ${where}
-     ORDER BY COALESCE(s.pinned,0) DESC, s.started_at DESC LIMIT ${num(limit, 50, 200)}`,
+     ORDER BY COALESCE(s.pinned,0) DESC, last_active DESC LIMIT ${num(limit, 50, 200)}`,
     db
   );
   return rows.map((r) => ({ ...r, title: r.title || r.id }));
@@ -185,9 +201,13 @@ async function searchMessages(query, { limit = 40 } = {}) {
   }));
 }
 
-/** 会话库空间统计（只读）：库大小、页数、可回收空间、会话/消息数量与时间跨度。 */
+/** 会话库空间统计（只读）：库大小（含 -wal/-shm）、页数、可回收空间、会话/消息数量与时间跨度。 */
 async function storageStats() {
-  const dbBytes = fs.existsSync(getDB()) ? fs.statSync(getDB()).size : 0;
+  const db = getDB();
+  const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return 0; } };
+  const mainBytes = sizeOf(db);
+  const walBytes = sizeOf(db + '-wal') + sizeOf(db + '-shm');
+  const dbBytes = mainBytes + walBytes;
   const q = async (sql) => { try { return (await sqliteExec(sql))[0] || {}; } catch { return {}; } };
   const [pg, sess, msgs, arch, pin, span] = await Promise.all([
     q('SELECT (SELECT page_count FROM pragma_page_count()) AS page_count, (SELECT page_size FROM pragma_page_size()) AS page_size, (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count'),
@@ -201,7 +221,7 @@ async function storageStats() {
   const pageSize = Number(pg.page_size) || 4096;
   const freePages = Number(pg.freelist_count) || 0;
   return {
-    ok: true, dbPath: getDB(), dbBytes, pageCount, pageSize,
+    ok: true, dbPath: db, dbBytes, walBytes, pageCount, pageSize,
     freeBytes: freePages * pageSize, freePages,
     sessions: Number(sess.sessions) || 0, messages: Number(msgs.messages) || 0,
     archived: Number(arch.archived) || 0, pinned: Number(pin.pinned) || 0,

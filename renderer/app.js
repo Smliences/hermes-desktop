@@ -386,13 +386,12 @@ async function refreshSessions(search = '') {
   const treeP = (typeof api.projectsTree === 'function')
     ? Promise.resolve(api.projectsTree({ previewLimit: 3 })).catch(() => null)
     : Promise.resolve(null);
+  const searchP = (q && typeof api.searchMessages === 'function')
+    ? Promise.resolve(api.searchMessages(q)).then(arr).catch((e) => { console.warn('fts', e); return []; })
+    : Promise.resolve([]);
   try {
-    const [allR, treeR] = await Promise.all([api.listSessions({ limit: 200, search: q }), treeP]);
+    const [allR, treeR, hits] = await Promise.all([api.listSessions({ limit: 200, search: q }), treeP, searchP]);
     const all = arr(allR);
-    let hits = [];
-    if (q && typeof api.searchMessages === 'function') {
-      try { hits = arr(await api.searchMessages(q)); } catch (e) { console.warn('fts', e); }
-    }
     // 搜索是高频输入：只接受最新一次请求的结果，避免后发先至把列表刷回旧结果
     if (seq !== sessionsSeq) return;
     const hitMap = new Map(hits.filter((h) => h && h.id).map((h) => [h.id, h]));

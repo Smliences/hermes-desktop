@@ -69,32 +69,55 @@ function envKeySet() {
   return keys;
 }
 
+/** 剥掉 YAML 行尾非引号内注释（如 `enabled: true # note`），保留引号内 `#`。 */
+function stripYamlComment(raw) {
+  let inQ = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inQ) {
+      if (ch === inQ && raw[i - 1] !== '\\') inQ = '';
+    } else if (ch === '"' || ch === "'") {
+      inQ = ch;
+    } else if (ch === '#' && (i === 0 || /\s/.test(raw[i - 1]))) {
+      return raw.slice(0, i);
+    }
+  }
+  return raw;
+}
+
 /** 解析 config.yaml 的 platforms 段，只返回每个平台的 enabled 布尔与是否声明，不含任何值 */
 function configPlatforms() {
   const out = {};
   let lines = [];
-  try { lines = fs.readFileSync(path.join(curHome(), 'config.yaml'), 'utf8').split('\n'); } catch { return out; }
+  try { lines = fs.readFileSync(path.join(curHome(), 'config.yaml'), 'utf8').split(/\r?\n/); } catch { return out; }
   let inside = false;
   let cur = null;
+  let curIndent = -1;
+  let curHasBlock = false;
   for (const raw of lines) {
-    const line = raw.replace(/\s+#.*$/, '');
-    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const line = stripYamlComment(raw.replace(/\t/g, '  '));
+    if (!line.trim()) continue;
     const indent = line.length - line.trimStart().length;
     const text = line.trim();
     if (indent === 0) {
-      if (text.startsWith('platforms:')) { inside = true; cur = null; continue; }
+      if (/^platforms\s*:/.test(text)) { inside = true; cur = null; curIndent = -1; curHasBlock = false; continue; }
       if (inside) break;
       continue;
     }
     if (!inside) continue;
-    if (indent <= 2 && text.includes(':')) {
-      cur = text.split(':')[0].trim();
-      out[cur] = { declared: true, enabled: true };
-      const v = text.slice(text.indexOf(':') + 1).trim();
-      if (v === 'false') out[cur].enabled = false;
+    const colon = text.indexOf(':');
+    if (colon <= 0) continue;
+    const key = text.slice(0, colon).trim().replace(/^["']|["']$/g, '');
+    const val = text.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
+    // 进入子字段的条件：当前平台是嵌套块（如 `telegram:` 后无标量）且缩进更深
+    if (cur && curHasBlock && indent > curIndent) {
+      if (key === 'enabled') out[cur].enabled = !/^(?:false|no|off|0)$/i.test(val);
       continue;
     }
-    if (cur && /^enabled\s*:/.test(text)) out[cur].enabled = !/false/i.test(text);
+    cur = key;
+    curIndent = indent;
+    curHasBlock = val === '';
+    out[cur] = { declared: true, enabled: !/^(?:false|no|off|0)$/i.test(val) };
   }
   return out;
 }
